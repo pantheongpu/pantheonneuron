@@ -1,0 +1,46 @@
+Every tool in /opt/aws/neuron/bin, exercised on inf2.xlarge.
+Tools version 2.28.23.0 (kaena-tools/2.28), runtime 2.30.51, driver 2.26.0.
+
+TOOL              STATUS   NOTES
+----------------  -------  ----------------------------------------------------
+neuron-ls         works    Topology. No architecture field (see probe 1).
+neuron-monitor    works    Continuous telemetry stream. See probe 1.
+neuron-profile    works    THE counter source. 108 counters. See 02/03.
+neuron-explorer   alias    Identical binary/interface to neuron-profile.
+neuron-bench      partial  Runs, emits latency JSON, but BPF trace step fails:
+                           "stat .../bpf.csv: no such file or directory".
+                           latency_data.json / nc_latency_data.json are usable.
+nccom-test        works    Collectives benchmark. WORKS WITH ONE DEVICE via
+                           -r 2 (one worker per NeuronCore). See 04.
+neuron-dbg        works    Low-level debugger. Raw register access. See 05.
+neuron-top        broken   /opt/aws/neuron/bin/neuron-top line 16:
+                           neuron-monitor-top.py: command not found
+                           (its own directory is not on PATH). Fix by exporting
+                           PATH=/opt/aws/neuron/bin:$PATH first.
+neuron-dump       n/a      Requires args; not explored.
+
+=== neuron-profile subcommands ===
+  capture       Capture a profile given a NEFF        -> produces NTFF v6
+  inspect       Wrap a workload, capture system+device -> produces NTFF v115
+  show-session  Decode an NTFF
+  view          Analyze NEFF+NTFF into reports
+                --output-format=[db|summary-text|summary-json|json|perfetto|parquet]
+
+=== TOOL BUG: NTFF version mismatch within one install ===
+  neuron-profile inspect  writes NTFF version 115
+  neuron-profile show-session reads versions 1-6 only:
+    "NTFF version 115 is not supported in this version of the tool
+     (supported: 1 - 6). Please upgrade aws-neuronx-tools."
+  Use `capture` (v6) rather than `inspect` if you need to decode the result
+  with the tooling shipped in the same AMI.
+
+=== ENVIRONMENT TRAPS ===
+  1. neuron-profile inspect exec()s its argument as a single path -- it does
+     not split on spaces or go through a shell. Pass an executable wrapper
+     script, not "python foo.py".
+  2. neuron-profile view requires $HOME to be set, or exits:
+       "$HOME is not defined"
+     SSM RunShellScript runs as root with no HOME.
+  3. torch_neuronx deletes its compiler workdir. Pass
+     compiler_workdir='/tmp/ccwork' to torch_neuronx.trace to keep the NEFF;
+     otherwise there is nothing to hand neuron-profile capture.

@@ -1,0 +1,39 @@
+neuron-profile show-session -s capture.ntff
+
+Model Name: /tmp/ccwork/graph.neff
+UUID: <REDACTED>
+Model ID: 10001
+NTFF Version: 6
+
++---------+----------------+-----------+------+-------+-----------+--------+--------+--------+--------+--------+------------+------+
+| NODE ID | EXEC TIME (NS) | EXECUTOR  | NAME | TRACE |  CYCLES   | EVENTS | ERRORS | TENSOR | SCALAR | GPSIMD | DMA QUEUES | SYNC |
++---------+----------------+-----------+------+-------+-----------+--------+--------+--------+--------+--------+------------+------+
+|       0 |              0 | ND 0 NC 0 | sg00 |  5063 | 149710075 |   1205 |      0 |   2182 |    106 |     89 |         50 |  100 |
++---------+----------------+-----------+------+-------+-----------+--------+--------+--------+--------+--------+------------+------+
+
+Per-execution structure also available (72 key paths), including:
+  NeffNodes[].NodeInfo.Graphs[].CycleCount            = 149710075
+  NeffNodes[].NodeInfo.Graphs[].ErrorCount            = 0
+  NeffNodes[].NodeInfo.Graphs[].EventsCount           = 1205
+  NeffNodes[].NodeInfo.Graphs[].DMAQueues[].{AXIPort,DRAMChannel,EngineIndex,
+                                             Name,QueueIndex,QueueType}
+  NeffNodes[].NodeInfo.Graphs[].InstructionPatches.{0..4}.Engine
+  NeffNodes[].NodeInfo.Graphs[].InstructionStartPC.{0..4}
+  NeffNodes[].NodeInfo.Graphs[].NCMemoryUsageBreakdown[].{BytesUsed,Usage}
+  NeffNodes[].NodeInfo.Graphs[].TimestampInfo.{CC-core,DMA[]}.{InitTimestamp,
+                                             TimestampInc,ExpectedTimestampInc}
+
+DMAQueues exposes AXIPort and DRAMChannel -- physical memory-channel
+identity. This is the closest thing Neuron has to the HBM-channel targeting
+that pantheongpu's memory_bank_thrash relies on, though it is observational
+(which channel a queue used), not a control knob.
+
+=== compiler-side, from neuron-profile inspect's global_metric_store.json ===
+StaticProfiler::AverageFractalPeUtilization  = 99.32170867919922
+StaticProfiler::AveragePartitionUtilization  = 98.10667419433594
+StaticProfiler::AveragePeUtilization         = 97.06439208984375
+StaticProfiler::LocalizationEfficiency       = 100.0
+TilingProfiler::AveragePeUtilizationAfterTiling = 0
+(plus ~200 per-compiler-pass timings)
+
+These are STATIC compiler estimates, not measured hardware values.

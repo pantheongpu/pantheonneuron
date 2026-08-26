@@ -1,0 +1,35 @@
+nccom-test -r 2 -b 1M -e 8M -n 20 --non-interactive all_reduce
+
+IMPORTANT: -r 2 means two workers, one per NeuronCore, on ONE NeuronDevice.
+This exercises CORE-TO-CORE collectives on a single chip. It does NOT
+exercise NeuronLink, which is device-to-device and still unmeasured.
+
+    size(B)    count(elems)     type    time:avg(us)    algbw(GB/s)    busbw(GB/s)
+    1048576         1048576    uint8            23.5          44.62          44.62
+    1782579         1782579    uint8           37.25          47.85          47.85
+    2516582         2516582    uint8           50.48          49.86          49.86
+    3250585         3250585    uint8           64.17          50.65          50.65
+    3984588         3984588    uint8           77.85          51.18          51.18
+    4718591         4718591    uint8            91.5          51.57          51.57
+    5452594         5452594    uint8          105.03          51.92          51.92
+    6186597         6186597    uint8          118.6          52.16          52.16
+    6920600         6920600    uint8          132.12          52.38          52.38
+    7654603         7654603    uint8          145.57          52.58          52.58
+    8388606         8388606    uint8          160.0          52.43          52.43
+
+Avg bus bandwidth: 50.6552 GB/s
+
+Bandwidth climbs from 44.62 GB/s at 1 MiB and plateaus around 52.5 GB/s by
+6-8 MiB -- a clean small-message-overhead curve.
+
+Supported ops:
+  allr, all_reduce, redsct, reduce_scatter, all_gather, allg,
+  permute, alltoall, alltoallv, sendrecv
+
+Useful flags for a stress suite:
+  -d {uint8,int8,uint16,int16,fp16,bf16,uint32,int32,fp32}   dtype sweep
+  -b/-e/-i/-f      message size sweep (min, max, step, step factor)
+  -n / -w          iterations / warmup
+  --report-to-json-file    machine-readable output
+  --custom-replica-groups  topology control
+  -s HOSTS / --hosts-file  multi-node

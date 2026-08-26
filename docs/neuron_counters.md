@@ -31,11 +31,26 @@ runtime 2.30.51, DLAMI Neuron Ubuntu 22.04 20260227) under a sustained
 
 | pantheongpu | Status |
 |---|---|
-| `avg/max_temp`, `thermal_rise`, `avg/max_mem_temp` | **No temperature sensor anywhere.** Checked neuron-monitor, the driver sysfs tree, `/sys/class/hwmon` (only `nvme`), and `/sys/class/thermal` (cooling devices only, no zones). |
-| `avg/min/max_clk` | Not exposed. |
-| `max_fan` | Not exposed. |
-| `throttle_reason`, `throttle_time` | Not exposed. |
-| `max_volts_core`, `max_volts_soc` | Not exposed. |
+| `avg/max_temp`, `thermal_rise`, `avg/max_mem_temp` | **No temperature sensor anywhere.** Checked neuron-monitor, the driver sysfs tree, `/sys/class/hwmon` (only `nvme`), `/sys/class/thermal` (cooling devices only, no zones), and every tool in `/opt/aws/neuron/bin`. |
+| `max_fan` | Not exposed by any interface. |
+| `max_volts_core`, `max_volts_soc` | Not exposed by any interface. |
+
+### Recovered by the profiler
+
+A second probe found these through `neuron-profile`, which is a
+per-execution capture interface rather than continuous telemetry. They are
+**not** available through `neuron-monitor` or sysfs, which is why the first
+pass recorded them as absent.
+
+| pantheongpu | Neuron source | Notes |
+|---|---|---|
+| `throttle_reason`, `throttle_time` | `throttle_active_nc0_time_ns` and 5 related | Per NeuronCore. Measured 774 ns active. |
+| `avg/min/max_clk` | `neuroncore_cycle_count` ÷ `total_time` | Derived, not reported: 209594 / 0.000149710075 s = **1.400 GHz**. |
+
+See [`data/probe-2026-08-26-tools/`](../data/probe-2026-08-26-tools/) for the
+full 108-counter set, including MFU/HFU/MBU, per-engine instruction counts
+for all five engines, the SBUF/PSUM/spill memory hierarchy, and 17 DMA
+counters.
 
 ## Power: partially recoverable
 

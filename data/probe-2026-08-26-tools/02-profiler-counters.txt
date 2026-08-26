@@ -1,0 +1,90 @@
+neuron-profile view --output-format summary-json
+108 counters from one NEFF execution capture. NONE of these are available
+through neuron-monitor or the driver sysfs tree.
+
+=== THROTTLE (6) -- per NeuronCore ===
+throttle_active_nc0_time_ns                     = 774
+throttle_activity_0_active_time_nc0_percent     = 0.005170513377200307
+throttle_activity_0_avg_util_limit_nc0_percent  = 0.875
+throttle_avg_util_limit_nc0_percent             = 0.03599485620762216
+throttle_unknown_active_time_nc0_percent        = 0.03147065700257189
+throttle_unknown_avg_util_limit_nc0_percent     = 1
+
+=== CYCLES (2) ===
+neuroncore_cycle_count                          = 209594
+dma_active_cycles                               = 66875
+
+  Derived clock: 209594 cycles / 0.000149710075 s = 1.400 GHz
+
+=== FLOPS / UTILIZATION MODELS (11) ===
+model_flops                                     = 67108864
+hardware_flops                                  = 136380416
+transpose_flops                                 = 2162688
+mfu_estimated_percent                           = 0.004885633591650872
+mfu_hlo_estimated_percent                       = 0.004885633591650872
+mfu_hlo_max_achievable_estimated_percent        = 0.03533507997793712
+mfu_inst_estimated_percent                      = 0.009771267183301744
+mfu_inst_max_achievable_estimated_percent       = 0.07067015995587424
+mfu_max_achievable_estimated_percent            = 0.03533507997793712
+hfu_estimated_percent                           = 0.009928714238395054
+mbu_estimated_percent                           = 0.13826581387961806
+mbu_min_read_util_percent                       = 0.13799889145900102
+
+  MFU = Model FLOPs Utilization, HFU = Hardware FLOPs Utilization,
+  MBU = Memory Bandwidth Utilization.
+
+=== ROOFLINE INPUTS (2) ===
+mm_arithmetic_intensity                         = 15.814671814671815
+peak_flops_bandwidth_ratio                      = 223.78146341463415
+
+=== PER-ENGINE (5 engines x 4 counters + 2) ===
+tensor_engine_instruction_count = 2137   tensor_engine_active_time_percent = 0.8950715775140718
+tensor_engine_instruction_time  = 0.000476974459
+tensor_engine_active_time       = 0.000134001233
+scalar_engine_instruction_count = 57     scalar_engine_active_time_percent = 0.04667188230317833
+vector_engine_instruction_count = 53     vector_engine_active_time_percent = 0.04640481276894692
+gpsimd_engine_instruction_count = 27     gpsimd_engine_active_time_percent = 0.008349244364482485
+sync_engine_instruction_count   = 37     sync_engine_active_time_percent   = 0.015691782934448468
+matmul_instruction_count        = 1056
+activate_instruction_count      = 35
+
+=== COLLECTIVES (5) -- zero on this single-worker capture ===
+cc_cores_instruction_count, cc_cores_instruction_time,
+cc_cores_instruction_active_time, cc_op_count, cc_op_time, cc_op_active_time
+
+=== ON-CHIP MEMORY HIERARCHY (11) ===
+hbm_read_bytes                = 8470528
+hbm_write_bytes               = 16384
+sbuf_read_bytes               = 573952
+sbuf_write_bytes              = 8475776
+psum_read_bytes               = 5248
+psum_write_bytes              = 24832
+psum_read_sbuf_write_bytes    = 5248
+psum_read_sbuf_write_count    = 67
+spill_save_bytes              = 0
+spill_reload_bytes            = 0
+weight_queue_bytes            = 8454144
+
+  SBUF = on-chip State Buffer, PSUM = Partial Sum buffer.
+  spill_save / spill_reload are SBUF pressure indicators -- the closest
+  Neuron analogue to a cache-pressure workload.
+
+=== DMA (17) ===
+dma_active_time, dma_active_time_percent, dma_active_cycles,
+dma_packet_time, dma_queue_count (=50), dma_transfer_count (=19),
+dma_transfer_average_bytes (=446679.58), dma_transfer_total_bytes (=8486912),
+dma_transfer_time, static_dma_{active_time,active_time_percent,packet_count,
+packet_percent,size,size_percent}, dynamic_dma_{active_time_percent,
+packet_percent,size_percent}, hardware_dynamic_dma_*, software_dynamic_dma_*
+
+=== TOTALS / VERSIONS ===
+total_time                = 0.000149710075
+total_active_time         = 0.00014409027
+total_active_time_percent = 0.9624620787879505
+event_count = 1162   trace_count = 5875
+compiler_version = 2.23.6484.0   runtime_version = 2.30.51
+driver_version = 2.26.0          collectives_version = 2.30.59
+profiler_version = 2.28.23.0
+
+=== STILL ABSENT after exhausting every tool ===
+temperature, fan speed, voltage. No tool exposes them.

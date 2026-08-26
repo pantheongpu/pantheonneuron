@@ -1,0 +1,38 @@
+neuron-dbg -- low-level hardware debugger.
+
+Commands:
+  break, continue, halt      execution control
+  capture                    execute a NEFF
+  descriptors                disassemble descriptors
+  disasm                     disassemble the instruction buffer
+  dma                        show DMA information
+  dram                       read a tensor from DRAM
+  event                      read or write event values
+  reg / register             read or write REGISTER values
+
+=== reg: raw register access ===
+  -d, --neuron-device=                    device index (default 0)
+  -n, --nc=                               NeuronCore index (default 0)
+  -e, --engine=[PE|POOL|ACT|DVE|SP|TOPSP] engine selector
+      --local-register=                   named local register
+      --device-address=                   raw device address to read
+
+The engine enumeration is the NeuronCore's actual internal engine set:
+  PE     Processing Element array (the tensor/matmul engine)
+  POOL   pooling engine
+  ACT    activation engine
+  DVE    (Dynamic/Vector Engine)
+  SP     sync engine
+  TOPSP  top-level sync engine
+
+Note the profiler's counter names use a different vocabulary for the same
+hardware (tensor / scalar / vector / gpsimd / sync). PE maps to the tensor
+engine; the rest do not map one-to-one.
+
+--device-address gives arbitrary MMIO reads. If any thermal, voltage or
+clock telemetry exists on Neuron at all, this is the only remaining place
+it could be reached -- but the address map is not published, so finding it
+would be reverse engineering, not instrumentation.
+
+NOT ATTEMPTED: writing registers, or reading arbitrary device addresses.
+Both risk putting the device in an undefined state.

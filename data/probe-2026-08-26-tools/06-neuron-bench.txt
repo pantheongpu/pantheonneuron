@@ -1,0 +1,30 @@
+neuron-bench exec -n 200 --output-directory /tmp/bench graph.neff
+
+PARTIAL FAILURE. The benchmark runs and produces latency data, but its BPF
+tracing step fails on this AMI:
+
+  level=error msg="hw profiler overview not found"
+  level=error msg="Failed to run BPF trace" Type=bpf_trace
+    error="stat /tmp/bench/graph_dynamic_nc1_b1_i1_LIBMODE/bpf.csv:
+           no such file or directory"
+  Benchmark failed with error ...
+
+Artifacts still produced (usable):
+  profile_graph_dynamic_nc1_b1/profile.ntff
+  graph_dynamic_nc1_b1_i{1,2}_LIBMODE/latency_data.json
+  graph_dynamic_nc1_b1_i{1,2}_LIBMODE/nc_latency_data.json
+  graph_dynamic_nc1_b1_i{1,2}_LIBMODE/cpu_util.json
+  graph_dynamic_nc1_b1_i{1,2}_LIBMODE/info.json
+  graph_dynamic_nc1_b1_i{1,2}_LIBMODE/perf.{data,txt,script.txt}
+
+nc_latency_data.json is per-NeuronCore per-execution latency in
+microseconds, keyed by core index:
+
+  {"latency_data": {"0": [519, 519, 519, 519, 520, 519, ...]}}
+
+Extremely stable -- 519 us with occasional 520. For a stress suite this is
+a strong determinism signal: latency variance under sustained load is a
+cheap proxy for thermal or contention effects that Neuron will not report
+directly.
+
+It sweeps data-parallel degree automatically (i1 = 1 copy, i2 = 2 copies).
