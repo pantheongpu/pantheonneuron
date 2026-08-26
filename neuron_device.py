@@ -29,11 +29,21 @@ NEURONCORE_V2 = "v2"
 NEURONCORE_V3 = "v3"
 
 # arch -> (neuroncore version, cores per device, supports training)
+#
+# VALIDATION: only the inf2 row has been confirmed against real hardware
+# (inf2.xlarge, runtime 2.30.51 -- neuron_hardware_info reported
+# neuroncore_version "v2", neuroncore_per_device_count 2). The Trainium rows
+# are assumed and have never been observed; trn2's core count in particular
+# is the least confident value here.
+#
+# These are fallbacks. Core count and memory come from neuron-ls at runtime
+# when present, so a wrong row here surfaces through supports_training --
+# which gates the whole training suite.
 _ARCH_TABLE = {
-    "trn1": (NEURONCORE_V2, 2, True),
-    "trn1n": (NEURONCORE_V2, 2, True),
-    "trn2": (NEURONCORE_V3, 8, True),
-    "inf2": (NEURONCORE_V2, 2, False),
+    "trn1": (NEURONCORE_V2, 2, True),    # assumed
+    "trn1n": (NEURONCORE_V2, 2, True),   # assumed
+    "trn2": (NEURONCORE_V3, 8, True),    # assumed, low confidence
+    "inf2": (NEURONCORE_V2, 2, False),   # verified on hardware
 }
 
 _UNSUPPORTED_ARCH = {

@@ -6,6 +6,47 @@ A stress and validation suite for AWS Neuron accelerators — **AWS Trainium**
 This is a third-party tool for exercising Neuron devices. It is not affiliated
 with, endorsed by, or officially supported by Amazon Web Services.
 
+## Validation status
+
+**Only Inferentia2 has been validated on real hardware.** Two probes, both
+`inf2.xlarge`. No Trainium part has ever run this code.
+
+| Architecture | Device model | Status |
+|---|---|---|
+| `inf2` | NeuronCore-v2, 2 cores/device, no training | **Verified** on hardware |
+| `trn1` | NeuronCore-v2, 2 cores/device, training | Assumed |
+| `trn1n` | NeuronCore-v2, 2 cores/device, training | Assumed |
+| `trn2` | NeuronCore-v3, 8 cores/device, training | Assumed — least confident |
+
+What that leaves untested:
+
+- The entire `training` capability path, and `transformer_train_step` with it.
+- Architecture detection on Trainium. `_arch_from_sysfs` reads
+  `info/architecture/instance_type`, verified to return `"Inf2"` on
+  Inferentia. What a Trainium part returns has not been observed, and
+  `_normalise_arch` handles the expected spellings without confirmation.
+- Device-to-device NeuronLink — needs ≥ 2 devices, which needs a quota
+  increase.
+- Whether `neuron-profile` reports the same 108 counters on Trainium.
+
+Trainium testing is blocked, not skipped. The account's Trn quota is 4 vCPU
+and the smallest Trainium instance (`trn1.2xlarge`) needs 8. A launch
+attempt on 2026-08-26 returned:
+
+```
+VcpuLimitExceeded: You have requested more vCPU capacity than your current
+vCPU limit of 4 allows for the instance bucket that the specified instance
+type belongs to.
+```
+
+Quota increases to 128 vCPU (Trn) and 96 vCPU (Inf) were requested the same
+day and are `CASE_OPENED` with AWS support. Note that `aws ec2 run-instances
+--dry-run` reports success here — dry run validates permissions and
+parameters, not vCPU quota, which is only enforced on a real launch.
+
+Treat every Trainium-specific claim in this repository as unverified until
+this section says otherwise.
+
 ## Why one repository for both chips
 
 Trainium and Inferentia are two product families but **one software stack**.
