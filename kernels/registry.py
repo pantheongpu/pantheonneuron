@@ -17,11 +17,25 @@ import typing
 
 @dataclasses.dataclass(frozen=True)
 class Workload:
+    """One workload.
+
+    ``unit`` and ``problem`` exist so a Neuron result can be compared with a
+    pantheongpu result for the same name. The unit strings are copied
+    verbatim from the pantheongpu report schema -- a comparison joins on
+    (Test Name, Unit), so a mismatch here silently breaks the join.
+
+    ``problem`` pins shape and dtype. A Score is only comparable across
+    platforms if both ran the same problem; without it the two numbers share
+    a column while measuring different things.
+    """
+
     name: str
     suite: str
     summary: str
     requires: typing.FrozenSet[str] = frozenset()
     min_devices: int = 1
+    unit: typing.Optional[str] = None
+    problem: typing.Optional[typing.Mapping[str, typing.Any]] = None
 
     def runnable_on(self, devices) -> bool:
         if len(devices) < self.min_devices:
@@ -49,46 +63,131 @@ _TRAINING = frozenset({"training"})
 
 WORKLOADS: typing.Tuple[Workload, ...] = (
     # -- baseline ---------------------------------------------------------
-    Workload("baseline_metrics", "baseline", "Idle telemetry baseline; no load applied."),
+    Workload("baseline_metrics", "baseline",
+             "Idle telemetry baseline; no load applied."),
 
     # -- core: power/thermal viruses on the tensor engine ------------------
-    Workload("tensor_virus", "core", "Saturate the Tensor Engine with dense matmul.", _COMPUTE),
-    Workload("int_virus", "core", "Sustained INT8 throughput on the Tensor Engine.", _COMPUTE),
-    Workload("pulse_virus", "core", "Duty-cycled load to provoke power/clock transients.", _COMPUTE),
-    Workload("transformer_virus", "core", "Full transformer block under sustained load.", _COMPUTE),
-    Workload("omni_virus", "core", "All engines concurrently: tensor, vector, scalar, GpSimd.", _COMPUTE),
+    Workload("tensor_virus", "core",
+             "Saturate the Tensor Engine with dense matmul.", _COMPUTE,
+             unit="TFLOPS",
+             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "bf16"}),
+    Workload("int_virus", "core",
+             "Sustained INT8 throughput on the Tensor Engine.", _COMPUTE,
+             unit="TOPS",
+             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "int8"}),
+    Workload("pulse_virus", "core",
+             "Duty-cycled load to provoke power/clock transients.", _COMPUTE,
+             unit="TFLOPS",
+             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "bf16",
+                      "duty_cycle": 0.5, "period_s": 2}),
+    Workload("transformer_virus", "core",
+             "Full transformer block under sustained load.", _COMPUTE,
+             unit="TFLOPS",
+             problem={"hidden": 4096, "heads": 32, "seq": 2048, "dtype": "bf16"}),
+    Workload("omni_virus", "core",
+             "All engines concurrently: tensor, vector, scalar, GpSimd.", _COMPUTE,
+             unit="TFLOPS",
+             problem={"op": "mixed", "shape": [8192, 8192, 8192], "dtype": "bf16",
+                      "engines": "all"}),
 
     # -- memory: HBM bandwidth --------------------------------------------
-    Workload("memory_read", "memory", "Streaming HBM reads on one NeuronCore.", _HBM),
-    Workload("memory_write", "memory", "Streaming HBM writes on one NeuronCore.", _HBM),
-    Workload("memory_read_agg", "memory", "Aggregate HBM read bandwidth, all NeuronCores.", _HBM | frozenset({"multicore"})),
-    Workload("memory_write_agg", "memory", "Aggregate HBM write bandwidth, all NeuronCores.", _HBM | frozenset({"multicore"})),
+    Workload("memory_read", "memory",
+             "Streaming HBM reads on one NeuronCore.", _HBM,
+             unit="GB/s",
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1}),
+    Workload("memory_write", "memory",
+             "Streaming HBM writes on one NeuronCore.", _HBM,
+             unit="GB/s",
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1}),
+    Workload("memory_read_agg", "memory",
+             "Aggregate HBM read bandwidth, all NeuronCores.",
+             _HBM | frozenset({"multicore"}),
+             unit="GB/s",
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"}),
+    Workload("memory_write_agg", "memory",
+             "Aggregate HBM write bandwidth, all NeuronCores.",
+             _HBM | frozenset({"multicore"}),
+             unit="GB/s",
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"}),
 
     # -- interconnect ------------------------------------------------------
-    Workload("all_reduce", "interconnect", "All-reduce collective over NeuronLink.", _COLLECTIVE, min_devices=2),
-    Workload("p2p_thrasher", "interconnect", "Sustained device-to-device traffic over NeuronLink.", _COLLECTIVE, min_devices=2),
-    Workload("pcie_bandwidth", "interconnect", "Host-to-device and device-to-host transfer over PCIe."),
+    Workload("all_reduce", "interconnect",
+             "All-reduce collective over NeuronLink.", _COLLECTIVE, min_devices=2,
+             unit="GB/s",
+             problem={"op": "all_reduce", "bytes_min": 1 << 20, "bytes_max": 8 << 20,
+                      "dtype": "fp32"}),
+    Workload("p2p_thrasher", "interconnect",
+             "Sustained device-to-device traffic over NeuronLink.",
+             _COLLECTIVE, min_devices=2,
+             unit="GB/s",
+             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32"}),
+    Workload("pcie_bandwidth", "interconnect",
+             "Host-to-device and device-to-host transfer over PCIe.",
+             unit="GB/s",
+             problem={"bytes": 1 << 30, "direction": "bidirectional"}),
 
     # -- inference ---------------------------------------------------------
-    Workload("llm_decode", "inference", "Autoregressive decode; latency-bound token generation.", _COMPUTE),
-    Workload("llm_prefill", "inference", "Prompt prefill; compute-bound batched attention.", _COMPUTE),
-    Workload("kv_cache_churn", "inference", "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM),
-    Workload("fused_attention", "inference", "Fused attention kernel throughput.", _COMPUTE),
-    Workload("quantized_gemm", "inference", "INT8/FP8 quantized GEMM paths.", _COMPUTE),
-    Workload("serving_mix", "inference", "Mixed prefill/decode traffic at serving ratios.", _COMPUTE),
-    Workload("speculative_decode", "inference", "Draft-and-verify speculative decoding.", _COMPUTE),
-    Workload("moe_router", "inference", "Mixture-of-experts routing and expert dispatch.", _COMPUTE),
+    Workload("llm_decode", "inference",
+             "Autoregressive decode; latency-bound token generation.", _COMPUTE,
+             unit="tokens/s",
+             problem={"hidden": 4096, "layers": 32, "batch": 1, "context": 2048,
+                      "dtype": "bf16"}),
+    Workload("llm_prefill", "inference",
+             "Prompt prefill; compute-bound batched attention.", _COMPUTE,
+             unit="prompt-tokens/s",
+             problem={"hidden": 4096, "layers": 32, "batch": 1, "prompt": 2048,
+                      "dtype": "bf16"}),
+    Workload("kv_cache_churn", "inference",
+             "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM,
+             unit="cache-updates/s",
+             problem={"hidden": 4096, "heads": 32, "context": 4096, "dtype": "bf16"}),
+    Workload("fused_attention", "inference",
+             "Fused attention kernel throughput.", _COMPUTE,
+             unit="attention-tiles/s",
+             problem={"heads": 32, "seq": 2048, "head_dim": 128, "dtype": "bf16"}),
+    Workload("quantized_gemm", "inference",
+             "INT8/FP8 quantized GEMM paths.", _COMPUTE,
+             unit="quantized-ops/s",
+             problem={"op": "matmul", "shape": [4096, 4096, 4096], "dtype": "int8"}),
+    Workload("serving_mix", "inference",
+             "Mixed prefill/decode traffic at serving ratios.", _COMPUTE,
+             unit="requests/s",
+             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024, "decode": 256}),
+    Workload("speculative_decode", "inference",
+             "Draft-and-verify speculative decoding.", _COMPUTE,
+             unit="verified-tokens/s",
+             problem={"draft_len": 4, "hidden": 4096, "dtype": "bf16"}),
+    Workload("moe_router", "inference",
+             "Mixture-of-experts routing and expert dispatch.", _COMPUTE,
+             unit="routed-tokens/s",
+             problem={"experts": 8, "top_k": 2, "hidden": 4096, "tokens": 4096}),
 
     # -- training (Trainium only) -----------------------------------------
-    Workload("transformer_train_step", "training", "Forward, backward and optimiser step.", _TRAINING),
+    Workload("transformer_train_step", "training",
+             "Forward, backward and optimiser step.", _TRAINING,
+             unit="train-steps/s",
+             problem={"hidden": 4096, "layers": 8, "batch": 4, "seq": 2048,
+                      "dtype": "bf16"}),
 
     # -- runtime -----------------------------------------------------------
-    Workload("allocation_fragmentation", "runtime", "Device memory allocator under fragmentation pressure.", _HBM),
-    Workload("graph_replay", "runtime", "Repeated replay of a compiled NEFF graph.", _COMPUTE),
+    Workload("allocation_fragmentation", "runtime",
+             "Device memory allocator under fragmentation pressure.", _HBM,
+             unit="allocation-events/s",
+             problem={"allocations": 10000, "size_min": 1 << 12, "size_max": 1 << 24}),
+    Workload("graph_replay", "runtime",
+             "Repeated replay of a compiled NEFF graph.", _COMPUTE,
+             unit="graph-steps/s",
+             problem={"hidden": 2048, "replays": 10000, "dtype": "bf16"}),
 
     # -- ai_auxiliary ------------------------------------------------------
-    Workload("rag_embedding", "ai_auxiliary", "Embedding generation at retrieval batch sizes.", _COMPUTE),
-    Workload("vision_encoder", "ai_auxiliary", "Vision encoder forward pass.", _COMPUTE),
+    Workload("rag_embedding", "ai_auxiliary",
+             "Embedding generation at retrieval batch sizes.", _COMPUTE,
+             unit="embedding-vectors/s",
+             problem={"dim": 1024, "batch": 256, "dtype": "bf16"}),
+    Workload("vision_encoder", "ai_auxiliary",
+             "Vision encoder forward pass.", _COMPUTE,
+             unit="image-tiles/s",
+             problem={"resolution": 224, "patch": 14, "batch": 64, "dtype": "bf16"}),
 )
 
 

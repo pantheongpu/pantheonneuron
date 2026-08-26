@@ -95,20 +95,29 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
     """Execute one workload and return its result row."""
     skip = workload.skip_reason(devices)
     if skip is not None:
+        # A skipped row still declares its Unit and Problem, so a
+        # cross-platform comparison shows an explicit gap for this workload
+        # rather than silently dropping the row.
         return {
             "Test Name": workload.name,
             "Suite": workload.suite,
             "Status": "SKIPPED",
             "Detail": skip,
+            "Duration (s)": 0.0,
+            "Devices": [device.index for device in devices],
+            "Score": None,
+            "Unit": workload.unit,
+            "Problem": dict(workload.problem) if workload.problem else None,
+            "Telemetry": {"samples": 0},
         }
 
     monitor = neuron_monitor.NeuronMonitor(period_seconds=monitor_period)
     telemetry_started = monitor.start([device.index for device in devices])
 
     started = time.time()
-    status, detail = "PASS", ""
+    status, detail, score = "PASS", "", None
     try:
-        _execute(workload, devices, duration)
+        score = _execute(workload, devices, duration)
     except nki_backend.BackendUnavailable as error:
         status, detail = "SKIPPED", str(error)
     except Exception as error:  # noqa: BLE001 - a failing workload is a result
@@ -120,6 +129,10 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         status = "FAIL"
         detail = f"{metrics['execution_errors']} Neuron execution error(s)"
 
+    # "Score" and "Unit" mirror the pantheongpu report schema exactly so a
+    # cross-platform comparison can join on (Test Name, Unit). "Problem"
+    # records the pinned shape/dtype, because a Score is only comparable if
+    # both platforms ran the same problem.
     return {
         "Test Name": workload.name,
         "Suite": workload.suite,
@@ -127,24 +140,32 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         "Detail": detail,
         "Duration (s)": round(elapsed, 2),
         "Devices": [device.index for device in devices],
+        "Score": round(score, 4) if isinstance(score, (int, float)) else None,
+        "Unit": workload.unit,
+        "Problem": dict(workload.problem) if workload.problem else None,
         "Telemetry": metrics,
     }
 
 
-def _execute(workload, devices, duration: int) -> None:
-    """Dispatch to the workload implementation.
+def _execute(workload, devices, duration: int) -> typing.Optional[float]:
+    """Dispatch to the workload implementation and return its Score.
 
-    Real NKI kernels land here per workload; until then mock mode exercises
-    the full orchestrator, telemetry and reporting path, and hardware runs
-    fail loudly rather than reporting a meaningless PASS.
+    The Score is in ``workload.unit`` and is what a cross-platform
+    comparison actually reads. Real NKI kernels land here per workload;
+    until then mock mode exercises the full orchestrator, telemetry and
+    reporting path, and hardware runs fail loudly rather than reporting a
+    meaningless PASS.
+
+    Mock mode returns None, never a synthetic number -- a fabricated Score
+    would flow into a report and be compared against real GPU results.
     """
     if workload.name == "baseline_metrics":
         time.sleep(min(duration, 2) if nki_backend.mock_mode() else duration)
-        return
+        return None
 
     if nki_backend.mock_mode():
         time.sleep(min(duration, 2))
-        return
+        return None
 
     nki_backend.require_toolchain()
     raise NotImplementedError(

@@ -54,6 +54,40 @@ on PyTorch 1.x — a genuinely different toolchain. Supporting it would double
 the backend surface for inference-only hardware that new deployments are not
 buying. Discovery rejects Inf1 explicitly rather than misreporting it.
 
+## Comparing results with pantheongpu
+
+Every scored workload carries a `Score` and a `Unit`, using the unit strings
+from the `pantheongpu` report schema verbatim. A comparison joins the two
+platforms on `(Test Name, Unit)`:
+
+| Unit | Workloads |
+|---|---|
+| `TFLOPS` | `tensor_virus`, `pulse_virus`, `transformer_virus`, `omni_virus` |
+| `TOPS` | `int_virus` |
+| `GB/s` | the four `memory_*`, `all_reduce`, `p2p_thrasher`, `pcie_bandwidth` |
+| `tokens/s`, `prompt-tokens/s`, `requests/s`, … | the eight inference workloads |
+| `train-steps/s` | `transformer_train_step` |
+
+`tests/test_score_schema.py` asserts every unit string against a transcript
+of the pantheongpu vocabulary. A typo there would not raise anything — it
+would just produce a row that never joins.
+
+Each workload also pins a `problem`: shape, dtype, and any workload-specific
+parameters. **A Score is only comparable if both platforms ran the same
+problem.** TFLOPS at bf16 and TFLOPS at fp32 are different numbers, so the
+dtype travels with the score into the report.
+
+Skipped workloads still emit their `Unit` and `Problem` with a null `Score`,
+so a comparison renders an explicit gap instead of dropping the row.
+
+### What cannot be compared
+
+`Efficiency (MB/J)` and everything derived from watts. Neuron exposes no
+power figure in documented units — see
+[`docs/neuron_counters.md`](docs/neuron_counters.md). Perf-per-watt is not
+computable across these platforms, and neither is temperature, fan or
+voltage.
+
 ## Requirements
 
 The orchestrator itself needs only Python 3.9+ and `psutil`. For real runs you
