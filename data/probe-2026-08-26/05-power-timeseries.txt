@@ -1,0 +1,52 @@
+Field format: POWER_STATUS_VALID,<epoch>,<min>,<max>,<avg>
+Path: /sys/devices/virtual/neuron_device/neuron0/stats/power/utilization
+
+=== IDLE, sampled 1s apart ===
+POWER_STATUS_VALID,1787754540,0.32,3.04,1.57
+POWER_STATUS_VALID,1787754540,0.32,3.04,1.57
+POWER_STATUS_VALID,1787754540,0.32,3.04,1.57
+POWER_STATUS_VALID,1787754540,0.32,3.04,1.57
+POWER_STATUS_VALID,1787754540,0.32,3.04,1.57
+POWER_STATUS_VALID,1787754600,0.10,2.82,1.57
+POWER_STATUS_VALID,1787754600,0.10,2.82,1.57
+POWER_STATUS_VALID,1787754600,0.10,2.82,1.57
+
+KEY OBSERVATION: the epoch steps 1787754540 -> 1787754600, exactly 60s.
+Values are frozen between steps. The counter refreshes once per minute.
+
+=== DURING COMPILE (6s apart; neuronx-cc running on host, device idle) ===
+t   power(min,max,avg)   c0_flops  c0_nc_time  c0_mem_present  c0_infer
+1   0.00,2.71,1.29       0         0           0               0
+6   0.00,2.71,1.29       0         0           0               0
+7   0.00,2.50,1.01       0         0           0               0
+16  0.00,2.50,1.01       0         0           0               0
+17  0.00,2.06,0.56       0         0           4096            0
+20  0.00,2.06,0.56       0         0           4096            0
+
+(model loaded onto device at t=17 -- mem_present goes 0 -> 4096)
+
+=== DURING EXECUTION (5s apart; sustained matmul on core 0) ===
+t   power(min,max,avg)   c0_flop_total  c0_nc_time  c0_infer  c0_mem
+1   0.00,2.06,0.56       0              0           0         4096
+4   0.00,2.06,0.56       0              0           0         4096
+5   0.86,25.00,18.86     0              0           0         4096
+6   0.86,25.00,18.86     0              0           0         4096
+...
+14  0.86,25.00,18.86     0              0           0         4096
+
+=== SUMMARY ===
+                min     max      avg
+idle            0.00    2.06     0.56
+under load      0.86   25.00    18.86
+
+Mean rises ~34x. The counter unambiguously responds to load.
+Units are NOT documented anywhere. Ordering is consistent with
+min < avg < max. Do not report as watts; do not derive energy_wh.
+
+=== NEGATIVE RESULT ===
+flop_count, nc_time_in_use, inference_count and model_load_count in
+stats/other_info/ stayed at 0 for the entire run -- through 88,154
+executions. They are not populated by the torch-neuronx inference path on
+runtime 2.30.51. Use neuron-monitor effective_flops instead.
+
+reset_req_count = 1, reset_fail_count = 0 (both cores) -- these DO populate.

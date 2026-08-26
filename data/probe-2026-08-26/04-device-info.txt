@@ -1,0 +1,34 @@
+$ S=/sys/devices/virtual/neuron_device/neuron0
+
+core_count                                 = 2
+connected_devices                          = (empty -- single-device instance)
+info/architecture/arch_type                = NDv3
+info/architecture/device_name              = Inferentia2
+info/architecture/instance_type            = Inf2
+info/serial_number                         = <REDACTED-DEVICE-SERIAL>
+
+NOTE: arch_type "NDv3" is the NeuronDevice generation, NOT the NeuronCore
+generation. neuron-monitor reports both separately and unambiguously:
+  neuron_device_version = "v3"
+  neuroncore_version    = "v2"
+
+$ PCI = /sys/bus/pci/devices/0000:00:1f.0
+
+current_link_speed   = 16.0 GT/s PCIe     (Gen4)
+current_link_width   = 8
+max_link_speed       = 32.0 GT/s PCIe     (Gen5)
+max_link_width       = 8
+numa_node            = -1
+power_state          = D0
+
+NOTE: link is negotiated at Gen4 x8 against a Gen5 x8 capability. This is
+the pantheongpu pcie_gen / pcie_width degraded-link check, recovered.
+
+$ ls /sys/bus/pci/devices/0000:00:1f.0/
+ari_enabled  broken_parity_status  class  config  consistent_dma_mask_bits
+current_link_speed  current_link_width  d3cold_allowed  device  dma_mask_bits
+driver  driver_override  enable  firmware_node  irq  link  local_cpulist
+local_cpus  max_link_speed  max_link_width  modalias  msi_bus  numa_node
+power  power_state  remove  rescan  reset  reset_method  resource
+resource0  resource0_wc  resource2  resource4  resource4_wc  revision
+subsystem  subsystem_device  subsystem_vendor  uevent

@@ -1,0 +1,63 @@
+$ find /sys/devices/virtual/neuron_device -maxdepth 2 -type d
+/sys/devices/virtual/neuron_device
+/sys/devices/virtual/neuron_device/neuron0
+/sys/devices/virtual/neuron_device/neuron0/neuron_core0
+/sys/devices/virtual/neuron_device/neuron0/power
+/sys/devices/virtual/neuron_device/neuron0/info
+/sys/devices/virtual/neuron_device/neuron0/stats
+/sys/devices/virtual/neuron_device/neuron0/neuron_core1
+
+$ find ... -type f   (digits collapsed to N, deduplicated)
+neuronN/connected_devices
+neuronN/core_count
+neuronN/dev
+neuronN/info/architecture/arch_type
+neuronN/info/architecture/device_name
+neuronN/info/architecture/instance_type
+neuronN/info/notify_delay
+neuronN/info/serial_number
+neuronN/neuron_coreN/info/architecture/arch_type
+neuronN/neuron_coreN/stats/memory_usage/device_mem/collectives/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/constants/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/dma_rings/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/driver_memory/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/model_code/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/model_shared_scratchpad/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/nonshared_scratchpad/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/notifications/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/runtime_memory/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/tensors/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/uncategorized/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/device_mem/{peak,present,total}
+neuronN/neuron_coreN/stats/memory_usage/host_mem/{peak,present,total}
+neuronN/neuron_coreN/stats/other_info/flop_count/{present,total}
+neuronN/neuron_coreN/stats/other_info/inference_count/{present,total}
+neuronN/neuron_coreN/stats/other_info/model_load_count/{present,total}
+neuronN/neuron_coreN/stats/other_info/nc_time_in_use/{present,total}
+neuronN/neuron_coreN/stats/other_info/reset_fail_count/{present,total}
+neuronN/neuron_coreN/stats/other_info/reset_req_count/{present,total}
+
+$ find /sys -path '*neuron*' -type f | grep -iE 'temp|power|watt|clock|freq|throttle|volt|fan'
+/sys/devices/virtual/neuron_device/neuron0/power/runtime_active_time
+/sys/devices/virtual/neuron_device/neuron0/power/runtime_active_kids
+/sys/devices/virtual/neuron_device/neuron0/power/runtime_usage
+/sys/devices/virtual/neuron_device/neuron0/power/runtime_status
+/sys/devices/virtual/neuron_device/neuron0/power/autosuspend_delay_ms
+/sys/devices/virtual/neuron_device/neuron0/power/async
+/sys/devices/virtual/neuron_device/neuron0/power/runtime_suspended_time
+/sys/devices/virtual/neuron_device/neuron0/power/runtime_enabled
+/sys/devices/virtual/neuron_device/neuron0/power/control
+/sys/devices/virtual/neuron_device/neuron0/stats/power/utilization
+
+NOTE: everything under neuron0/power/ except stats/power/utilization is
+generic Linux runtime power management, not wattage.
+
+$ for h in /sys/class/hwmon/hwmon*; do cat $h/name; done
+nvme
+
+$ ls /sys/class/thermal/
+cooling_device0
+cooling_device1
+cooling_device2
+cooling_device3
+(no thermal_zone* entries -- no temperature sensor)

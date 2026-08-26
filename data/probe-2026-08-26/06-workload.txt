@@ -1,0 +1,21 @@
+=== Workload used to generate load ===
+torch-neuronx traced module, 2048x2048 Linear pairs, 8 chained iterations
+per forward, batch 8, fp32. Source: tools/probe_load.py
+
+=== Result ===
+[load] tracing...
+Compiler status PASS
+[load] compiled in 60.6s
+[load] running 120s...
+[load] done, 88154 iterations
+
+=== Environment notes (cost real time to discover) ===
+1. SSM RunShellScript executes under /bin/sh, not bash -- `source` fails.
+   Use the venv interpreter by absolute path.
+2. torch_neuronx import fails with
+     FileNotFoundError: 'libneuronpjrt-path'
+   unless the venv bin directory is on PATH. Setting the interpreter path
+   alone is not sufficient:
+     export PATH=/opt/aws_neuronx_venv_pytorch_2_8/bin:/opt/aws/neuron/bin:$PATH
+3. First-run compile is ~60s for this trivial graph. Budget compile time
+   separately from measurement time on any timed run.

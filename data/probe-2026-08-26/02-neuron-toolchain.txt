@@ -1,0 +1,51 @@
+$ ls /opt/aws/neuron/bin/
+api_pb2.py
+api_pb2_grpc.py
+default-slurm-setup.sh
+nccom-test
+neuron-bench
+neuron-dbg
+neuron-dump
+neuron-dump.py
+neuron-explorer
+neuron-ls
+neuron-monitor
+neuron-monitor-cloudwatch.py
+neuron-monitor-device-view.py
+neuron-monitor-k8s-info.py
+neuron-monitor-prometheus.py
+neuron-monitor-top.py
+neuron-profile
+neuron-top
+oci_neuron_hook
+oci_neuron_hook_config.json
+oci_neuron_hook_wrapper.sh
+
+$ neuron-bench --help
+Usage:
+  neuron-bench [OPTIONS] <command>
+
+Application Options:
+  -v, --version  Show version and exit
+
+Help Options:
+  -h, --help     Show this help message
+
+Available commands:
+  exec        Run execution benchmark
+  infer       Run inference benchmark
+  report      Generate report
+  show-stats  Show stats for results directory
+  trace       Run runtime tracing
+
+$ ls -d /opt/aws_neuronx_venv*
+/opt/aws_neuronx_venv_jax_0_7
+/opt/aws_neuronx_venv_pytorch_2_8
+/opt/aws_neuronx_venv_pytorch_2_8_nxd_inference
+/opt/aws_neuronx_venv_pytorch_2_8_nxd_training
+
+NOT YET EXPLORED (would need a relaunch):
+  neuron-profile   -- hardware profiler; likely exposes per-engine counters
+  neuron-bench     -- built-in execution/inference benchmark harness
+  nccom-test       -- collectives benchmark (needs >= 2 devices)
+  neuron-explorer / neuron-dump / neuron-dbg

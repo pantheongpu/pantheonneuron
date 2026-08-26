@@ -1,0 +1,123 @@
+Full key-path schema emitted by neuron-monitor with every documented metric
+group enabled, captured under sustained load. Runtime 2.30.51.
+Identifier VALUES redacted; key names are verbatim and complete.
+
+Config used:
+{"period":"1s",
+ "neuron_runtimes":[{"tag_filter":".*","metrics":[
+   {"type":"neuroncore_counters"},{"type":"memory_used"},
+   {"type":"neuron_runtime_vcpu_usage"},{"type":"execution_stats"}]}],
+ "system_metrics":[{"type":"vcpu_usage"},{"type":"memory_info"},
+   {"period":"2s","type":"neuron_hw_counters"}]}
+
+=== HOST IDENTIFIERS -- present in EVERY sample ===
+instance_info.ami_id                        = <REDACTED>
+instance_info.error                         = ""
+instance_info.instance_availability_zone    = <REDACTED>
+instance_info.instance_availability_zone_id = <REDACTED>
+instance_info.instance_id                   = <REDACTED>
+instance_info.instance_name                 = ""
+instance_info.instance_region               = <REDACTED>
+instance_info.instance_type                 = <REDACTED>
+instance_info.subnet_id                     = <REDACTED>
+
+=== HARDWARE DESCRIPTION (not identifying; safe to keep) ===
+neuron_hardware_info.logical_neuroncore_config  = 1
+neuron_hardware_info.neuron_device_count        = 1
+neuron_hardware_info.neuron_device_memory_size  = 34359738368
+neuron_hardware_info.neuron_device_type         = "inferentia2"
+neuron_hardware_info.neuron_device_version      = "v3"
+neuron_hardware_info.neuroncore_per_device_count = 2
+neuron_hardware_info.neuroncore_version         = "v2"
+
+=== NEURONCORE COUNTERS  <-- the important one ===
+neuron_runtime_data[].report.neuroncore_counters.period = 1.000665759
+neuron_runtime_data[].report.neuroncore_counters.neuroncores_in_use.0.effective_flops         = 875590474948
+neuron_runtime_data[].report.neuroncore_counters.neuroncores_in_use.0.neuroncore_utilization  = 89.40087251059674
+neuron_runtime_data[].report.neuroncore_counters.neuroncores_in_use.1.effective_flops         = 0
+neuron_runtime_data[].report.neuroncore_counters.neuroncores_in_use.1.neuroncore_utilization  = 0
+
+effective_flops is UNDOCUMENTED -- absent from the CloudWatch Container
+Insights Neuron metric table and from the sysfs tree.
+
+=== EXECUTION STATS ===
+...execution_stats.period = 1.000590175
+...execution_stats.error_summary.hardware   = 0
+...execution_stats.error_summary.model      = 0
+...execution_stats.error_summary.numerical  = 0
+...execution_stats.error_summary.runtime    = 0
+...execution_stats.error_summary.transient  = 0
+...execution_stats.execution_summary.completed              = 816
+...execution_stats.execution_summary.completed_with_err     = 0
+...execution_stats.execution_summary.completed_with_num_err = 0
+...execution_stats.execution_summary.failed_to_queue        = 0
+...execution_stats.execution_summary.incorrect_input        = 0
+...execution_stats.execution_summary.timed_out              = 0
+
+=== LATENCY PERCENTILES (seconds) ===
+...latency_stats.device_latency.p0   = 0.0011093616485595703
+...latency_stats.device_latency.p1   = 0.001111745834350586
+...latency_stats.device_latency.p25  = 0.0011191368103027344
+...latency_stats.device_latency.p50  = 0.0011217594146728516
+...latency_stats.device_latency.p75  = 0.0011246204376220703
+...latency_stats.device_latency.p99  = 0.0011413097381591797
+...latency_stats.device_latency.p100 = 0.0012009143829345703
+...latency_stats.total_latency.{p0,p1,p25,p50,p75,p99,p100}  -- same structure
+
+=== MEMORY USED ===
+...memory_used.period = 1.000598866
+...memory_used.neuron_runtime_used_bytes.host          = 1166249984
+...memory_used.neuron_runtime_used_bytes.neuron_device = 141649980
+...memory_used.neuron_runtime_used_bytes.usage_breakdown.host.application_memory = 1162055680
+...memory_used.neuron_runtime_used_bytes.usage_breakdown.host.constants   = 0
+...memory_used.neuron_runtime_used_bytes.usage_breakdown.host.dma_buffers = 4194304
+...memory_used.neuron_runtime_used_bytes.usage_breakdown.host.tensors     = 0
+...usage_breakdown.neuroncore_memory_usage.0.constants               = 33619968
+...usage_breakdown.neuroncore_memory_usage.0.model_code              = 106027452
+...usage_breakdown.neuroncore_memory_usage.0.model_shared_scratchpad = 0
+...usage_breakdown.neuroncore_memory_usage.0.runtime_memory          = 114752
+...usage_breakdown.neuroncore_memory_usage.0.tensors                 = 131072
+...usage_breakdown.neuroncore_memory_usage.1.{constants,model_code,model_shared_scratchpad,runtime_memory,tensors}
+
+...memory_used.loaded_models[].model_id       = 10001
+...memory_used.loaded_models[].is_running     = false
+...memory_used.loaded_models[].name           = <FILESYSTEM PATH -- identifying>
+...memory_used.loaded_models[].uuid           = <REDACTED>
+...loaded_models[].subgraphs.sg_00.neuron_device_index = 0
+...loaded_models[].subgraphs.sg_00.neuroncore_index    = 0
+...loaded_models[].subgraphs.sg_00.v2                  = "nc_v2.0"
+...loaded_models[].subgraphs.sg_00.memory_used_bytes.neuron_device = 37229696
+...loaded_models[].subgraphs.sg_00.memory_used_bytes.host          = 0
+...subgraphs.sg_00.memory_used_bytes.usage_breakdown.neuron_device.constants      = 33619968
+...subgraphs.sg_00.memory_used_bytes.usage_breakdown.neuron_device.model_code     = 3609728
+...subgraphs.sg_00.memory_used_bytes.usage_breakdown.neuron_device.runtime_memory = 0
+...subgraphs.sg_00.memory_used_bytes.usage_breakdown.neuron_device.tensors        = 0
+...subgraphs.sg_00.memory_used_bytes.usage_breakdown.host.{application_memory,constants,dma_buffers,tensors}
+
+=== RUNTIME vCPU ===
+...neuron_runtime_vcpu_usage.period = 1.000568674
+...neuron_runtime_vcpu_usage.vcpu_usage.system = 10.8
+...neuron_runtime_vcpu_usage.vcpu_usage.user   = 14.57
+neuron_runtime_data[].neuron_runtime_tag = "2199"
+neuron_runtime_data[].pid                = 2199
+
+=== SYSTEM: HW COUNTERS (ECC)  <-- the RAS signal ===
+system_data.neuron_hw_counters.period = 1.999993528
+system_data.neuron_hw_counters.neuron_devices[].neuron_device_index = 0
+system_data.neuron_hw_counters.neuron_devices[].mem_ecc_corrected    = 0
+system_data.neuron_hw_counters.neuron_devices[].mem_ecc_uncorrected  = 0
+system_data.neuron_hw_counters.neuron_devices[].sram_ecc_corrected   = 0
+system_data.neuron_hw_counters.neuron_devices[].sram_ecc_uncorrected = 0
+
+=== SYSTEM: MEMORY + vCPU ===
+system_data.memory_info.memory_total_bytes = 16378843136
+system_data.memory_info.memory_used_bytes  = 4335874048
+system_data.memory_info.swap_total_bytes   = 0
+system_data.memory_info.swap_used_bytes    = 0
+system_data.vcpu_usage.average_usage.{idle,io_wait,irq,nice,soft_irq,system,user}
+system_data.vcpu_usage.usage_data.{0,1,2,3}.{idle,io_wait,irq,nice,soft_irq,system,user}
+system_data.vcpu_usage.context_switch_count = 7372
+
+=== ABSENT ===
+No temperature field. No power field. No clock/frequency field.
+No throttle field. No voltage field. No fan field.

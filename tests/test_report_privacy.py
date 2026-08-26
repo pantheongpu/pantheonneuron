@@ -12,6 +12,7 @@ started emitting the identifier and stop it at the source.
 import glob
 import json
 import os
+import re
 import socket
 
 import pytest
@@ -134,3 +135,50 @@ def test_committed_reports_are_clean(path):
     tokens = {token.lower() for token in _flatten(report)}
     for key in FORBIDDEN_KEYS:
         assert key not in tokens, f"{os.path.basename(path)} leaked '{key}'"
+
+
+# --- committed probe data ---------------------------------------------------
+
+_IDENTIFIER_PATTERNS = (
+    (r"\bi-[0-9a-f]{8,17}\b", "EC2 instance id"),
+    (r"\bami-[0-9a-f]{8,17}\b", "AMI id"),
+    (r"\bsubnet-[0-9a-f]{8,17}\b", "subnet id"),
+    (r"\bsg-[0-9a-f]{8,17}\b", "security group id"),
+    (r"\bvpc-[0-9a-f]{8,17}\b", "VPC id"),
+    (r"\b(?:us|eu|ap|sa|ca|me|af)-[a-z]+-\d[a-f]\b", "availability zone"),
+    # A bare 12-digit number is not an account id -- effective_flops
+    # readings are 12 digits. Require account context.
+    (r"arn:aws[^\s]*:\d{12}:", "AWS account id in an ARN"),
+    (r"(?i)account[^\n]{0,24}?\b\d{12}\b", "AWS account id"),
+)
+
+
+def _committed_text_files():
+    """Every text file tracked in the repo's data and docs directories."""
+    found = []
+    for directory in ("data", "docs"):
+        root = os.path.join(REPO_ROOT, directory)
+        for base, _, names in os.walk(root):
+            for name in names:
+                if name.endswith((".md", ".txt", ".json")):
+                    found.append(os.path.join(base, name))
+    return sorted(found)
+
+
+@pytest.mark.parametrize("path", _committed_text_files())
+def test_committed_data_carries_no_identifiers(path):
+    """Probe captures are committed to a public repo; they must be redacted.
+
+    Raw neuron-monitor and neuron-ls output is thick with instance ids, AMI
+    ids, subnet ids and availability zones. Redaction is done by hand when
+    the capture is transcribed, so it needs a machine check behind it.
+    """
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+
+    for pattern, label in _IDENTIFIER_PATTERNS:
+        match = re.search(pattern, text)
+        assert match is None, (
+            f"{os.path.relpath(path, REPO_ROOT)} contains a real {label}: "
+            f"{match.group(0)!r} — redact it"
+        )

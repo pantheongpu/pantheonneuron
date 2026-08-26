@@ -1,0 +1,37 @@
+$ neuron-ls
+instance-type: inf2.xlarge
+instance-id: <REDACTED-INSTANCE-ID>
++--------+--------+----------+--------+--------------+----------+------+
+| NEURON | NEURON |  NEURON  | NEURON |     PCI      |   CPU    | NUMA |
+| DEVICE | CORES  | CORE IDS | MEMORY |     BDF      | AFFINITY | NODE |
++--------+--------+----------+--------+--------------+----------+------+
+| 0      | 2      | 0-1      | 32 GB  | 0000:00:1f.0 | 0-3      | -1   |
++--------+--------+----------+--------+--------------+----------+------+
+
+$ neuron-ls --json-output
+[
+    {
+        "neuron_device": 0,
+        "bdf": "0000:00:1f.0",
+        "cpu_affinity": "0-3",
+        "numa_node": "-1",
+        "connected_to": null,
+        "nc_count": 2,
+        "memory_size": 34359738368,
+        "neuroncore_ids": [
+            0,
+            1
+        ],
+        "neuron_processes": [
+            {
+                "pid": 2199,
+                "command": "/opt/aws_neuronx_venv_pytorch_2_8/bin/python /tmp/load.py",
+                "neuron_runtime_version": "2.30.51"
+            }
+        ]
+    }
+]
+
+NOTE: no device_type / arch / architecture field anywhere in the JSON.
+This is the defect that made _parse_neuron_ls fall through to the table
+default and report supports_training=False.
