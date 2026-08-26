@@ -66,6 +66,11 @@ class NeuronDevice:
             caps.add("training")
         if self.neuroncores > 1:
             caps.add("multicore")
+        # NeuronLink is present on every in-scope architecture, Inferentia2
+        # included -- inf2 shards large models across devices for inference,
+        # so collectives must not be gated behind the training capability.
+        if self.arch in _ARCH_TABLE or self.is_mock:
+            caps.add("collectives")
         return caps
 
 

@@ -206,16 +206,19 @@ def main(argv=None) -> int:
             print(f"{'':24} {workload.summary}")
         return 0
 
+    # Resolve the target before touching hardware: asking for a workload
+    # that has no Neuron equivalent should say so, not report missing
+    # devices.
     try:
-        discovered = neuron_device.discover()
-        devices = neuron_device.select(discovered, args.device)
-    except neuron_device.NeuronUnavailable as error:
+        workloads = registry.resolve(args.test)
+    except KeyError as error:
         print(f"[PANTHEON-NEURON] {error}", file=sys.stderr)
         return 2
 
     try:
-        workloads = registry.resolve(args.test)
-    except KeyError as error:
+        discovered = neuron_device.discover()
+        devices = neuron_device.select(discovered, args.device)
+    except neuron_device.NeuronUnavailable as error:
         print(f"[PANTHEON-NEURON] {error}", file=sys.stderr)
         return 2
 

@@ -26,16 +26,25 @@ def _workload(name):
 
 
 def test_skipped_workload_reports_reason(mock_env):
+    """Training work is genuinely unavailable on Inferentia."""
     row = pantheon_neuron.run_workload(
-        _workload("collective_allreduce"), INF2, duration=1, monitor_period=0.01
+        _workload("transformer_train_step"), INF2, duration=1, monitor_period=0.01
     )
     assert row["Status"] == "SKIPPED"
     assert "training" in row["Detail"]
 
 
+def test_collectives_are_not_skipped_on_inferentia(mock_env):
+    """inf2 has NeuronLink; all_reduce must actually run there."""
+    row = pantheon_neuron.run_workload(
+        _workload("all_reduce"), INF2, duration=1, monitor_period=0.01
+    )
+    assert row["Status"] == "PASS"
+
+
 def test_workload_runs_in_mock_mode(mock_env):
     row = pantheon_neuron.run_workload(
-        _workload("gemm_stress"), TRN1, duration=1, monitor_period=0.01
+        _workload("tensor_virus"), TRN1, duration=1, monitor_period=0.01
     )
     assert row["Status"] == "PASS"
     assert row["Telemetry"]["samples"] > 0
@@ -48,7 +57,7 @@ def test_unimplemented_workload_does_not_silently_pass_on_hardware(monkeypatch):
         nki_backend, "require_toolchain", lambda: {"neuronxcc": "2.x"}
     )
     with pytest.raises(NotImplementedError):
-        pantheon_neuron._execute(_workload("gemm_stress"), TRN1, duration=1)
+        pantheon_neuron._execute(_workload("tensor_virus"), TRN1, duration=1)
 
 
 def test_execution_errors_flip_a_pass_to_fail(mock_env, monkeypatch):
@@ -58,7 +67,7 @@ def test_execution_errors_flip_a_pass_to_fail(mock_env, monkeypatch):
         lambda self: {"samples": 3, "execution_errors": 2},
     )
     row = pantheon_neuron.run_workload(
-        _workload("gemm_stress"), TRN1, duration=1, monitor_period=0.01
+        _workload("tensor_virus"), TRN1, duration=1, monitor_period=0.01
     )
     assert row["Status"] == "FAIL"
     assert "execution error" in row["Detail"]
@@ -77,7 +86,7 @@ def test_report_is_written_atomically(mock_env, tmp_path, monkeypatch):
 
 def test_cli_list_exits_clean(capsys):
     assert pantheon_neuron.main(["--list"]) == 0
-    assert "gemm_stress" in capsys.readouterr().out
+    assert "tensor_virus" in capsys.readouterr().out
 
 
 def test_cli_reports_missing_hardware(monkeypatch, capsys):

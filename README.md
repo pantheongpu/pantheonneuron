@@ -16,18 +16,36 @@ fix to be made twice.
 
 The real fault line is the NeuronCore generation, not the brand name — so this
 suite models it as a capability layer. Each device reports what it can do, and
-each workload declares what it needs:
+each workload declares what it needs. Workloads a device cannot support are
+reported as `SKIPPED` with a reason, never silently omitted and never falsely
+passed.
 
-| Workload | Suite | Requires | trn1/trn2 | inf2 |
-|---|---|---|---|---|
-| `baseline_metrics` | baseline | — | ✅ | ✅ |
-| `gemm_stress` | core | compute | ✅ | ✅ |
-| `hbm_bandwidth` | memory | hbm | ✅ | ✅ |
-| `multicore_saturation` | core | compute, multicore | ✅ | ✅ |
-| `collective_allreduce` | interconnect | training, multicore | ✅ | skipped |
+## Name parity with pantheongpu
 
-Workloads that a device cannot support are reported as `SKIPPED` with a reason,
-never silently omitted and never falsely passed.
+Workload and suite names deliberately match the `pantheongpu` suite wherever
+the underlying concept is the same, so that a Neuron result and a GPU result
+for a given name are comparing like with like. `--test inference` means the
+same thing on both platforms.
+
+That constraint cuts both ways. Where a GPU workload targets a structure Neuron
+does not have, there is deliberately **no Neuron workload of that name** —
+reusing the name for something else would make comparison worse, not better.
+Asking for one by name explains why it is absent:
+
+```
+$ python pantheon_neuron.py --test sfu_stress
+[PANTHEON-NEURON] 'sfu_stress' is a pantheongpu workload with no Neuron
+equivalent: SFU is an NVIDIA SM structure; Neuron's Scalar/GpSimd engines
+are not equivalent.
+```
+
+The full list lives in `NO_NEURON_EQUIVALENT` in
+[`kernels/registry.py`](kernels/registry.py) — 17 GPU workloads covering FP64,
+ray tracing, media encode, warp scheduling, device atomics, and GPU-specific
+memory-hierarchy structures (TLB, HBM banks, TSVs, L2 partitioning).
+
+Suites shared with `pantheongpu`: `baseline`, `core`, `memory`,
+`interconnect`, `inference`, `training`, `runtime`, `ai_auxiliary`.
 
 ### Inf1 is out of scope
 
