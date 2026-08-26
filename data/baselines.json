@@ -153,5 +153,33 @@
     "voltage": "not exposed",
     "neuronlink_device_to_device": "needs >= 2 devices; quota pending",
     "trainium": "no Trainium part has run this code"
+  },
+  "derived_indicative": {
+    "_warning": "Each declared formula applied to the counters measured during the probe. These are NOT Scores -- no kernel ran. They show the formula produces a sane number from real counters, and they were produced by an untuned matmul at 0.0049% MFU, not by the pinned problem each workload declares. A real Score will differ by orders of magnitude.",
+    "memory_read": {
+      "value": 56.5795,
+      "unit": "GB/s",
+      "derivation": "hbm_read_bytes 8,470,528 / total_time 1.4971e-4 / 1e9"
+    },
+    "memory_write": {
+      "value": 0.1094,
+      "unit": "GB/s",
+      "derivation": "hbm_write_bytes 16,384 / total_time 1.4971e-4 / 1e9"
+    },
+    "tensor_virus": {
+      "value": 0.8756,
+      "unit": "TFLOPS",
+      "derivation": "effective_flops 875,590,474,948 / 1e12"
+    },
+    "all_reduce": {
+      "value": 50.6552,
+      "unit": "GB/s",
+      "derivation": "nccom-test busbw, mean of 1MiB-8MiB sweep (core-to-core, NOT NeuronLink)"
+    },
+    "graph_replay": {
+      "value": 815.5187,
+      "unit": "graph-steps/s",
+      "derivation": "execution_summary.completed 816 / period 1.00059"
+    }
   }
 }

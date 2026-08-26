@@ -7,6 +7,7 @@ Run after changing kernels/registry.py:
     python tools/gen_workload_table.py
 """
 
+import json
 import os
 import sys
 
@@ -28,6 +29,18 @@ SOURCE_SHORT = {
     registry.NCCOM: "nccom",
     registry.INTERNAL: "kernel",
 }
+
+
+def _indicative():
+    """Formula applied to counters measured during the probe, where available."""
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "baselines.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle).get("derived_indicative", {})
+    except OSError:
+        return {}
 
 
 def _devices(arch, count, cores, training):
@@ -52,9 +65,10 @@ def main() -> None:
         "**not** whether a kernel exists. Only `baseline_metrics` is implemented;",
         "everything else raises `NotImplementedError` on hardware.",
         "",
-        "| Workload | Suite | Unit | Score | Formula | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |",
-        "|---|---|---|---|---|:--:|:--:|:--:|:--:|",
+        "| Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |",
+        "|---|---|---|---|--:|:--:|:--:|:--:|:--:|",
     ]
+    indicative = _indicative()
 
     for workload in registry.WORKLOADS:
         source = workload.score_source
@@ -62,16 +76,22 @@ def main() -> None:
         for _, arch, count, cores, training in FLEET:
             ok = workload.runnable_on(_devices(arch, count, cores, training))
             cells.append("✅" if ok else "—")
-        formula = source.formula.split("#")[0].strip() if source else "—"
-        if len(formula) > 46:
-            formula = formula[:43] + "…"
+        got = indicative.get(workload.name)
+        measured = f"**{got['value']:,.4g}**" if got else "—"
         out.append(
             f"| `{workload.name}` | {workload.suite} | {workload.unit or '—'} "
             f"| {SOURCE_SHORT.get(source.source, '—') if source else '—'} "
-            f"| `{formula}` | " + " | ".join(cells) + " |"
+            f"| {measured} | " + " | ".join(cells) + " |"
         )
 
     out += [
+        "",
+        "**Measured** applies each workload's declared formula to the counters "
+        "actually read during the probe. Only five workloads have one, because "
+        "only their counters were captured. These are **not Scores** — no "
+        "kernel ran, and the load was an untuned matmul at 0.0049% MFU rather "
+        "than the pinned problem each workload declares. A real Score will "
+        "differ by orders of magnitude.",
         "",
         "A `—` in an instance column means the capability gate skips it: "
         "`all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and "

@@ -11,34 +11,36 @@ Instance columns show whether the capability gate admits the workload —
 **not** whether a kernel exists. Only `baseline_metrics` is implemented;
 everything else raises `NotImplementedError` on hardware.
 
-| Workload | Suite | Unit | Score | Formula | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
-|---|---|---|---|---|:--:|:--:|:--:|:--:|
-| `baseline_metrics` | baseline | — | — | `—` | ✅ | ✅ | ✅ | ✅ |
-| `tensor_virus` | core | TFLOPS | monitor | `mean(effective_flops) / 1e12` | ✅ | ✅ | ✅ | ✅ |
-| `int_virus` | core | TOPS | monitor | `mean(effective_flops) / 1e12` | ✅ | ✅ | ✅ | ✅ |
-| `pulse_virus` | core | TFLOPS | monitor | `mean(effective_flops) / 1e12; throttle_acti…` | ✅ | ✅ | ✅ | ✅ |
-| `transformer_virus` | core | TFLOPS | monitor | `mean(effective_flops) / 1e12` | ✅ | ✅ | ✅ | ✅ |
-| `omni_virus` | core | TFLOPS | monitor | `mean(effective_flops) / 1e12; per-engine ac…` | ✅ | ✅ | ✅ | ✅ |
-| `memory_read` | memory | GB/s | profile | `hbm_read_bytes / total_time / 1e9` | ✅ | ✅ | ✅ | ✅ |
-| `memory_write` | memory | GB/s | profile | `hbm_write_bytes / total_time / 1e9` | ✅ | ✅ | ✅ | ✅ |
-| `memory_read_agg` | memory | GB/s | profile | `sum(hbm_read_bytes over cores) / total_time…` | ✅ | ✅ | ✅ | ✅ |
-| `memory_write_agg` | memory | GB/s | profile | `sum(hbm_write_bytes over cores) / total_tim…` | ✅ | ✅ | ✅ | ✅ |
-| `all_reduce` | interconnect | GB/s | nccom | `nccom-test all_reduce busbw, averaged over …` | — | ✅ | — | ✅ |
-| `p2p_thrasher` | interconnect | GB/s | nccom | `nccom-test sendrecv busbw` | — | ✅ | — | ✅ |
-| `pcie_bandwidth` | interconnect | GB/s | kernel | `bytes_transferred / elapsed_s / 1e9` | ✅ | ✅ | ✅ | ✅ |
-| `llm_decode` | inference | tokens/s | kernel | `tokens_generated / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `llm_prefill` | inference | prompt-tokens/s | kernel | `prompt_tokens / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `kv_cache_churn` | inference | cache-updates/s | kernel | `cache_updates / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `fused_attention` | inference | attention-tiles/s | kernel | `attention_tiles / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `quantized_gemm` | inference | quantized-ops/s | kernel | `quantized_ops / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `serving_mix` | inference | requests/s | kernel | `requests_completed / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `speculative_decode` | inference | verified-tokens/s | kernel | `verified_tokens / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `moe_router` | inference | routed-tokens/s | kernel | `routed_tokens / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `transformer_train_step` | training | train-steps/s | kernel | `steps_completed / elapsed_s` | — | — | ✅ | ✅ |
-| `allocation_fragmentation` | runtime | allocation-events/s | kernel | `allocation_events / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `graph_replay` | runtime | graph-steps/s | monitor | `delta(completed) / period` | ✅ | ✅ | ✅ | ✅ |
-| `rag_embedding` | ai_auxiliary | embedding-vectors/s | kernel | `vectors_embedded / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
-| `vision_encoder` | ai_auxiliary | image-tiles/s | kernel | `image_tiles / elapsed_s` | ✅ | ✅ | ✅ | ✅ |
+| Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
+|---|---|---|---|--:|:--:|:--:|:--:|:--:|
+| `baseline_metrics` | baseline | — | — | — | ✅ | ✅ | ✅ | ✅ |
+| `tensor_virus` | core | TFLOPS | monitor | **0.8756** | ✅ | ✅ | ✅ | ✅ |
+| `int_virus` | core | TOPS | monitor | — | ✅ | ✅ | ✅ | ✅ |
+| `pulse_virus` | core | TFLOPS | monitor | — | ✅ | ✅ | ✅ | ✅ |
+| `transformer_virus` | core | TFLOPS | monitor | — | ✅ | ✅ | ✅ | ✅ |
+| `omni_virus` | core | TFLOPS | monitor | — | ✅ | ✅ | ✅ | ✅ |
+| `memory_read` | memory | GB/s | profile | **56.58** | ✅ | ✅ | ✅ | ✅ |
+| `memory_write` | memory | GB/s | profile | **0.1094** | ✅ | ✅ | ✅ | ✅ |
+| `memory_read_agg` | memory | GB/s | profile | — | ✅ | ✅ | ✅ | ✅ |
+| `memory_write_agg` | memory | GB/s | profile | — | ✅ | ✅ | ✅ | ✅ |
+| `all_reduce` | interconnect | GB/s | nccom | **50.66** | — | ✅ | — | ✅ |
+| `p2p_thrasher` | interconnect | GB/s | nccom | — | — | ✅ | — | ✅ |
+| `pcie_bandwidth` | interconnect | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `llm_decode` | inference | tokens/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `llm_prefill` | inference | prompt-tokens/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `kv_cache_churn` | inference | cache-updates/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `fused_attention` | inference | attention-tiles/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `quantized_gemm` | inference | quantized-ops/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `serving_mix` | inference | requests/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `speculative_decode` | inference | verified-tokens/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `moe_router` | inference | routed-tokens/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `transformer_train_step` | training | train-steps/s | kernel | — | — | — | ✅ | ✅ |
+| `allocation_fragmentation` | runtime | allocation-events/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `graph_replay` | runtime | graph-steps/s | monitor | **815.5** | ✅ | ✅ | ✅ | ✅ |
+| `rag_embedding` | ai_auxiliary | embedding-vectors/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `vision_encoder` | ai_auxiliary | image-tiles/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+
+**Measured** applies each workload's declared formula to the counters actually read during the probe. Only five workloads have one, because only their counters were captured. These are **not Scores** — no kernel ran, and the load was an untuned matmul at 0.0049% MFU rather than the pinned problem each workload declares. A real Score will differ by orders of magnitude.
 
 A `—` in an instance column means the capability gate skips it: `all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and `transformer_train_step` needs a Trainium part.
 
