@@ -23,17 +23,28 @@ import typing
 
 # Dropped from every sample before it can reach a report.  Keyed by the
 # top-level neuron-monitor field name.
+# Observed verbatim in neuron-monitor output on an inf2.xlarge running
+# Neuron runtime 2.30.51.  The whole instance_info block is dropped, but
+# each field is listed so a schema change cannot quietly reintroduce one.
 _HOST_IDENTIFIER_FIELDS = frozenset(
     {
         "instance_info",
         "instance_id",
+        "instance_name",
         "instance_type",
+        "instance_region",
+        "instance_availability_zone",
+        "instance_availability_zone_id",
         "availability_zone",
         "region",
         "ami_id",
         "subnet_id",
         "hostname",
         "ip_address",
+        "serial_number",
+        # neuron-ls reports the launching command line, which carries
+        # filesystem paths and therefore usernames.
+        "command",
     }
 )
 
@@ -207,9 +218,18 @@ class NeuronMonitor:
             return {"samples": 0}
 
         utilisation = collections.defaultdict(list)
+        flops = collections.defaultdict(list)
         memory_bytes: typing.List[int] = []
+        latency_p50: typing.List[float] = []
+        latency_p99: typing.List[float] = []
         errors = 0
         executions = 0
+        ecc = {
+            "mem_ecc_corrected": 0,
+            "mem_ecc_uncorrected": 0,
+            "sram_ecc_corrected": 0,
+            "sram_ecc_uncorrected": 0,
+        }
 
         for sample in self._samples:
             for runtime in sample.get("neuron_runtime_data", []):
@@ -221,6 +241,12 @@ class NeuronMonitor:
                     value = counters.get("neuroncore_utilization")
                     if isinstance(value, (int, float)):
                         utilisation[str(core_id)].append(float(value))
+                    # effective_flops is absent from the CloudWatch metric
+                    # set and from sysfs (where flop_count stays 0), but
+                    # neuron-monitor reports it per NeuronCore.
+                    achieved = counters.get("effective_flops")
+                    if isinstance(achieved, (int, float)) and achieved > 0:
+                        flops[str(core_id)].append(float(achieved))
 
                 used = (
                     report.get("memory_used", {})
@@ -234,9 +260,37 @@ class NeuronMonitor:
                 for count in stats.get("error_summary", {}).values():
                     if isinstance(count, (int, float)):
                         errors += int(count)
-                total = stats.get("total_executions")
-                if isinstance(total, (int, float)):
-                    executions = max(executions, int(total))
+
+                # execution_summary carries the failure modes that matter
+                # for a stress run; anything that is not "completed" is a
+                # defect signal.
+                summary = stats.get("execution_summary", {})
+                completed = summary.get("completed")
+                if isinstance(completed, (int, float)):
+                    executions = max(executions, int(completed))
+                for key in (
+                    "completed_with_err",
+                    "completed_with_num_err",
+                    "failed_to_queue",
+                    "incorrect_input",
+                    "timed_out",
+                ):
+                    value = summary.get(key)
+                    if isinstance(value, (int, float)):
+                        errors += int(value)
+
+                latency = stats.get("latency_stats", {}).get("device_latency", {})
+                for source, sink in (("p50", latency_p50), ("p99", latency_p99)):
+                    value = latency.get(source)
+                    if isinstance(value, (int, float)):
+                        sink.append(float(value))
+
+            hw = sample.get("system_data", {}).get("neuron_hw_counters", {})
+            for device in hw.get("neuron_devices", []):
+                for key in ecc:
+                    value = device.get(key)
+                    if isinstance(value, (int, float)):
+                        ecc[key] = max(ecc[key], int(value))
 
         summary = {
             "samples": len(self._samples),
@@ -255,4 +309,19 @@ class NeuronMonitor:
                 "mean": int(statistics.fmean(memory_bytes)),
                 "peak": max(memory_bytes),
             }
+        if flops:
+            summary["effective_flops"] = {
+                core_id: {
+                    "mean": int(statistics.fmean(values)),
+                    "peak": int(max(values)),
+                }
+                for core_id, values in sorted(flops.items())
+            }
+        if latency_p50:
+            summary["device_latency_seconds"] = {
+                "p50_mean": round(statistics.fmean(latency_p50), 6),
+                "p99_peak": round(max(latency_p99), 6) if latency_p99 else None,
+            }
+        summary["ecc_events"] = ecc
+        summary["ecc_events_total"] = sum(ecc.values())
         return summary

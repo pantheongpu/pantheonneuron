@@ -128,8 +128,42 @@ def _normalise_arch(raw: str) -> str:
     return match.group(1) if match else text
 
 
+SYSFS_ROOT = "/sys/devices/virtual/neuron_device"
+
+
+def _read_sysfs(relative: str) -> typing.Optional[str]:
+    try:
+        with open(os.path.join(SYSFS_ROOT, relative), encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def _arch_from_sysfs() -> typing.Optional[str]:
+    """Read the architecture from the driver.
+
+    ``neuron-ls --json-output`` reports topology (index, nc_count,
+    memory_size) but carries no architecture field at all -- verified on an
+    inf2.xlarge running Neuron runtime 2.30.51.  Without this, every device
+    would fall back to the table default and report supports_training=False,
+    silently skipping the training suite on real Trainium hardware.
+
+    The driver exposes it here instead:
+        info/architecture/instance_type  -> "Inf2"
+        info/architecture/device_name    -> "Inferentia2"
+        info/architecture/arch_type      -> "NDv3"  (device gen, not core gen)
+    """
+    for field in ("instance_type", "device_name"):
+        value = _read_sysfs(f"neuron0/info/architecture/{field}")
+        if value:
+            arch = _normalise_arch(value)
+            if arch in _ARCH_TABLE or arch in _UNSUPPORTED_ARCH:
+                return arch
+    return None
+
+
 def _arch_from_instance_type() -> typing.Optional[str]:
-    """Fall back to IMDS-free env hint; callers may set this in containers."""
+    """Env hint, for containers where the sysfs tree is not mounted."""
     hint = os.environ.get("PANTHEON_NEURON_ARCH", "").strip().lower()
     return _normalise_arch(hint) if hint else None
 
@@ -151,6 +185,7 @@ def _parse_neuron_ls(payload) -> typing.List[NeuronDevice]:
             entry.get("neuron_device_type")
             or entry.get("device_type")
             or entry.get("arch")
+            or _arch_from_sysfs()
             or _arch_from_instance_type()
             or ""
         )
