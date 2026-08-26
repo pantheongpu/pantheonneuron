@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    # Runs on GitHub-hosted runners: the suite is designed to be fully
+    # exercisable without Neuron hardware via the mock backend.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest tests/ -q
+      - name: Mock end-to-end run
+        env:
+          PANTHEON_NEURON_MOCK: "1"
+        run: python pantheon_neuron.py --duration 1 --monitor-period 0.02
+
+  report-privacy:
+    # This repository is public. Reports must never carry host identifiers,
+    # so the guard runs as its own required job rather than buried in the
+    # matrix, where a single green check could hide it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
+      - name: Enforce report privacy invariant
+        run: python -m pytest tests/test_report_privacy.py -q

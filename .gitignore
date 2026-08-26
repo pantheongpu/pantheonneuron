@@ -1,0 +1,24 @@
+# Generated reports and run artifacts stay local.  There is no companion
+# website repo for this suite; if that changes, scrub before publishing.
+database/
+results/
+
+__pycache__/
+*.py[codz]
+*.so
+.Python
+build/
+dist/
+release/
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Neuron compiler artifacts
+*.neff
+*.ntff
+neuron_compile_cache/
+/tmp/nki_cache/
+log-neuron-cc.txt

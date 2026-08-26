@@ -1,0 +1,12 @@
+# Runtime dependencies for the orchestrator itself.
+psutil>=5.9.0
+
+# The Neuron toolchain is NOT listed here on purpose: it installs from the
+# AWS Neuron pip index, not PyPI, and pinning it would break CI runners that
+# have no Neuron hardware.  On a trn1/trn2/inf2 instance:
+#
+#   python -m pip config set global.extra-index-url \
+#       https://pip.repos.neuron.amazonaws.com
+#   python -m pip install neuronx-cc torch-neuronx neuronx-distributed
+#
+# Without it the suite runs only in mock mode (PANTHEON_NEURON_MOCK=1).
