@@ -15,6 +15,38 @@ import dataclasses
 import typing
 
 
+# Where a Score comes from. Four sources, because Neuron has no single
+# interface that covers everything:
+#
+#   PROFILER  neuron-profile summary-json -- per-execution capture. The only
+#             source for HBM bytes, per-engine time, cycles and throttle.
+#   MONITOR   neuron-monitor -- continuous stream. effective_flops and
+#             execution_summary live here and nowhere else.
+#   NCCOM     nccom-test -- the collectives benchmark; reports busbw directly.
+#   INTERNAL  counted by the workload itself (tokens, steps, requests). No
+#             hardware counter measures these; the kernel must report them.
+PROFILER = "neuron-profile"
+MONITOR = "neuron-monitor"
+NCCOM = "nccom-test"
+INTERNAL = "workload"
+
+
+@dataclasses.dataclass(frozen=True)
+class ScoreSource:
+    """How a workload's Score is produced from measured counters.
+
+    ``formula`` is the arithmetic, written against ``counters``. It is
+    documentation and a review target, not evaluated code -- the kernel
+    implements it. Recording it here means a Score can be audited without
+    reading the kernel, and a counter rename shows up as a broken reference
+    rather than a silently wrong number.
+    """
+
+    source: str
+    counters: typing.Tuple[str, ...]
+    formula: str
+
+
 @dataclasses.dataclass(frozen=True)
 class Workload:
     """One workload.
@@ -36,6 +68,7 @@ class Workload:
     min_devices: int = 1
     unit: typing.Optional[str] = None
     problem: typing.Optional[typing.Mapping[str, typing.Any]] = None
+    score_source: typing.Optional[ScoreSource] = None
 
     def runnable_on(self, devices) -> bool:
         if len(devices) < self.min_devices:
@@ -70,124 +103,272 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("tensor_virus", "core",
              "Saturate the Tensor Engine with dense matmul.", _COMPUTE,
              unit="TFLOPS",
-             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "bf16"}),
+             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "bf16"},
+             score_source=ScoreSource(MONITOR,
+                 counters=(
+                     'neuroncore_counters.*.effective_flops',
+                 ),
+                 formula='mean(effective_flops) / 1e12')),
     Workload("int_virus", "core",
              "Sustained INT8 throughput on the Tensor Engine.", _COMPUTE,
              unit="TOPS",
-             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "int8"}),
+             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "int8"},
+             score_source=ScoreSource(MONITOR,
+                 counters=(
+                     'neuroncore_counters.*.effective_flops',
+                 ),
+                 formula='mean(effective_flops) / 1e12   # int8 ops, reported as TOPS')),
     Workload("pulse_virus", "core",
              "Duty-cycled load to provoke power/clock transients.", _COMPUTE,
              unit="TFLOPS",
              problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "bf16",
-                      "duty_cycle": 0.5, "period_s": 2}),
+                      "duty_cycle": 0.5, "period_s": 2},
+             score_source=ScoreSource(MONITOR,
+                 counters=(
+                     'neuroncore_counters.*.effective_flops',
+                     'throttle_active_nc0_time_ns',
+                 ),
+                 formula='mean(effective_flops) / 1e12; throttle_active_nc0_time_ns recorded alongside')),
     Workload("transformer_virus", "core",
              "Full transformer block under sustained load.", _COMPUTE,
              unit="TFLOPS",
-             problem={"hidden": 4096, "heads": 32, "seq": 2048, "dtype": "bf16"}),
+             problem={"hidden": 4096, "heads": 32, "seq": 2048, "dtype": "bf16"},
+             score_source=ScoreSource(MONITOR,
+                 counters=(
+                     'neuroncore_counters.*.effective_flops',
+                 ),
+                 formula='mean(effective_flops) / 1e12')),
     Workload("omni_virus", "core",
              "All engines concurrently: tensor, vector, scalar, GpSimd.", _COMPUTE,
              unit="TFLOPS",
              problem={"op": "mixed", "shape": [8192, 8192, 8192], "dtype": "bf16",
-                      "engines": "all"}),
+                      "engines": "all"},
+             score_source=ScoreSource(MONITOR,
+                 counters=(
+                     'neuroncore_counters.*.effective_flops',
+                     'tensor_engine_active_time_percent',
+                     'vector_engine_active_time_percent',
+                     'scalar_engine_active_time_percent',
+                     'gpsimd_engine_active_time_percent',
+                 ),
+                 formula='mean(effective_flops) / 1e12; per-engine active_time_percent recorded alongside')),
 
     # -- memory: HBM bandwidth --------------------------------------------
     Workload("memory_read", "memory",
              "Streaming HBM reads on one NeuronCore.", _HBM,
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1}),
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1},
+             score_source=ScoreSource(PROFILER,
+                 counters=(
+                     'hbm_read_bytes',
+                     'total_time',
+                 ),
+                 formula='hbm_read_bytes / total_time / 1e9')),
     Workload("memory_write", "memory",
              "Streaming HBM writes on one NeuronCore.", _HBM,
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1}),
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1},
+             score_source=ScoreSource(PROFILER,
+                 counters=(
+                     'hbm_write_bytes',
+                     'total_time',
+                 ),
+                 formula='hbm_write_bytes / total_time / 1e9')),
     Workload("memory_read_agg", "memory",
              "Aggregate HBM read bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"}),
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"},
+             score_source=ScoreSource(PROFILER,
+                 counters=(
+                     'hbm_read_bytes',
+                     'total_time',
+                 ),
+                 formula='sum(hbm_read_bytes over cores) / total_time / 1e9')),
     Workload("memory_write_agg", "memory",
              "Aggregate HBM write bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"}),
+             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"},
+             score_source=ScoreSource(PROFILER,
+                 counters=(
+                     'hbm_write_bytes',
+                     'total_time',
+                 ),
+                 formula='sum(hbm_write_bytes over cores) / total_time / 1e9')),
 
     # -- interconnect ------------------------------------------------------
     Workload("all_reduce", "interconnect",
              "All-reduce collective over NeuronLink.", _COLLECTIVE, min_devices=2,
              unit="GB/s",
              problem={"op": "all_reduce", "bytes_min": 1 << 20, "bytes_max": 8 << 20,
-                      "dtype": "fp32"}),
+                      "dtype": "fp32"},
+             score_source=ScoreSource(NCCOM,
+                 counters=(
+                     'busbw',
+                 ),
+                 formula='nccom-test all_reduce busbw, averaged over the size sweep')),
     Workload("p2p_thrasher", "interconnect",
              "Sustained device-to-device traffic over NeuronLink.",
              _COLLECTIVE, min_devices=2,
              unit="GB/s",
-             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32"}),
+             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32"},
+             score_source=ScoreSource(NCCOM,
+                 counters=(
+                     'busbw',
+                 ),
+                 formula='nccom-test sendrecv busbw')),
     Workload("pcie_bandwidth", "interconnect",
              "Host-to-device and device-to-host transfer over PCIe.",
              unit="GB/s",
-             problem={"bytes": 1 << 30, "direction": "bidirectional"}),
+             problem={"bytes": 1 << 30, "direction": "bidirectional"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'bytes_transferred',
+                     'elapsed_s',
+                 ),
+                 formula='bytes_transferred / elapsed_s / 1e9   # device DMA counters are device-side only')),
 
     # -- inference ---------------------------------------------------------
     Workload("llm_decode", "inference",
              "Autoregressive decode; latency-bound token generation.", _COMPUTE,
              unit="tokens/s",
              problem={"hidden": 4096, "layers": 32, "batch": 1, "context": 2048,
-                      "dtype": "bf16"}),
+                      "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'tokens_generated',
+                     'elapsed_s',
+                 ),
+                 formula='tokens_generated / elapsed_s')),
     Workload("llm_prefill", "inference",
              "Prompt prefill; compute-bound batched attention.", _COMPUTE,
              unit="prompt-tokens/s",
              problem={"hidden": 4096, "layers": 32, "batch": 1, "prompt": 2048,
-                      "dtype": "bf16"}),
+                      "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'prompt_tokens',
+                     'elapsed_s',
+                 ),
+                 formula='prompt_tokens / elapsed_s')),
     Workload("kv_cache_churn", "inference",
              "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM,
              unit="cache-updates/s",
-             problem={"hidden": 4096, "heads": 32, "context": 4096, "dtype": "bf16"}),
+             problem={"hidden": 4096, "heads": 32, "context": 4096, "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'cache_updates',
+                     'elapsed_s',
+                 ),
+                 formula='cache_updates / elapsed_s')),
     Workload("fused_attention", "inference",
              "Fused attention kernel throughput.", _COMPUTE,
              unit="attention-tiles/s",
-             problem={"heads": 32, "seq": 2048, "head_dim": 128, "dtype": "bf16"}),
+             problem={"heads": 32, "seq": 2048, "head_dim": 128, "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'attention_tiles',
+                     'elapsed_s',
+                 ),
+                 formula='attention_tiles / elapsed_s')),
     Workload("quantized_gemm", "inference",
              "INT8/FP8 quantized GEMM paths.", _COMPUTE,
              unit="quantized-ops/s",
-             problem={"op": "matmul", "shape": [4096, 4096, 4096], "dtype": "int8"}),
+             problem={"op": "matmul", "shape": [4096, 4096, 4096], "dtype": "int8"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'quantized_ops',
+                     'elapsed_s',
+                 ),
+                 formula='quantized_ops / elapsed_s')),
     Workload("serving_mix", "inference",
              "Mixed prefill/decode traffic at serving ratios.", _COMPUTE,
              unit="requests/s",
-             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024, "decode": 256}),
+             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024, "decode": 256},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'requests_completed',
+                     'elapsed_s',
+                 ),
+                 formula='requests_completed / elapsed_s')),
     Workload("speculative_decode", "inference",
              "Draft-and-verify speculative decoding.", _COMPUTE,
              unit="verified-tokens/s",
-             problem={"draft_len": 4, "hidden": 4096, "dtype": "bf16"}),
+             problem={"draft_len": 4, "hidden": 4096, "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'verified_tokens',
+                     'elapsed_s',
+                 ),
+                 formula='verified_tokens / elapsed_s')),
     Workload("moe_router", "inference",
              "Mixture-of-experts routing and expert dispatch.", _COMPUTE,
              unit="routed-tokens/s",
-             problem={"experts": 8, "top_k": 2, "hidden": 4096, "tokens": 4096}),
+             problem={"experts": 8, "top_k": 2, "hidden": 4096, "tokens": 4096},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'routed_tokens',
+                     'elapsed_s',
+                 ),
+                 formula='routed_tokens / elapsed_s')),
 
     # -- training (Trainium only) -----------------------------------------
     Workload("transformer_train_step", "training",
              "Forward, backward and optimiser step.", _TRAINING,
              unit="train-steps/s",
              problem={"hidden": 4096, "layers": 8, "batch": 4, "seq": 2048,
-                      "dtype": "bf16"}),
+                      "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'steps_completed',
+                     'elapsed_s',
+                 ),
+                 formula='steps_completed / elapsed_s')),
 
     # -- runtime -----------------------------------------------------------
     Workload("allocation_fragmentation", "runtime",
              "Device memory allocator under fragmentation pressure.", _HBM,
              unit="allocation-events/s",
-             problem={"allocations": 10000, "size_min": 1 << 12, "size_max": 1 << 24}),
+             problem={"allocations": 10000, "size_min": 1 << 12, "size_max": 1 << 24},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'allocation_events',
+                     'elapsed_s',
+                 ),
+                 formula='allocation_events / elapsed_s')),
     Workload("graph_replay", "runtime",
              "Repeated replay of a compiled NEFF graph.", _COMPUTE,
              unit="graph-steps/s",
-             problem={"hidden": 2048, "replays": 10000, "dtype": "bf16"}),
+             problem={"hidden": 2048, "replays": 10000, "dtype": "bf16"},
+             score_source=ScoreSource(MONITOR,
+                 counters=(
+                     'execution_stats.execution_summary.completed',
+                     'execution_stats.period',
+                 ),
+                 formula='delta(completed) / period')),
 
     # -- ai_auxiliary ------------------------------------------------------
     Workload("rag_embedding", "ai_auxiliary",
              "Embedding generation at retrieval batch sizes.", _COMPUTE,
              unit="embedding-vectors/s",
-             problem={"dim": 1024, "batch": 256, "dtype": "bf16"}),
+             problem={"dim": 1024, "batch": 256, "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'vectors_embedded',
+                     'elapsed_s',
+                 ),
+                 formula='vectors_embedded / elapsed_s')),
     Workload("vision_encoder", "ai_auxiliary",
              "Vision encoder forward pass.", _COMPUTE,
              unit="image-tiles/s",
-             problem={"resolution": 224, "patch": 14, "batch": 64, "dtype": "bf16"}),
+             problem={"resolution": 224, "patch": 14, "batch": 64, "dtype": "bf16"},
+             score_source=ScoreSource(INTERNAL,
+                 counters=(
+                     'image_tiles',
+                     'elapsed_s',
+                 ),
+                 formula='image_tiles / elapsed_s')),
 )
 
 

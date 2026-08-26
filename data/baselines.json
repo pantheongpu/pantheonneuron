@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "_warning": "These are OBSERVED values from a probe, NOT tuned peak numbers and NOT workload Scores. The load was a trivial untuned matmul: mfu_estimated_percent was 0.0049%, roughly four orders of magnitude below the hardware's capability. Do not cite effective_flops here as Inferentia2's throughput, and do not compare it to a tuned GPU result. These exist to prove each counter is readable and responsive, and to catch regressions in counter plumbing -- nothing more.",
+  "hardware": {
+    "arch": "inf2",
+    "device_name": "Inferentia2",
+    "neuron_device_version": "v3",
+    "neuroncore_version": "v2",
+    "neuroncores_per_device": 2,
+    "devices": 1,
+    "device_memory_bytes": 34359738368,
+    "pcie": {
+      "current": "Gen4 x8",
+      "max": "Gen5 x8"
+    }
+  },
+  "software": {
+    "runtime": "2.30.51",
+    "driver": "2.26.0",
+    "compiler": "2.23.6484.0",
+    "tools": "2.28.23.0",
+    "image": "Deep Learning AMI Neuron (Ubuntu 22.04) 20260227"
+  },
+  "measurements": {
+    "effective_flops": {
+      "value": 875590474948,
+      "unit": "FLOP/s",
+      "source": "neuron-monitor",
+      "scope": "neuroncore 0",
+      "probe": "2026-08-26",
+      "note": "untuned matmul; mfu_estimated_percent 0.0049%"
+    },
+    "neuroncore_utilization": {
+      "value": 89.40087251059674,
+      "unit": "percent",
+      "source": "neuron-monitor",
+      "scope": "neuroncore 0",
+      "probe": "2026-08-26"
+    },
+    "device_latency_p50": {
+      "value": 0.0011217594146728516,
+      "unit": "s",
+      "source": "neuron-monitor",
+      "probe": "2026-08-26"
+    },
+    "device_latency_p99": {
+      "value": 0.0011413097381591797,
+      "unit": "s",
+      "source": "neuron-monitor",
+      "probe": "2026-08-26"
+    },
+    "neuroncore_cycle_count": {
+      "value": 209594,
+      "unit": "cycles",
+      "source": "neuron-profile",
+      "scope": "one NEFF execution",
+      "probe": "2026-08-26-tools"
+    },
+    "derived_clock": {
+      "value": 1.4,
+      "unit": "GHz",
+      "source": "neuron-profile",
+      "formula": "neuroncore_cycle_count / total_time",
+      "probe": "2026-08-26-tools"
+    },
+    "throttle_active_time": {
+      "value": 774,
+      "unit": "ns",
+      "source": "neuron-profile",
+      "scope": "neuroncore 0",
+      "probe": "2026-08-26-tools"
+    },
+    "tensor_engine_active_time_percent": {
+      "value": 0.8950715775140718,
+      "unit": "fraction",
+      "source": "neuron-profile",
+      "probe": "2026-08-26-tools"
+    },
+    "hbm_read_bytes": {
+      "value": 8470528,
+      "unit": "bytes",
+      "source": "neuron-profile",
+      "scope": "one NEFF execution",
+      "probe": "2026-08-26-tools"
+    },
+    "hbm_write_bytes": {
+      "value": 16384,
+      "unit": "bytes",
+      "source": "neuron-profile",
+      "scope": "one NEFF execution",
+      "probe": "2026-08-26-tools"
+    },
+    "mfu_estimated_percent": {
+      "value": 0.004885633591650872,
+      "unit": "percent",
+      "source": "neuron-profile",
+      "probe": "2026-08-26-tools"
+    },
+    "collectives_busbw": {
+      "value": 50.6552,
+      "unit": "GB/s",
+      "source": "nccom-test",
+      "scope": "core-to-core, 2 workers on 1 device (NOT NeuronLink)",
+      "sweep": {
+        "1MiB": 44.62,
+        "2.4MiB": 49.86,
+        "4.7MiB": 51.57,
+        "8MiB": 52.43
+      },
+      "probe": "2026-08-26-tools"
+    },
+    "execution_latency": {
+      "value": 519,
+      "unit": "us",
+      "source": "neuron-bench",
+      "note": "sigma ~0.5us over 200 executions; determinism signal",
+      "probe": "2026-08-26-tools"
+    },
+    "power_utilization_idle": {
+      "min": 0.0,
+      "max": 2.06,
+      "mean": 0.56,
+      "unit": "UNDOCUMENTED",
+      "source": "sysfs stats/power/utilization",
+      "refresh_s": 60,
+      "probe": "2026-08-26"
+    },
+    "power_utilization_load": {
+      "min": 0.86,
+      "max": 25.0,
+      "mean": 18.86,
+      "unit": "UNDOCUMENTED",
+      "source": "sysfs stats/power/utilization",
+      "refresh_s": 60,
+      "probe": "2026-08-26"
+    },
+    "ecc_events": {
+      "value": 0,
+      "unit": "count",
+      "source": "neuron-monitor",
+      "counters": [
+        "mem_ecc_corrected",
+        "mem_ecc_uncorrected",
+        "sram_ecc_corrected",
+        "sram_ecc_uncorrected"
+      ],
+      "probe": "2026-08-26"
+    }
+  },
+  "unmeasured": {
+    "temperature": "no sensor on any interface",
+    "fan_speed": "not exposed",
+    "voltage": "not exposed",
+    "neuronlink_device_to_device": "needs >= 2 devices; quota pending",
+    "trainium": "no Trainium part has run this code"
+  }
+}

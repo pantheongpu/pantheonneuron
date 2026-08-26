@@ -121,6 +121,30 @@ dtype travels with the score into the report.
 Skipped workloads still emit their `Unit` and `Problem` with a null `Score`,
 so a comparison renders an explicit gap instead of dropping the row.
 
+### Where each Score comes from
+
+Every scored workload declares a `score_source`: which interface produces
+the number, which counters it reads, and the formula. See
+[`docs/workload_counter_map.md`](docs/workload_counter_map.md) for the full
+table, generated from the registry.
+
+| Source | Workloads | Why this source |
+|---|---|---|
+| `neuron-profile` | the four `memory_*` | HBM byte counters exist only in the profiler |
+| `neuron-monitor` | the four TFLOPS/TOPS viruses, `graph_replay` | `effective_flops` exists only in the monitor |
+| `nccom-test` | `all_reduce`, `p2p_thrasher` | reports `busbw` directly |
+| `workload` | the 8 inference workloads, training, and 3 others | no hardware counter measures tokens, steps or requests |
+
+A test asserts that any hardware-sourced counter named here was actually
+observed on real hardware, so a counter rename in the Neuron SDK breaks a
+reference instead of silently producing a wrong number.
+
+`data/baselines.json` records what each counter read during the probes.
+**Those are observations, not benchmark results** — the probe load was an
+untuned matmul at 0.0049% MFU, roughly four orders of magnitude below the
+hardware's capability. They exist to prove each counter is readable and to
+catch plumbing regressions.
+
 ### What cannot be compared
 
 `Efficiency (MB/J)` and everything derived from watts. Neuron exposes no
