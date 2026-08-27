@@ -153,6 +153,34 @@ power figure in documented units — see
 computable across these platforms, and neither is temperature, fan or
 voltage.
 
+## Kernel status
+
+| Workload | Kernel | Score source |
+|---|---|---|
+| `baseline_metrics` | ✅ telemetry only, no load | — |
+| `memory_read` | ⚠️ written, **untested on hardware** | analytic (profiler wiring pending) |
+| the other 24 | ❌ none | — |
+
+`memory_read` is the first real kernel. Two caveats travel with it:
+
+**It has never run on a Neuron device.** It was written against the NKI
+programming model with no hardware available. The tile geometry and byte
+accounting are covered by tests that run anywhere; the NKI calls are not.
+Treat the first hardware run as bring-up, not measurement.
+
+**Its Score is provisional.** The registry declares the Score comes from
+`neuron-profile`'s `hbm_read_bytes`; that wiring does not exist yet, so the
+kernel reports the analytic figure — bytes requested over wall time. Every
+report row carries a `Score Method` field recording this, so a result is
+never read as though the declared contract held.
+
+The two differ in a way that matters: the analytic figure counts bytes we
+*asked* for and cannot detect loads the compiler eliminated. A kernel whose
+DMA was optimised away still posts a fast wall time and a large analytic
+number. `memory_read.verify_against_analytic` is the guard for that — it
+compares the profiler figure against the analytic one and fires when they
+diverge. It is tested, but it cannot run until the profiler is wired in.
+
 ## Requirements
 
 The orchestrator itself needs only Python 3.9+ and `psutil`. For real runs you

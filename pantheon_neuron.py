@@ -17,7 +17,7 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import nki_backend, registry
+from kernels import memory_read, nki_backend, registry
 
 try:
     import psutil
@@ -107,6 +107,7 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
             "Devices": [device.index for device in devices],
             "Score": None,
             "Unit": workload.unit,
+            "Score Method": None,
             "Problem": dict(workload.problem) if workload.problem else None,
             "Telemetry": {"samples": 0},
         }
@@ -142,9 +143,28 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         "Devices": [device.index for device in devices],
         "Score": round(score, 4) if isinstance(score, (int, float)) else None,
         "Unit": workload.unit,
+        "Score Method": _score_method(workload, score),
         "Problem": dict(workload.problem) if workload.problem else None,
         "Telemetry": metrics,
     }
+
+
+# Workloads whose Score does not yet come from the source the registry
+# declares. The row records the discrepancy rather than hiding it, so a
+# report is never read as though the declared contract was honoured.
+_PROVISIONAL_SCORE = {
+    "memory_read": "analytic (bytes requested / wall time); "
+                   "declared source is neuron-profile hbm_read_bytes",
+}
+
+
+def _score_method(workload, score) -> typing.Optional[str]:
+    if score is None:
+        return None
+    provisional = _PROVISIONAL_SCORE.get(workload.name)
+    if provisional:
+        return provisional
+    return workload.score_source.source if workload.score_source else None
 
 
 def _execute(workload, devices, duration: int) -> typing.Optional[float]:
@@ -167,10 +187,28 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         time.sleep(min(duration, 2))
         return None
 
+    if workload.name == "memory_read":
+        return _execute_memory_read(workload, duration)
+
     nki_backend.require_toolchain()
     raise NotImplementedError(
         f"Workload '{workload.name}' has no NKI implementation yet."
     )
+
+
+def _execute_memory_read(workload, duration: int) -> float:
+    """Run the HBM streaming read and return GB/s.
+
+    The registry declares this Score comes from the profiler's
+    ``hbm_read_bytes``. That wiring does not exist yet, so this returns the
+    analytic figure -- bytes requested over wall time -- and the caller
+    labels the row accordingly. The two are not interchangeable: the
+    analytic figure counts bytes we asked for, and cannot detect loads the
+    compiler eliminated. ``memory_read.verify_against_analytic`` is the
+    check that closes that gap once the profiler is wired in.
+    """
+    result = memory_read.run(workload.problem, duration)
+    return result["analytic_gbps"]
 
 
 # --- CLI --------------------------------------------------------------------
