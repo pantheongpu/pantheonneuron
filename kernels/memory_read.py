@@ -18,10 +18,11 @@ and see `verify_against_analytic` for the check that will catch a kernel
 that compiles but reads nothing.
 """
 
+import os
 import time
 import typing
 
-from . import nki_backend
+from . import nki_backend, profiler, registry
 
 
 # NeuronCore-v2 tile geometry. The partition dimension is a hardware
@@ -114,6 +115,11 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]))
     _, nl, kernel = _build_kernel()
 
+    # torch_neuronx deletes its compiler workdir unless told otherwise, and
+    # neuron-profile capture needs the NEFF that lives there.
+    workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
+    os.makedirs(workdir, exist_ok=True)
+
     device = xm.xla_device()
     torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,
                    "fp32": torch.float32}[problem["dtype"]]
@@ -140,12 +146,46 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     elapsed = time.perf_counter() - started
 
     bytes_requested = plan["actual_bytes"] * passes
-    return {
+    analytic = bytes_requested / elapsed / 1e9
+
+    result = {
         "passes": passes,
         "elapsed_s": elapsed,
         "bytes_requested": bytes_requested,
-        "analytic_gbps": bytes_requested / elapsed / 1e9,
+        "analytic_gbps": analytic,
+        "profiler_gbps": None,
+        "score_method": "analytic",
+        "warning": None,
         "plan": plan,
+    }
+
+    # The declared Score source. A failure here degrades to the analytic
+    # figure rather than aborting the run -- but the row records which was
+    # used, so a provisional number is never mistaken for the real one.
+    try:
+        result.update(_profile(workdir))
+    except profiler.ProfilerUnavailable as error:
+        result["warning"] = f"profiler unavailable, Score is analytic: {error}"
+        return result
+
+    divergence = verify_against_analytic(result["profiler_gbps"], analytic)
+    if divergence:
+        result["warning"] = divergence
+    return result
+
+
+def _profile(workdir: str) -> dict:
+    """Capture a profile and read the declared counters out of it."""
+    neff = profiler.find_neff(workdir)
+    session = os.path.join(workdir, "memory_read.ntff")
+    counters = profiler.read_counters(neff, session)
+    return {
+        "profiler_gbps": profiler.bandwidth_gbps(counters, "read"),
+        # Matches registry.PROFILER exactly, so "declared source" and
+        # "method used" are string-comparable when they agree.
+        "score_method": registry.PROFILER,
+        "hbm_read_bytes": counters.get("hbm_read_bytes"),
+        "profiler_total_time_s": counters.get("total_time"),
     }
 
 

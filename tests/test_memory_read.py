@@ -97,13 +97,25 @@ def test_guard_rejects_a_zero_analytic():
 
 # -- provisional score labelling ---------------------------------------------
 
-def test_score_method_is_recorded_as_provisional():
-    """The registry declares neuron-profile; the implementation uses the
-    analytic figure. A report must not read as though the contract held."""
+def test_profiler_score_reports_the_declared_source(monkeypatch):
+    """When the profiler produced the number, say so plainly."""
+    monkeypatch.setitem(
+        pantheon_neuron._LAST_RUN, "memory_read",
+        {"score_method": registry.PROFILER},
+    )
+    assert pantheon_neuron._score_method(_workload(), 812.5) == registry.PROFILER
+
+
+def test_analytic_fallback_is_labelled_as_provisional(monkeypatch):
+    """When the profiler was unavailable and the kernel fell back, the row
+    must not read as though the declared contract held."""
+    monkeypatch.setitem(
+        pantheon_neuron._LAST_RUN, "memory_read", {"score_method": "analytic"},
+    )
     method = pantheon_neuron._score_method(_workload(), 812.5)
-    assert method is not None
     assert "analytic" in method
     assert "neuron-profile" in method
+    assert method != registry.PROFILER
 
 
 def test_score_method_is_none_without_a_score():
@@ -145,3 +157,46 @@ def test_hardware_path_requires_the_toolchain(monkeypatch):
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
     with pytest.raises(nki_backend.BackendUnavailable, match="neuronx-cc"):
         memory_read.run(_workload().problem, duration=1)
+
+
+# -- profiler counter reader -------------------------------------------------
+
+def test_bandwidth_matches_the_hand_computed_probe_figure():
+    """Counters captured on real hardware, reduced by the declared formula.
+    56.58 GB/s was computed by hand from these two values during the probe;
+    the code must agree."""
+    from kernels import profiler as prof
+
+    counters = {"hbm_read_bytes": 8470528, "total_time": 0.000149710075}
+    assert round(prof.bandwidth_gbps(counters, "read"), 2) == 56.58
+
+
+def test_bandwidth_rejects_missing_counters():
+    from kernels import profiler as prof
+
+    with pytest.raises(prof.ProfilerUnavailable, match="hbm_read_bytes"):
+        prof.bandwidth_gbps({"total_time": 1.0}, "read")
+
+
+def test_bandwidth_rejects_a_zero_total_time():
+    from kernels import profiler as prof
+
+    with pytest.raises(prof.ProfilerUnavailable, match="total_time"):
+        prof.bandwidth_gbps({"hbm_read_bytes": 1, "total_time": 0}, "read")
+
+
+def test_profiler_environment_sets_home_and_path():
+    """Two traps that each cost a probe round trip: view exits on an unset
+    HOME, and the Neuron tools shell out to each other via PATH."""
+    from kernels import profiler as prof
+
+    env = prof._environment()
+    assert env["HOME"]
+    assert prof.NEURON_BIN in env["PATH"].split(":")
+
+
+def test_missing_neff_says_why(tmp_path):
+    from kernels import profiler as prof
+
+    with pytest.raises(prof.ProfilerUnavailable, match="compiler_workdir"):
+        prof.find_neff(str(tmp_path))

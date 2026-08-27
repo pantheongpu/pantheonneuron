@@ -158,7 +158,7 @@ voltage.
 | Workload | Kernel | Score source |
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ⚠️ written, **untested on hardware** | analytic (profiler wiring pending) |
+| `memory_read` | ⚠️ written, **untested on hardware** | `neuron-profile`, analytic fallback |
 | the other 24 | ❌ none | — |
 
 `memory_read` is the first real kernel. Two caveats travel with it:
@@ -168,18 +168,27 @@ programming model with no hardware available. The tile geometry and byte
 accounting are covered by tests that run anywhere; the NKI calls are not.
 Treat the first hardware run as bring-up, not measurement.
 
-**Its Score is provisional.** The registry declares the Score comes from
-`neuron-profile`'s `hbm_read_bytes`; that wiring does not exist yet, so the
-kernel reports the analytic figure — bytes requested over wall time. Every
-report row carries a `Score Method` field recording this, so a result is
-never read as though the declared contract held.
+**Its Score now comes from the declared source.** After the timed loop the
+kernel captures a profile, reads `hbm_read_bytes` and `total_time`, and
+computes `hbm_read_bytes / total_time / 1e9` — exactly the formula the
+registry declares. If the profiler is unavailable it degrades to the
+analytic figure (bytes requested over wall time) rather than failing the
+run, and the row's `Score Method` field records which was used. A
+provisional number is never presented as the real one.
 
-The two differ in a way that matters: the analytic figure counts bytes we
-*asked* for and cannot detect loads the compiler eliminated. A kernel whose
-DMA was optimised away still posts a fast wall time and a large analytic
-number. `memory_read.verify_against_analytic` is the guard for that — it
-compares the profiler figure against the analytic one and fires when they
-diverge. It is tested, but it cannot run until the profiler is wired in.
+The distinction matters: the analytic figure counts bytes we *asked* for
+and cannot detect loads the compiler eliminated. A kernel whose DMA was
+optimised away still posts a fast wall time and a large analytic number,
+while the profiler reports almost no HBM traffic.
+`memory_read.verify_against_analytic` compares the two and puts the
+divergence in the row's `Detail`.
+
+The profiler reader (`kernels/profiler.py`) encodes four environment traps,
+each found the hard way during the probes: `view` exits on an unset `$HOME`;
+the Neuron bin directory must be on `PATH` because the tools shell out to
+each other; `capture` writes readable NTFF v6 while `inspect` writes v115
+that the same AMI's tooling cannot read; and the tools interleave log lines
+with JSON on stdout.
 
 ## Requirements
 

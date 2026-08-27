@@ -125,6 +125,10 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         status, detail = "FAIL", f"{type(error).__name__}: {error}"
     elapsed = time.time() - started
 
+    run = _LAST_RUN.get(workload.name)
+    if run and run.get("warning") and status == "PASS":
+        detail = run["warning"]
+
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
         status = "FAIL"
@@ -152,18 +156,28 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
 # Workloads whose Score does not yet come from the source the registry
 # declares. The row records the discrepancy rather than hiding it, so a
 # report is never read as though the declared contract was honoured.
-_PROVISIONAL_SCORE = {
-    "memory_read": "analytic (bytes requested / wall time); "
-                   "declared source is neuron-profile hbm_read_bytes",
-}
+# Populated by kernels that report how their Score was obtained, so the
+# report records the method actually used rather than the one declared.
+_LAST_RUN: typing.Dict[str, dict] = {}
 
 
 def _score_method(workload, score) -> typing.Optional[str]:
+    """What actually produced this Score, which may not be what was declared.
+
+    A kernel can fall back -- memory_read degrades to an analytic figure
+    when the profiler is unavailable. Recording the fallback is the whole
+    point: a provisional number must never read as though the declared
+    contract held.
+    """
     if score is None:
         return None
-    provisional = _PROVISIONAL_SCORE.get(workload.name)
-    if provisional:
-        return provisional
+    run = _LAST_RUN.get(workload.name)
+    if run and run.get("score_method"):
+        method = run["score_method"]
+        if method == "analytic":
+            return ("analytic (bytes requested / wall time); declared source "
+                    "is neuron-profile hbm_read_bytes")
+        return method
     return workload.score_source.source if workload.score_source else None
 
 
@@ -208,6 +222,9 @@ def _execute_memory_read(workload, duration: int) -> float:
     check that closes that gap once the profiler is wired in.
     """
     result = memory_read.run(workload.problem, duration)
+    _LAST_RUN[workload.name] = result
+    if result.get("profiler_gbps") is not None:
+        return result["profiler_gbps"]
     return result["analytic_gbps"]
 
 
