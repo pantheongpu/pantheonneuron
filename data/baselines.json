@@ -152,7 +152,7 @@
     "fan_speed": "not exposed",
     "voltage": "not exposed",
     "neuronlink_device_to_device": "needs >= 2 devices; quota pending",
-    "trainium": "no Trainium part has run this code"
+    "trainium_multi_device": "Trn quota granted 64 vCPUs; trn1.32xlarge needs 128. Still blocked."
   },
   "derived_indicative": {
     "_warning": "Each declared formula applied to the counters measured during the probe. These are NOT Scores -- no kernel ran. They show the formula produces a sane number from real counters, and they were produced by an untuned matmul at 0.0049% MFU, not by the pinned problem each workload declares. A real Score will differ by orders of magnitude.",
@@ -180,6 +180,63 @@
       "value": 815.5187,
       "unit": "graph-steps/s",
       "derivation": "execution_summary.completed 816 / period 1.00059"
+    }
+  },
+  "trainium": {
+    "_note": "Measured on trn1.2xlarge 2026-08-27. Separate from the inf2 measurements above -- the two report different counter sets.",
+    "hardware": {
+      "arch": "trn1",
+      "device_name": "Trainium1",
+      "arch_type": "NDv2",
+      "neuron_device_type": "trainium",
+      "neuron_device_version": "v2",
+      "neuroncore_version": "v2",
+      "neuroncores_per_device": 2,
+      "devices": 1,
+      "device_memory_bytes": 34359738368
+    },
+    "measurements": {
+      "train_steps_per_s": {
+        "value": 23.2524,
+        "unit": "train-steps/s",
+        "source": "workload",
+        "note": "2-layer 1024x1024 MLP, batch 16, SGD, 50 steps with xm.optimizer_step(barrier=True). Confirms the training capability path works on Trainium."
+      },
+      "memory_read_gbps_synced": {
+        "value": 264.15,
+        "unit": "GB/s",
+        "source": "workload",
+        "note": "NKI memory_read kernel, 1024 MiB bf16, 20 passes, with xm.wait_device_ops() inside the timed region."
+      },
+      "memory_read_gbps_unsynced_WRONG": {
+        "value": 1635.98,
+        "unit": "GB/s",
+        "source": "workload",
+        "note": "THE BUG, kept as a regression marker. Same run without a device barrier: elapsed stayed at 0.013s regardless of buffer size, so this is bytes over a constant, not bandwidth."
+      },
+      "profiler_hbm_read_bytes": {
+        "value": 134217728,
+        "unit": "bytes",
+        "source": "neuron-profile",
+        "note": "exactly 128 MiB, matching the buffer -- byte accounting confirmed"
+      },
+      "profiler_counter_count": {
+        "value": 90,
+        "unit": "count",
+        "source": "neuron-profile",
+        "note": "inf2 reported 108; the counter set differs between the two chips"
+      },
+      "nki_correctness": {
+        "value": 16384.0,
+        "unit": "sum",
+        "source": "workload",
+        "note": "kernel output for 8 tiles of ones = 8 x 2048, exact match. The kernel reads every byte and reduces correctly."
+      }
+    },
+    "absent_on_trainium": {
+      "throttle_active_nc0_time_ns": "present on inf2, None here",
+      "temperature": "no sensor; hwmon reports only nvme",
+      "power_utilization": "reads 0.00,0.00,0.00 idle and after load"
     }
   }
 }

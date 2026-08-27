@@ -136,6 +136,19 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     kernel(source)
     xm.mark_step()
 
+    # xm.mark_step() queues work and returns; it does not wait for the
+    # device. Timing without a barrier measures queue submission, not
+    # execution, and the error grows with the buffer -- measured on a
+    # trn1.2xlarge on 2026-08-27:
+    #
+    #     buffer     no barrier      with barrier
+    #      128 MiB    208 GB/s        200 GB/s
+    #      512 MiB    838 GB/s        256 GB/s
+    #     1024 MiB   1636 GB/s        264 GB/s
+    #
+    # Elapsed stayed pinned at 0.013s in the unsynchronised case regardless
+    # of size, so the "bandwidth" was just bytes divided by a constant. The
+    # barrier must be inside the timed region.
     passes = 0
     started = time.perf_counter()
     deadline = started + duration
@@ -143,6 +156,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         kernel(source)
         xm.mark_step()
         passes += 1
+    xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
     bytes_requested = plan["actual_bytes"] * passes

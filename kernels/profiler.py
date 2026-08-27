@@ -73,13 +73,41 @@ def _run(args: typing.Sequence[str]) -> str:
     return completed.stdout
 
 
+# Where neuronx-cc leaves NEFFs when nothing sets compiler_workdir.
+# Observed on trn1.2xlarge, 2026-08-27: an @nki.jit kernel writes to
+# /tmp/no-user/neuroncc_compile_workdir/<uuid>/model.MODULE_<hash>.neff
+# rather than anywhere the caller chose.
+DEFAULT_WORKDIRS = (
+    "/tmp/no-user/neuroncc_compile_workdir",
+    "/var/tmp/neuron-compile-cache",
+)
+
+
 def find_neff(workdir: str) -> str:
     """Locate the compiled NEFF a capture needs.
 
-    torch_neuronx deletes its compiler workdir unless one is passed
-    explicitly, so callers must trace with ``compiler_workdir=`` set or
-    there will be nothing here.
+    Searches the caller's workdir first, then the compiler's own default
+    locations -- an @nki.jit kernel ignores compiler_workdir and writes to
+    its own tree, so looking only where the caller asked finds nothing.
+
+    Returns the most recently modified NEFF: a session may compile several
+    (one per distinct input shape), and the newest is the one just run.
     """
+    candidates = []
+    for root in (workdir, *DEFAULT_WORKDIRS):
+        if not root or not os.path.isdir(root):
+            continue
+        for base, _, names in os.walk(root):
+            for name in names:
+                if name.endswith(".neff"):
+                    path = os.path.join(base, name)
+                    try:
+                        candidates.append((os.path.getmtime(path), path))
+                    except OSError:
+                        continue
+    if candidates:
+        return max(candidates)[1]
+
     for base, _, names in os.walk(workdir):
         for name in names:
             if name.endswith(".neff"):

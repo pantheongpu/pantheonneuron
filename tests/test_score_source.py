@@ -139,5 +139,31 @@ def test_collectives_baseline_is_not_mislabelled_as_neuronlink():
 
 def test_unmeasured_section_names_the_known_gaps():
     gaps = _baselines()["unmeasured"]
-    for key in ("temperature", "neuronlink_device_to_device", "trainium"):
+    for key in ("temperature", "neuronlink_device_to_device",
+                "trainium_multi_device"):
         assert key in gaps
+
+
+def test_trainium_is_no_longer_an_unmeasured_gap():
+    """Measured on trn1.2xlarge 2026-08-27; it must not still be listed
+    as unknown."""
+    assert "trainium" not in _baselines()["unmeasured"]
+    assert _baselines()["trainium"]["hardware"]["arch"] == "trn1"
+
+
+def test_trainium_records_the_async_timing_bug():
+    """The unsynchronised figure is kept deliberately. Losing it would make
+    the 264 GB/s look arbitrary rather than hard-won."""
+    measured = _baselines()["trainium"]["measurements"]
+    assert "memory_read_gbps_unsynced_WRONG" in measured
+    wrong = measured["memory_read_gbps_unsynced_WRONG"]["value"]
+    right = measured["memory_read_gbps_synced"]["value"]
+    assert wrong > right * 5, "the bug inflated bandwidth by roughly 6x"
+
+
+def test_trainium_counter_set_differs_from_inferentia():
+    """90 counters on trn1 against 108 on inf2 -- a kernel must not assume
+    a counter exists because the other chip had it."""
+    trn = _baselines()["trainium"]
+    assert trn["measurements"]["profiler_counter_count"]["value"] == 90
+    assert "throttle_active_nc0_time_ns" in trn["absent_on_trainium"]

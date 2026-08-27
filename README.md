@@ -8,165 +8,67 @@ with, endorsed by, or officially supported by Amazon Web Services.
 
 ## Validation status
 
-**Only Inferentia2 has been validated on real hardware.** Two probes, both
-`inf2.xlarge`. No Trainium part has ever run this code.
+Both chips have now run this code on real hardware.
 
 | Architecture | Device model | Status |
 |---|---|---|
-| `inf2` | NeuronCore-v2, 2 cores/device, no training | **Verified** on hardware |
-| `trn1` | NeuronCore-v2, 2 cores/device, training | Assumed |
-| `trn1n` | NeuronCore-v2, 2 cores/device, training | Assumed |
+| `inf2` | NeuronCore-v2, 2 cores/device | **Verified** — inf2.xlarge, 2026-08-26 |
+| `trn1` | NeuronCore-v2, 2 cores/device, training | **Verified** — trn1.2xlarge, 2026-08-27 |
+| `trn1n` | NeuronCore-v2, 2 cores/device, training | Assumed — same silicon, more network |
 | `trn2` | NeuronCore-v3, 8 cores/device, training | Assumed — least confident |
 
-What that leaves untested:
+Verified on Trainium: architecture detection, the `training` capability path
+(a real backward pass and optimiser step at 23.25 train-steps/s), the
+`memory_read` NKI kernel, and the profiler counter reader.
 
-- The entire `training` capability path, and `transformer_train_step` with it.
-- Architecture detection on Trainium. `_arch_from_sysfs` reads
-  `info/architecture/instance_type`, verified to return `"Inf2"` on
-  Inferentia. What a Trainium part returns has not been observed, and
-  `_normalise_arch` handles the expected spellings without confirmation.
-- Device-to-device NeuronLink — needs ≥ 2 devices, which needs a quota
-  increase.
-- Whether `neuron-profile` reports the same 108 counters on Trainium.
+**Device generation does not track product naming.** Trainium1 reports
+`NDv2`; Inferentia2 reports `NDv3`. The newer NeuronDevice generation
+belongs to the older-numbered product, so never infer the core version from
+the device version — both chips run NeuronCore-**v2**.
 
-Trainium testing is blocked, not skipped. The account's Trn quota is 4 vCPU
-and the smallest Trainium instance (`trn1.2xlarge`) needs 8. A launch
-attempt on 2026-08-26 returned:
+**The counter sets differ between chips.** `neuron-profile` returns 108
+counters on inf2 and 90 on trn1, and `throttle_active_nc0_time_ns` is
+present on Inferentia but `None` on Trainium. A kernel must not assume a
+counter exists because the other chip had it.
 
-```
-VcpuLimitExceeded: You have requested more vCPU capacity than your current
-vCPU limit of 4 allows for the instance bucket that the specified instance
-type belongs to.
-```
+Still unverified:
 
-Quota increases to 128 vCPU (Trn) and 96 vCPU (Inf) were requested the same
-day and are `CASE_OPENED` with AWS support. Note that `aws ec2 run-instances
---dry-run` reports success here — dry run validates permissions and
-parameters, not vCPU quota, which is only enforced on a real launch.
-
-Treat every Trainium-specific claim in this repository as unverified until
-this section says otherwise.
-
-## Why one repository for both chips
-
-Trainium and Inferentia are two product families but **one software stack**.
-Both are driven by the AWS Neuron SDK: the same `neuronx-cc` compiler, the same
-`torch-neuronx` runtime, the same `neuron-monitor` telemetry. Splitting them
-into separate repositories would duplicate nearly everything and force every
-fix to be made twice.
-
-The real fault line is the NeuronCore generation, not the brand name — so this
-suite models it as a capability layer. Each device reports what it can do, and
-each workload declares what it needs. Workloads a device cannot support are
-reported as `SKIPPED` with a reason, never silently omitted and never falsely
-passed.
-
-## Name parity with pantheongpu
-
-Workload and suite names deliberately match the `pantheongpu` suite wherever
-the underlying concept is the same, so that a Neuron result and a GPU result
-for a given name are comparing like with like. `--test inference` means the
-same thing on both platforms.
-
-That constraint cuts both ways. Where a GPU workload targets a structure Neuron
-does not have, there is deliberately **no Neuron workload of that name** —
-reusing the name for something else would make comparison worse, not better.
-Asking for one by name explains why it is absent:
-
-```
-$ python pantheon_neuron.py --test sfu_stress
-[PANTHEON-NEURON] 'sfu_stress' is a pantheongpu workload with no Neuron
-equivalent: SFU is an NVIDIA SM structure; Neuron's Scalar/GpSimd engines
-are not equivalent.
-```
-
-The full list lives in `NO_NEURON_EQUIVALENT` in
-[`kernels/registry.py`](kernels/registry.py) — 17 GPU workloads covering FP64,
-ray tracing, media encode, warp scheduling, device atomics, and GPU-specific
-memory-hierarchy structures (TLB, HBM banks, TSVs, L2 partitioning).
-
-Suites shared with `pantheongpu`: `baseline`, `core`, `memory`,
-`interconnect`, `inference`, `training`, `runtime`, `ai_auxiliary`.
-
-### Inf1 is out of scope
-
-Inf1 uses NeuronCore-v1 with the legacy `neuron-cc` compiler and `torch-neuron`
-on PyTorch 1.x — a genuinely different toolchain. Supporting it would double
-the backend surface for inference-only hardware that new deployments are not
-buying. Discovery rejects Inf1 explicitly rather than misreporting it.
-
-## Comparing results with pantheongpu
-
-Every scored workload carries a `Score` and a `Unit`, using the unit strings
-from the `pantheongpu` report schema verbatim. A comparison joins the two
-platforms on `(Test Name, Unit)`:
-
-| Unit | Workloads |
-|---|---|
-| `TFLOPS` | `tensor_virus`, `pulse_virus`, `transformer_virus`, `omni_virus` |
-| `TOPS` | `int_virus` |
-| `GB/s` | the four `memory_*`, `all_reduce`, `p2p_thrasher`, `pcie_bandwidth` |
-| `tokens/s`, `prompt-tokens/s`, `requests/s`, … | the eight inference workloads |
-| `train-steps/s` | `transformer_train_step` |
-
-`tests/test_score_schema.py` asserts every unit string against a transcript
-of the pantheongpu vocabulary. A typo there would not raise anything — it
-would just produce a row that never joins.
-
-Each workload also pins a `problem`: shape, dtype, and any workload-specific
-parameters. **A Score is only comparable if both platforms ran the same
-problem.** TFLOPS at bf16 and TFLOPS at fp32 are different numbers, so the
-dtype travels with the score into the report.
-
-Skipped workloads still emit their `Unit` and `Problem` with a null `Score`,
-so a comparison renders an explicit gap instead of dropping the row.
-
-### Where each Score comes from
-
-Every scored workload declares a `score_source`: which interface produces
-the number, which counters it reads, and the formula. See
-[`docs/workload_counter_map.md`](docs/workload_counter_map.md) for the full
-table, generated from the registry.
-
-| Source | Workloads | Why this source |
-|---|---|---|
-| `neuron-profile` | the four `memory_*` | HBM byte counters exist only in the profiler |
-| `neuron-monitor` | the four TFLOPS/TOPS viruses, `graph_replay` | `effective_flops` exists only in the monitor |
-| `nccom-test` | `all_reduce`, `p2p_thrasher` | reports `busbw` directly |
-| `workload` | the 8 inference workloads, training, and 3 others | no hardware counter measures tokens, steps or requests |
-
-A test asserts that any hardware-sourced counter named here was actually
-observed on real hardware, so a counter rename in the Neuron SDK breaks a
-reference instead of silently producing a wrong number.
-
-`data/baselines.json` records what each counter read during the probes.
-**Those are observations, not benchmark results** — the probe load was an
-untuned matmul at 0.0049% MFU, roughly four orders of magnitude below the
-hardware's capability. They exist to prove each counter is readable and to
-catch plumbing regressions.
-
-### What cannot be compared
-
-`Efficiency (MB/J)` and everything derived from watts. Neuron exposes no
-power figure in documented units — see
-[`docs/neuron_counters.md`](docs/neuron_counters.md). Perf-per-watt is not
-computable across these platforms, and neither is temperature, fan or
-voltage.
+- Device-to-device NeuronLink. The Trn quota was granted at 64 vCPUs;
+  `trn1.32xlarge` needs 128, so multi-device remains out of reach.
+- `trn1n` and `trn2`.
 
 ## Kernel status
 
 | Workload | Kernel | Score source |
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ⚠️ written, **untested on hardware** | `neuron-profile`, analytic fallback |
+| `memory_read` | ✅ **verified on trn1.2xlarge** | `neuron-profile`, analytic fallback |
 | the other 24 | ❌ none | — |
 
 `memory_read` is the first real kernel. Two caveats travel with it:
 
-**It has never run on a Neuron device.** It was written against the NKI
-programming model with no hardware available. The tile geometry and byte
-accounting are covered by tests that run anywhere; the NKI calls are not.
-Treat the first hardware run as bring-up, not measurement.
+**It runs, and it is numerically correct.** Bring-up on trn1.2xlarge
+2026-08-27: the kernel compiles in 1.5 s and returns exactly
+`tiles x free_elements` for an all-ones input — it reads every byte and
+reduces correctly. Sustained read bandwidth measured **264 GB/s** on a
+1 GiB bf16 buffer, single NeuronCore.
+
+**Bring-up found a real bug, which is why the barrier is there.**
+`xm.mark_step()` queues work and returns without waiting for the device.
+Timing without a barrier measures queue submission, and the error grows
+with buffer size:
+
+| Buffer | no barrier | with barrier |
+|---|---|---|
+| 128 MiB | 208 GB/s | 200 GB/s |
+| 512 MiB | 838 GB/s | 256 GB/s |
+| 1024 MiB | **1636 GB/s** | **264 GB/s** |
+
+Elapsed time stayed pinned at 0.013 s regardless of size, so the
+unsynchronised "bandwidth" was bytes divided by a constant. At small
+buffers it looks nearly right, which is what makes it dangerous. The
+barrier is inside the timed region, and the wrong figure is kept in
+`data/baselines.json` as a regression marker.
 
 **Its Score now comes from the declared source.** After the timed loop the
 kernel captures a profile, reads `hbm_read_bytes` and `total_time`, and

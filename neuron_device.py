@@ -40,11 +40,20 @@ NEURONCORE_V3 = "v3"
 # when present, so a wrong row here surfaces through supports_training --
 # which gates the whole training suite.
 _ARCH_TABLE = {
-    "trn1": (NEURONCORE_V2, 2, True),    # assumed
-    "trn1n": (NEURONCORE_V2, 2, True),   # assumed
+    "trn1": (NEURONCORE_V2, 2, True),    # verified on trn1.2xlarge
+    "trn1n": (NEURONCORE_V2, 2, True),   # assumed (same silicon, more network)
     "trn2": (NEURONCORE_V3, 8, True),    # assumed, low confidence
-    "inf2": (NEURONCORE_V2, 2, False),   # verified on hardware
+    "inf2": (NEURONCORE_V2, 2, False),   # verified on inf2.xlarge
 }
+
+# Device-generation strings observed on hardware. Note these do NOT track
+# product naming: Trainium1 reports NDv2 while Inferentia2 reports NDv3, so
+# the newer NeuronDevice generation belongs to the older-numbered product.
+# Never infer the core version from the device version.
+#
+#   arch  device_name   arch_type  neuron_device_version  neuroncore_version
+#   trn1  Trainium1     NDv2       v2                     v2
+#   inf2  Inferentia2   NDv3       v3                     v2
 
 _UNSUPPORTED_ARCH = {
     "inf1": "Inf1 uses the legacy neuron-cc toolchain and is not supported.",
