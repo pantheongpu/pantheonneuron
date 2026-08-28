@@ -22,44 +22,15 @@ import os
 import time
 import typing
 
-from . import nki_backend, profiler, registry
+from . import nki_backend, profiler, registry, tiling
 
 
-# NeuronCore-v2 tile geometry. The partition dimension is a hardware
-# constant; the free dimension is chosen so one tile is a comfortable
-# fraction of SBUF (24 MiB/core on v2) leaving room for double buffering.
-PARTITION = 128
-FREE_ELEMENTS = 2048
-DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp32": 4, "int8": 1}
-
-
-def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
-    """Split a requested byte count into whole tiles.
-
-    Returned ``actual_bytes`` is what the kernel will really read, which
-    is ``requested`` rounded down to a whole number of tiles. The Score
-    must be computed from the actual figure, never the requested one.
-    """
-    if dtype not in DTYPE_BYTES:
-        raise ValueError(f"unsupported dtype {dtype!r}")
-    element = DTYPE_BYTES[dtype]
-    tile_elements = PARTITION * FREE_ELEMENTS
-    tile_bytes = tile_elements * element
-
-    tiles = total_bytes // tile_bytes
-    if tiles < 1:
-        raise ValueError(
-            f"requested {total_bytes} bytes is smaller than one "
-            f"{tile_bytes}-byte tile"
-        )
-    return {
-        "tiles": tiles,
-        "tile_bytes": tile_bytes,
-        "actual_bytes": tiles * tile_bytes,
-        "partition": PARTITION,
-        "free": FREE_ELEMENTS,
-        "element_bytes": element,
-    }
+# Tile geometry lives in kernels/tiling.py, shared with memory_write.
+# Re-exported here so existing callers and tests keep working.
+PARTITION = tiling.PARTITION
+FREE_ELEMENTS = tiling.FREE_ELEMENTS
+DTYPE_BYTES = tiling.DTYPE_BYTES
+tile_plan = tiling.tile_plan
 
 
 def _build_kernel():
@@ -149,15 +120,39 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # Elapsed stayed pinned at 0.013s in the unsynchronised case regardless
     # of size, so the "bandwidth" was just bytes divided by a constant. The
     # barrier must be inside the timed region.
+    # The kernel result must stay LIVE across mark_step(). Discarding it --
+    # as `kernel(source)` on its own does -- leaves nothing referencing the
+    # graph at the cut point, so XLA proves it dead and skips the DMA.
+    # Measured on trn1.2xlarge 2026-08-27: a 90s run reported 14,513 GB/s
+    # (17x the part's ~820 GB/s HBM) while neuron-monitor recorded
+    # total_executions=1 and NeuronCore utilisation of 0.05%. `passes`
+    # counted thousands of submissions; the device ran the graph once.
+    sink = None
     passes = 0
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
-        kernel(source)
+        sink = kernel(source)
         xm.mark_step()
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+
+    # One pass reduces an all-ones buffer along the free axis, so every
+    # partition of the accumulator must equal tiles * FREE_ELEMENTS exactly.
+    # This is a direct check that the kernel read the whole plan rather than
+    # a coalesced fraction of it, and it needs no profiler -- which matters,
+    # because the profiler is exactly what is unavailable when the analytic
+    # figure is load-bearing.
+    read_verified = None
+    if sink is not None:
+        expected_per_pass = float(plan["tiles"] * plan["free"])
+        try:
+            observed = float(sink[0][0])
+        except Exception:  # materialisation failed; leave unverified
+            observed = None
+        if observed is not None and expected_per_pass > 0:
+            read_verified = observed / expected_per_pass
 
     bytes_requested = plan["actual_bytes"] * passes
     analytic = bytes_requested / elapsed / 1e9
@@ -171,7 +166,14 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "score_method": "analytic",
         "warning": None,
         "plan": plan,
+        # 1.0 means the last pass read exactly the planned bytes.
+        "read_verified_ratio": read_verified,
     }
+
+    elided = verify_read_completed(read_verified)
+    if elided:
+        result["warning"] = elided
+        return result
 
     # The declared Score source. A failure here degrades to the analytic
     # figure rather than aborting the run -- but the row records which was
@@ -201,6 +203,31 @@ def _profile(workdir: str) -> dict:
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
     }
+
+
+def verify_read_completed(
+    read_verified_ratio: typing.Optional[float], tolerance: float = 0.01
+) -> typing.Optional[str]:
+    """Check the kernel actually read the buffer the plan describes.
+
+    ``verify_against_analytic`` catches an eliminated kernel only when the
+    profiler is available -- but the profiler failing is precisely when the
+    analytic figure becomes the Score, so that net has a hole exactly where
+    it is needed. This check closes it using the accumulator alone.
+
+    A ratio of 1.0 means the last pass summed every planned element. Less
+    means loads were coalesced or skipped; more means the accounting is
+    wrong. Either way the analytic bandwidth cannot be trusted.
+    """
+    if read_verified_ratio is None:
+        return "kernel output could not be read back -- read coverage unverified"
+    if abs(read_verified_ratio - 1.0) > tolerance:
+        return (
+            f"kernel read {read_verified_ratio:.3f}x the planned bytes "
+            "-- loads were coalesced or eliminated, so the analytic "
+            "bandwidth is not a measurement"
+        )
+    return None
 
 
 def verify_against_analytic(

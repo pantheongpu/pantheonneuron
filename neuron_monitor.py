@@ -17,7 +17,9 @@ import os
 import shutil
 import statistics
 import subprocess
+import tempfile
 import threading
+import time
 import typing
 
 
@@ -79,6 +81,8 @@ class NeuronMonitor:
         self._thread: typing.Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._warned: typing.Set[str] = set()
+        self._config_path: typing.Optional[str] = None
+        self._stderr: typing.Optional[typing.IO[str]] = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -121,16 +125,48 @@ class NeuronMonitor:
             }
         )
 
+        # neuron-monitor takes a config FILE via -c/--config-file. There is no
+        # --json-config flag: passing one makes it print usage to stdout and
+        # exit, which the sample loop then reports as a malformed sample while
+        # collecting nothing for the whole run.
         try:
+            handle = tempfile.NamedTemporaryFile(
+                "w", suffix=".json", prefix="pantheon-neuron-monitor-", delete=False
+            )
+            handle.write(config)
+            handle.close()
+            self._config_path = handle.name
+        except OSError as error:
+            self._warn_once("config", f"could not write neuron-monitor config: {error}")
+            return False
+
+        try:
+            # stderr is captured, not discarded: it is the only place
+            # neuron-monitor explains why it refused to start.
+            self._stderr = tempfile.TemporaryFile("w+")
             self._process = subprocess.Popen(
-                [binary, "--json-config", config],
+                [binary, "-c", self._config_path],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=self._stderr,
                 text=True,
                 bufsize=1,
             )
         except OSError as error:
             self._warn_once("spawn", f"could not start neuron-monitor: {error}")
+            return False
+
+        # A bad invocation dies immediately; surface that now rather than
+        # reporting "samples: 0" at the end of a five-minute workload.
+        time.sleep(0.5)
+        if self._process.poll() is not None:
+            self._stderr.seek(0)
+            why = (self._stderr.read() or "").strip().splitlines()
+            self._warn_once(
+                "earlyexit",
+                "neuron-monitor exited immediately "
+                f"({self._process.returncode}): {why[-1] if why else 'no stderr'}",
+            )
+            self._process = None
             return False
 
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -150,6 +186,18 @@ class NeuronMonitor:
         if self._thread is not None:
             self._thread.join(timeout=10)
             self._thread = None
+        if self._config_path:
+            try:
+                os.unlink(self._config_path)
+            except OSError:
+                pass
+            self._config_path = None
+        if self._stderr is not None:
+            try:
+                self._stderr.close()
+            except OSError:
+                pass
+            self._stderr = None
         return self.aggregate()
 
     # -- sampling ----------------------------------------------------------
@@ -232,11 +280,11 @@ class NeuronMonitor:
         }
 
         for sample in self._samples:
-            for runtime in sample.get("neuron_runtime_data", []):
-                report = runtime.get("report", {})
-                cores = report.get("neuroncore_counters", {}).get(
-                    "neuroncores_in_use", {}
-                )
+            for runtime in (sample.get("neuron_runtime_data") or []):
+                report = runtime.get("report") or {}
+                cores = (report.get("neuroncore_counters") or {}).get(
+                    "neuroncores_in_use"
+                ) or {}
                 for core_id, counters in cores.items():
                     value = counters.get("neuroncore_utilization")
                     if isinstance(value, (int, float)):
@@ -249,15 +297,14 @@ class NeuronMonitor:
                         flops[str(core_id)].append(float(achieved))
 
                 used = (
-                    report.get("memory_used", {})
-                    .get("neuron_runtime_used_bytes", {})
-                    .get("device")
-                )
+                    (report.get("memory_used") or {})
+                    .get("neuron_runtime_used_bytes") or {}
+                ).get("device")
                 if isinstance(used, (int, float)):
                     memory_bytes.append(int(used))
 
-                stats = report.get("execution_stats", {})
-                for count in stats.get("error_summary", {}).values():
+                stats = report.get("execution_stats") or {}
+                for count in (stats.get("error_summary") or {}).values():
                     if isinstance(count, (int, float)):
                         errors += int(count)
 
@@ -275,18 +322,18 @@ class NeuronMonitor:
                     "incorrect_input",
                     "timed_out",
                 ):
-                    value = summary.get(key)
+                    value = (summary or {}).get(key)
                     if isinstance(value, (int, float)):
                         errors += int(value)
 
-                latency = stats.get("latency_stats", {}).get("device_latency", {})
+                latency = (stats.get("latency_stats") or {}).get("device_latency") or {}
                 for source, sink in (("p50", latency_p50), ("p99", latency_p99)):
                     value = latency.get(source)
                     if isinstance(value, (int, float)):
                         sink.append(float(value))
 
-            hw = sample.get("system_data", {}).get("neuron_hw_counters", {})
-            for device in hw.get("neuron_devices", []):
+            hw = (sample.get("system_data") or {}).get("neuron_hw_counters") or {}
+            for device in (hw.get("neuron_devices") or []):
                 for key in ecc:
                     value = device.get(key)
                     if isinstance(value, (int, float)):

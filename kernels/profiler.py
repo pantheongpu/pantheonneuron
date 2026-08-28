@@ -50,6 +50,33 @@ def available() -> bool:
     return shutil.which("neuron-profile", path=_environment()["PATH"]) is not None
 
 
+# nrt_infodump ends its diagnostic dump with a "cut to here" separator, so the
+# LAST line of a failing run is decoration, not the error. Prefer the lines
+# that actually say something.
+_NOISE = ("-----8<-----", "cut to here", "====", "----")
+
+# nrt_infodump tags its ENTIRE environment dump at ERROR level, so "contains
+# ERROR" selects dozens of NEURON_* variable assignments and buries the one
+# line that says what actually went wrong. The dump is never the cause.
+_DUMP = "nrt_infodump"
+
+
+def _explain(stderr: typing.Optional[str], stdout: typing.Optional[str]) -> str:
+    """Summarise why a neuron-profile invocation failed."""
+    lines = [
+        line.strip()
+        for line in ((stderr or "") + "\n" + (stdout or "")).splitlines()
+        if line.strip() and not any(n in line for n in _NOISE)
+    ]
+    if not lines:
+        return "no output"
+    signal = [line for line in lines if _DUMP not in line]
+    errors = [line for line in signal if "ERROR" in line or "error" in line.lower()]
+    # The FIRST real error is the cause; everything after it is fallout.
+    chosen = errors[:3] or signal[:3] or lines[:2]
+    return " | ".join(chosen)[:600]
+
+
 def _run(args: typing.Sequence[str]) -> str:
     binary = shutil.which("neuron-profile", path=_environment()["PATH"])
     if binary is None:
@@ -65,10 +92,9 @@ def _run(args: typing.Sequence[str]) -> str:
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ProfilerUnavailable(f"neuron-profile failed: {error}") from error
     if completed.returncode != 0:
-        tail = (completed.stderr or completed.stdout or "").strip().splitlines()
         raise ProfilerUnavailable(
-            "neuron-profile exited "
-            f"{completed.returncode}: {tail[-1] if tail else 'no output'}"
+            f"neuron-profile exited {completed.returncode}: "
+            + _explain(completed.stderr, completed.stdout)
         )
     return completed.stdout
 

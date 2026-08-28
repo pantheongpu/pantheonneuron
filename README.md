@@ -43,7 +43,8 @@ Still unverified:
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
 | `memory_read` | ✅ **verified on trn1.2xlarge** | `neuron-profile`, analytic fallback |
-| the other 24 | ❌ none | — |
+| `memory_write` | ⚠️ written; primitives verified, arrangement untested | `neuron-profile`, analytic fallback |
+| the other 23 | ❌ none | — |
 
 `memory_read` is the first real kernel. Two caveats travel with it:
 
@@ -91,6 +92,25 @@ the Neuron bin directory must be on `PATH` because the tools shell out to
 each other; `capture` writes readable NTFF v6 while `inspect` writes v115
 that the same AMI's tooling cannot read; and the tools interleave log lines
 with JSON on stdout.
+
+### memory_write
+
+Loads exactly **one** tile and stores it across every row, so read traffic
+is one tile while write traffic is the whole buffer. That asymmetry is the
+point: it keeps `hbm_write_bytes` clean and gives a cheap correctness
+check. `verify_write_dominates_read` fails the run if read bytes approach
+write bytes, which would mean the kernel is doing a read-modify-write and
+the Score is measuring a mixed workload rather than a write.
+
+The anti-elimination trick differs from the read path. `memory_read`
+reduces its loads so they have a consumer; here the hazard is inverted —
+stores into a buffer nothing reads are dead code. The destination is the
+kernel's returned output, which is what keeps the stores alive.
+
+Every NKI primitive it uses was exercised on hardware by `memory_read` on
+2026-08-27. This particular arrangement of them has not run, so it carries
+the same bring-up caveat: first hardware run is validation, not
+measurement.
 
 ## Requirements
 

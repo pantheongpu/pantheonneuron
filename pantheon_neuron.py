@@ -17,7 +17,7 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import memory_read, nki_backend, registry
+from kernels import memory_read, memory_write, nki_backend, registry
 
 try:
     import psutil
@@ -175,8 +175,10 @@ def _score_method(workload, score) -> typing.Optional[str]:
     if run and run.get("score_method"):
         method = run["score_method"]
         if method == "analytic":
-            return ("analytic (bytes requested / wall time); declared source "
-                    "is neuron-profile hbm_read_bytes")
+            counter = {"memory_read": "hbm_read_bytes",
+                       "memory_write": "hbm_write_bytes"}.get(workload.name, "")
+            return (f"analytic (bytes moved / wall time); declared source "
+                    f"is neuron-profile {counter}".rstrip())
         return method
     return workload.score_source.source if workload.score_source else None
 
@@ -202,7 +204,10 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         return None
 
     if workload.name == "memory_read":
-        return _execute_memory_read(workload, duration)
+        return _execute_bandwidth(workload, duration, memory_read)
+
+    if workload.name == "memory_write":
+        return _execute_bandwidth(workload, duration, memory_write)
 
     nki_backend.require_toolchain()
     raise NotImplementedError(
@@ -210,18 +215,16 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
     )
 
 
-def _execute_memory_read(workload, duration: int) -> float:
-    """Run the HBM streaming read and return GB/s.
+def _execute_bandwidth(workload, duration: int, module) -> float:
+    """Run an HBM bandwidth kernel and return GB/s.
 
-    The registry declares this Score comes from the profiler's
-    ``hbm_read_bytes``. That wiring does not exist yet, so this returns the
-    analytic figure -- bytes requested over wall time -- and the caller
-    labels the row accordingly. The two are not interchangeable: the
-    analytic figure counts bytes we asked for, and cannot detect loads the
-    compiler eliminated. ``memory_read.verify_against_analytic`` is the
-    check that closes that gap once the profiler is wired in.
+    Prefers the profiler figure, which is the source the registry declares
+    and the only one that reflects traffic the hardware actually performed.
+    Falls back to the analytic figure -- bytes moved over wall time -- when
+    the profiler is unavailable, and records which was used so a
+    provisional number is never read as the declared one.
     """
-    result = memory_read.run(workload.problem, duration)
+    result = module.run(workload.problem, duration)
     _LAST_RUN[workload.name] = result
     if result.get("profiler_gbps") is not None:
         return result["profiler_gbps"]
