@@ -52,9 +52,19 @@ class Workload:
     """One workload.
 
     ``unit`` and ``problem`` exist so a Neuron result can be compared with a
-    pantheongpu result for the same name. The unit strings are copied
-    verbatim from the pantheongpu report schema -- a comparison joins on
-    (Test Name, Unit), so a mismatch here silently breaks the join.
+    pantheongpu result for the same name, where such a comparison is
+    meaningful at all. A comparison joins on (Test Name, Unit), so a mismatch
+    silently breaks the join rather than raising.
+
+    Matching the GPU unit is not always the right thing. pantheongpu v1.0.19
+    replaced the units of its AI workloads with a single ``ai-ops/s``, because
+    ten of them shared one kernel body and six compiled to byte-identical
+    SASS: the numbers were generic synthetic throughput wearing twelve
+    different metric names. The Neuron workloads of those names count real
+    tokens, cache updates and training steps. Copying ``ai-ops/s`` here to
+    restore the join would make these numbers less honest, not more, so those
+    workloads keep their own units and are listed in
+    ``NOT_COMPARABLE_WITH_GPU`` instead.
 
     ``problem`` pins shape and dtype. A Score is only comparable across
     platforms if both ran the same problem; without it the two numbers share
@@ -393,6 +403,37 @@ NO_NEURON_EQUIVALENT = {
     "memory_retention_bake": "Requires refresh-interval control Neuron does not expose.",
     "memory_thermal_asym": "Depends on GPU-specific per-stack thermal telemetry.",
 }
+
+
+# Workloads that exist on both platforms under the same name, but whose
+# Scores must not be joined. pantheongpu v1.0.19 collapsed these to a single
+# ``ai-ops/s``: ten of its AI workloads shared one kernel body and six
+# compiled to byte-identical SASS, so what it reports is generic synthetic
+# throughput, not the quantity the name suggests. The Neuron implementations
+# count the real thing -- tokens generated, cache updates applied, training
+# steps completed -- so the two numbers share a name while measuring
+# different quantities.
+#
+# Kept as data for the same reason as NO_NEURON_EQUIVALENT: the comparison
+# tooling can render an honest "not comparable" rather than a row that
+# quietly never joins, or worse, one that joins and misleads.
+NOT_COMPARABLE_WITH_GPU = {
+    "fused_attention": "attention-tiles/s",
+    "graph_replay": "graph-steps/s",
+    "kv_cache_churn": "cache-updates/s",
+    "llm_decode": "tokens/s",
+    "llm_prefill": "prompt-tokens/s",
+    "moe_router": "routed-tokens/s",
+    "quantized_gemm": "quantized-ops/s",
+    "rag_embedding": "embedding-vectors/s",
+    "serving_mix": "requests/s",
+    "speculative_decode": "verified-tokens/s",
+    "transformer_train_step": "train-steps/s",
+    "vision_encoder": "image-tiles/s",
+}
+
+# What pantheongpu reports for those names since v1.0.19.
+GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 
 
 SUITES = (

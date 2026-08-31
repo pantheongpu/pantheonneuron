@@ -5,9 +5,18 @@ A cross-platform comparison joins Neuron results to GPU results on
 just produces a row that never joins, and a silently missing comparison is
 worse than a loud failure.
 
-PANTHEONGPU_UNITS below is transcribed from the pantheongpu report database
-(1,188 scored rows across A100, H100, GH200, B200, H200, A40 and RTX
-parts). If pantheongpu changes a unit string, this test should fail.
+PANTHEONGPU_UNITS below is transcribed from the pantheongpu report database.
+It was meant to fail if pantheongpu changed a unit string, and it did not:
+v1.0.19 replaced the units of twelve AI workloads with a single ``ai-ops/s``
+and this test kept passing, because it compared one stale transcription
+against another. Both sides drifted together.
+
+So the transcription now records what pantheongpu actually reports, and the
+workloads whose units diverged are checked against
+``registry.NOT_COMPARABLE_WITH_GPU`` instead of being forced to match. Those
+Neuron workloads count real tokens and steps; the GPU ones report generic
+synthetic throughput under a shared kernel. Making the strings match would
+restore the join and compare unlike things.
 """
 
 import json
@@ -34,19 +43,20 @@ PANTHEONGPU_UNITS = {
     "all_reduce": "GB/s",
     "p2p_thrasher": "GB/s",
     "pcie_bandwidth": "GB/s",
-    "llm_decode": "tokens/s",
-    "llm_prefill": "prompt-tokens/s",
-    "kv_cache_churn": "cache-updates/s",
-    "fused_attention": "attention-tiles/s",
-    "quantized_gemm": "quantized-ops/s",
-    "serving_mix": "requests/s",
-    "speculative_decode": "verified-tokens/s",
-    "moe_router": "routed-tokens/s",
-    "transformer_train_step": "train-steps/s",
     "allocation_fragmentation": "allocation-events/s",
-    "graph_replay": "graph-steps/s",
-    "rag_embedding": "embedding-vectors/s",
-    "vision_encoder": "image-tiles/s",
+    # Since v1.0.19 every AI workload reports the same synthetic unit.
+    "llm_decode": "ai-ops/s",
+    "llm_prefill": "ai-ops/s",
+    "kv_cache_churn": "ai-ops/s",
+    "fused_attention": "ai-ops/s",
+    "quantized_gemm": "ai-ops/s",
+    "serving_mix": "ai-ops/s",
+    "speculative_decode": "ai-ops/s",
+    "moe_router": "ai-ops/s",
+    "transformer_train_step": "ai-ops/s",
+    "graph_replay": "ai-ops/s",
+    "rag_embedding": "ai-ops/s",
+    "vision_encoder": "ai-ops/s",
 }
 
 TRN1 = [NeuronDevice(i, "trn1", "v2", 2, 32 * 1024**3, True) for i in range(2)]
@@ -58,10 +68,50 @@ def _get(name):
 
 @pytest.mark.parametrize("name,unit", sorted(PANTHEONGPU_UNITS.items()))
 def test_unit_matches_pantheongpu(name, unit):
+    if name in registry.NOT_COMPARABLE_WITH_GPU:
+        pytest.skip(f"{name} is declared not comparable with the GPU workload")
     assert _get(name).unit == unit, (
         f"{name}: unit must match pantheongpu exactly for the comparison "
         f"join to work"
     )
+
+
+def test_diverged_units_are_declared_not_comparable():
+    """A unit that no longer matches must be declared, not left to drift.
+
+    Left alone, a Neuron row simply never joins, and a comparison that is
+    silently absent looks the same as one that found nothing to say.
+    """
+    diverged = {
+        name for name, unit in PANTHEONGPU_UNITS.items()
+        if _get(name).unit != unit
+    }
+    declared = set(registry.NOT_COMPARABLE_WITH_GPU)
+
+    assert diverged == declared, (
+        f"undeclared divergence: {sorted(diverged - declared)}; "
+        f"declared but matching: {sorted(declared - diverged)}"
+    )
+
+
+def test_not_comparable_records_the_neuron_unit():
+    """The table records what Neuron reports, so a reader sees both sides."""
+    for name, unit in registry.NOT_COMPARABLE_WITH_GPU.items():
+        assert _get(name).unit == unit
+        assert PANTHEONGPU_UNITS[name] == registry.GPU_SYNTHETIC_AI_UNIT
+        # These count real quantities; that is the whole reason they diverge.
+        assert unit != registry.GPU_SYNTHETIC_AI_UNIT
+
+
+def test_comparable_workloads_still_join():
+    """The divergence must not have quietly swallowed everything."""
+    comparable = {
+        name for name in PANTHEONGPU_UNITS
+        if name not in registry.NOT_COMPARABLE_WITH_GPU
+    }
+    assert len(comparable) >= 12, "cross-platform comparison has no rows left"
+    for name in comparable:
+        assert _get(name).unit == PANTHEONGPU_UNITS[name]
 
 
 def test_every_scored_workload_has_a_unit():
