@@ -134,6 +134,23 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         status = "FAIL"
         detail = f"{metrics['execution_errors']} Neuron execution error(s)"
 
+    # The compute workloads declare neuron-monitor as their Score source, and
+    # the monitor has only just stopped -- its counters do not exist while the
+    # kernel is still running, so this cannot happen inside _execute. A
+    # kernel-side figure, where one exists, stays as the fallback.
+    if status == "PASS":
+        declared = monitor_score(workload, metrics)
+        if declared is not None:
+            score = declared
+            _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
+                registry.MONITOR
+            )
+        elif _wants_monitor_score(workload) and score is None:
+            detail = detail or (
+                "neuron-monitor reported no effective_flops, so this run has "
+                "no Score from its declared source"
+            )
+
     # "Score" and "Unit" mirror the pantheongpu report schema exactly so a
     # cross-platform comparison can join on (Test Name, Unit). "Problem"
     # records the pinned shape/dtype, because a Score is only comparable if
@@ -159,6 +176,60 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
 # Populated by kernels that report how their Score was obtained, so the
 # report records the method actually used rather than the one declared.
 _LAST_RUN: typing.Dict[str, dict] = {}
+
+
+# The counter string exactly as the registry declares it. Matching on the
+# counter rather than on the source is the point: graph_replay is also
+# neuron-monitor-sourced, but its formula is delta(completed) / period and
+# its unit is graph-steps/s. Gating on the source alone would apply the
+# FLOPS arithmetic to it and publish a TFLOPS number wearing a
+# graph-steps/s label -- precisely the unlike-quantity comparison
+# NOT_COMPARABLE_WITH_GPU exists to prevent.
+FLOPS_COUNTER = "neuroncore_counters.*.effective_flops"
+
+
+def _wants_monitor_score(workload) -> bool:
+    """Is this workload scored from the monitor's effective_flops counter?"""
+    source = workload.score_source
+    return bool(
+        source
+        and source.source == registry.MONITOR
+        and FLOPS_COUNTER in source.counters
+    )
+
+
+def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
+    """The Score its registry entry declares, read from monitor telemetry.
+
+    The compute workloads declare ``mean(effective_flops) / 1e12``. That
+    counter exists only in the neuron-monitor stream: it is absent from the
+    CloudWatch metric set, and sysfs leaves ``flop_count`` at zero. So the
+    figure has to be taken from the telemetry the run just collected rather
+    than computed by the kernel.
+
+    ``mean`` is over NeuronCores. A part reports one ``effective_flops``
+    series per core, and a workload that saturates the device is running on
+    all of them; summing would make a two-core part look twice as fast as
+    the same silicon reported per core, while the mean keeps the number
+    per-core and comparable across parts with different core counts.
+
+    Returns None when the counter is absent, which is the honest answer for
+    a mock run, a run with telemetry disabled, or a kernel that never
+    reached the Tensor Engine. A fabricated Score would flow into a report
+    and be compared against real GPU results.
+    """
+    if not _wants_monitor_score(workload):
+        return None
+
+    flops = metrics.get("effective_flops") or {}
+    means = [
+        core["mean"]
+        for core in flops.values()
+        if isinstance(core, dict) and isinstance(core.get("mean"), (int, float))
+    ]
+    if not means:
+        return None
+    return sum(means) / len(means) / 1e12
 
 
 def _score_method(workload, score) -> typing.Optional[str]:
