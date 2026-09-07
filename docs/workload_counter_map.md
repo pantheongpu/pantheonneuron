@@ -44,6 +44,14 @@ everything else raises `NotImplementedError` on hardware.
 
 A `—` in an instance column means the capability gate skips it: `all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and `transformer_train_step` needs a Trainium part.
 
+## Where the comparison does not hold
+
+Twelve workloads exist on both platforms under the same name and must **not** be compared: `fused_attention`, `graph_replay`, `kv_cache_churn`, `llm_decode`, `llm_prefill`, `moe_router`, `quantized_gemm`, `rag_embedding`, `serving_mix`, `speculative_decode`, `transformer_train_step`, `vision_encoder`.
+
+pantheongpu v1.0.19 replaced their units with a single `ai-ops/s`. Ten of its AI workloads shared one kernel body and six compiled to byte-identical SASS, so what it reports is generic synthetic throughput rather than the quantity each name suggests. The Neuron implementations count the real thing — tokens generated, cache updates applied, training steps completed.
+
+Copying `ai-ops/s` here would restore the join and compare unlike quantities, so these keep their own units and are listed in `registry.NOT_COMPARABLE_WITH_GPU`. `tests/test_score_schema.py` fails if a unit diverges without being declared there.
+
 ## Pinned problems
 
 A Score is comparable across platforms only if both ran the same problem, so shape and dtype travel with the score into the report.
