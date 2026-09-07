@@ -44,6 +44,19 @@ everything else raises `NotImplementedError` on hardware.
 
 A `—` in an instance column means the capability gate skips it: `all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and `transformer_train_step` needs a Trainium part.
 
+## How a monitor-sourced Score is read
+
+The five compute workloads declare `mean(effective_flops) / 1e12`. That counter exists only in the neuron-monitor stream — it is absent from the CloudWatch metric set, and sysfs leaves `flop_count` at zero — so unlike the bandwidth kernels, their Score cannot come from the kernel. `pantheon_neuron.monitor_score` reads it from the telemetry the run just collected, after the monitor stops.
+
+`mean` is across NeuronCores. A part reports one series per core, and a workload that saturates the device runs on all of them; summing would make a two-core part look twice as fast as the same silicon reported per core.
+
+Two cases deliberately produce no Score rather than a number:
+
+- **The counter is absent** — a mock run, telemetry disabled, or a kernel that never reached the Tensor Engine. The row records a PASS with no Score and says why.
+- **The workload failed** — telemetry keeps sampling through a failure, so without a status gate a FAIL row would carry whatever the monitor caught and read as a measurement.
+
+`graph_replay` is also neuron-monitor-sourced but is **not** on this path: its formula is `delta(completed) / period` in graph-steps/s. The gate matches on the declared counter, not on the source, so the FLOPS arithmetic cannot reach it.
+
 ## Where the comparison does not hold
 
 Twelve workloads exist on both platforms under the same name and must **not** be compared: `fused_attention`, `graph_replay`, `kv_cache_churn`, `llm_decode`, `llm_prefill`, `moe_router`, `quantized_gemm`, `rag_embedding`, `serving_mix`, `speculative_decode`, `transformer_train_step`, `vision_encoder`.
