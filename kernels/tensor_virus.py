@@ -83,14 +83,32 @@ def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
     }
 
 
-def _build_kernel():
+def accumulator_dtype(dtype: str, nl):
+    """The type the Tensor Engine accumulates a product of ``dtype`` into.
+
+    Integer operands accumulate into int32, floating-point ones into fp32.
+    Accumulating int8 into a float would round partial sums and break the
+    exactness the all-ones check relies on -- and an int8 GEMM of size K
+    reaches K in the accumulator, which overflows int8 long before the last
+    tile.
+    """
+    return nl.int32 if dtype == "int8" else nl.float32
+
+
+def _build_kernel(dtype: str = "bf16"):
     """Import NKI and construct the kernel.
 
     Lazy so this module can be imported, and its tile maths tested, on a
     machine with no Neuron toolchain.
+
+    ``dtype`` selects the accumulator only; the operand types travel with
+    the tensors. int_virus runs this same kernel over int8 inputs, which is
+    the whole reason the accumulator is a parameter rather than a literal.
     """
     import neuronxcc.nki as nki  # type: ignore
     import neuronxcc.nki.language as nl  # type: ignore
+
+    accumulate_into = accumulator_dtype(dtype, nl)
 
     @nki.jit
     def tensor_virus_kernel(lhs_t, rhs):
@@ -105,17 +123,18 @@ def _build_kernel():
         k, m = lhs_t.shape
         _, n = rhs.shape
 
-        out = nl.ndarray((m, n), dtype=nl.float32, buffer=nl.shared_hbm)
+        out = nl.ndarray((m, n), dtype=accumulate_into, buffer=nl.shared_hbm)
 
         for row in nl.affine_range(m // STATIONARY):
             for col in nl.affine_range(n // MOVING):
-                # PSUM accumulates in fp32 regardless of operand dtype: the
-                # engine's accumulator is fp32, and rounding each partial
-                # product back to bf16 would both lose the sum and stop the
-                # all-ones check below from landing on an exact integer.
+                # Accumulate wider than the operands. Rounding each partial
+                # product back to the operand type would lose the sum and
+                # stop the all-ones check from landing on an exact integer;
+                # for int8 it would also overflow, since the product of an
+                # all-ones GEMM reaches K.
                 acc = nl.zeros(
                     (nl.par_dim(STATIONARY), MOVING),
-                    dtype=nl.float32, buffer=nl.psum,
+                    dtype=accumulate_into, buffer=nl.psum,
                 )
                 for depth in nl.affine_range(k // CONTRACTION):
                     lhs_tile = nl.load(
@@ -150,11 +169,12 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
-    plan = gemm_plan(problem["shape"], str(problem["dtype"]))
-    _, _, kernel = _build_kernel()
+    dtype = str(problem["dtype"])
+    plan = gemm_plan(problem["shape"], dtype)
+    _, _, kernel = _build_kernel(dtype)
 
     device = xm.xla_device()
-    torch_dtype = tiling.torch_dtype(str(problem["dtype"]))
+    torch_dtype = tiling.torch_dtype(dtype)
 
     # All-ones operands make the product exactly K in every element, which is
     # the correctness check. They are also the reason the kernel must not be
@@ -209,8 +229,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "elapsed_s": elapsed,
         "flops_issued": flops_issued,
         "analytic_tflops": analytic_tflops,
+        # int8 operands make these integer ops, not floating-point ones. The
+        # arithmetic is identical and the name is not, so the row says which
+        # rather than letting a TOPS figure read as TFLOPS.
+        "analytic_unit": "TOPS" if dtype == "int8" else "TFLOPS",
         "score_method": "analytic",
-        "analytic_basis": "FLOPs issued / wall time",
+        "analytic_basis": (
+            "integer ops issued / wall time" if dtype == "int8"
+            else "FLOPs issued / wall time"
+        ),
         "warning": None,
         "plan": plan,
         # 1.0 means both sampled elements equal K exactly.

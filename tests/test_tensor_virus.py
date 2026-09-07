@@ -176,3 +176,48 @@ def test_mock_mode_invents_no_score(monkeypatch):
         _workload(), TRN1, duration=1, monitor_period=0.1
     )
     assert row["Score"] is None
+
+
+# -- int_virus rides the same kernel -----------------------------------------
+
+class _FakeNL:
+    """Stands in for neuronxcc.nki.language, which needs the toolchain."""
+    int32 = "int32"
+    float32 = "float32"
+
+
+def _int_virus():
+    return next(w for w in registry.WORKLOADS if w.name == "int_virus")
+
+
+def test_int8_accumulates_into_int32():
+    """Not fp32: an all-ones int8 GEMM reaches K, and rounding loses it."""
+    assert tensor_virus.accumulator_dtype("int8", _FakeNL) == "int32"
+
+
+def test_float_operands_accumulate_into_fp32():
+    for dtype in ("bf16", "fp16", "fp32"):
+        assert tensor_virus.accumulator_dtype(dtype, _FakeNL) == "float32"
+
+
+def test_int_virus_shares_the_pinned_shape_and_tiling():
+    """Same GEMM, different dtype -- so the tile plan must agree."""
+    plan = tensor_virus.gemm_plan(*[
+        _int_virus().problem["shape"], _int_virus().problem["dtype"]
+    ])
+    bf16 = tensor_virus.gemm_plan(*[
+        _workload().problem["shape"], _workload().problem["dtype"]
+    ])
+    assert plan["m_tiles"] == bf16["m_tiles"]
+    assert plan["k_tiles"] == bf16["k_tiles"]
+    assert plan["element_bytes"] == 1
+
+
+def test_int_virus_is_dispatched_by_the_orchestrator():
+    assert "int_virus" in pantheon_neuron.IMPLEMENTED
+
+
+def test_int_virus_reports_tops_not_tflops():
+    """The arithmetic is identical; the unit is not, and the row must say so."""
+    assert _int_virus().unit == "TOPS"
+    assert _workload().unit == "TFLOPS"

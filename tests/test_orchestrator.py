@@ -86,8 +86,10 @@ def test_implemented_set_matches_what_execute_dispatches():
     """
     source = pathlib.Path(pantheon_neuron.__file__).read_text(encoding="utf-8")
     body = source.split("def _execute(", 1)[1].split("\ndef ", 1)[0]
+    # Matches the name however it is dispatched -- a direct comparison or
+    # membership in a tuple, since one kernel can serve several workloads.
     for name in pantheon_neuron.IMPLEMENTED:
-        assert f'workload.name == "{name}"' in body or name == "baseline_metrics", name
+        assert f'"{name}"' in body, name
 
 
 def test_execution_errors_flip_a_pass_to_fail(mock_env, monkeypatch):

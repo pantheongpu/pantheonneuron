@@ -4,8 +4,9 @@ This is how a Score reaches its declared source. ``neuron-monitor`` streams
 telemetry but has no HBM byte counters; only the profiler does, and only as
 a per-execution capture.
 
-Four environment traps are encoded here, each one observed during the
-2026-08-26 probes and each one costing a round trip to find:
+Five environment traps are encoded here, each one observed on hardware and
+each one costing a round trip to find. The first four came out of the
+2026-08-26 probes; the fifth out of the 2026-09-07 bring-up:
 
 1. ``neuron-profile view`` exits with "$HOME is not defined" when HOME is
    unset. Anything running under SSM or a bare service manager hits this.
@@ -16,10 +17,16 @@ Four environment traps are encoded here, each one observed during the
    cannot read at all ("supported: 1 - 6"). Use capture.
 4. The tools emit klog lines on stdout alongside the JSON, so the payload
    starts at the first ``{`` and everything before it is noise.
+5. ``capture`` replays the NEFF and so needs a NeuronCore of its own. The
+   workload process holds every visible core, so without a reserved core
+   this fails with "Requested:2 Available:0" and the Score degrades to the
+   analytic figure -- which, until 2026-09-07, it always had. See
+   kernels/cores.py.
 
-STATUS: UNTESTED. Written from captures taken by hand on an inf2.xlarge;
-this code path has never run. See docs/neuron_counters.md for the raw
-output it parses.
+STATUS: capture verified on inf2.xlarge 2026-09-07 -- it produced a session
+against a real NEFF once no workload held the device. The counter-reading
+path above it is still exercised only by hand-taken captures. See
+docs/neuron_counters.md for the raw output it parses.
 """
 
 import json
@@ -27,6 +34,8 @@ import os
 import shutil
 import subprocess
 import typing
+
+from . import cores
 
 
 NEURON_BIN = "/opt/aws/neuron/bin"
@@ -43,6 +52,15 @@ def _environment() -> typing.Dict[str, str]:
     path = env.get("PATH", "")
     if NEURON_BIN not in path.split(os.pathsep):  # trap 2
         env["PATH"] = os.pathsep.join([NEURON_BIN, path]) if path else NEURON_BIN
+
+    # trap 5: capture replays the NEFF, so it needs a NeuronCore of its own.
+    # The workload process holds every core the runtime made visible to it,
+    # so without a reserved core this fails with "Requested:2 Available:0"
+    # and the Score silently falls back to the analytic figure. The
+    # orchestrator reserves one and names it here; see kernels/cores.py.
+    reserved = env.get(cores.RESERVED_CORE)
+    if reserved:
+        env[cores.VISIBLE_CORES] = reserved
     return env
 
 

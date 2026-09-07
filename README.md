@@ -45,7 +45,8 @@ Still unverified:
 | `memory_read` | ✅ **verified on trn1.2xlarge and inf2.xlarge** | `neuron-profile`, analytic fallback |
 | `memory_write` | ✅ **verified on inf2.xlarge**, but not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
 | `tensor_virus` | ✅ **verified on inf2.xlarge** at 1024³/2048³, not at the pinned 8192³ | `neuron-monitor`, analytic fallback |
-| the other 22 | ❌ none | — |
+| `int_virus` | ⚠️ written; same GEMM over int8, untested | `neuron-monitor`, analytic fallback |
+| the other 21 | ❌ none | — |
 
 ### What the 2026-09-07 inf2.xlarge bring-up changed
 
@@ -109,13 +110,18 @@ buffers it looks nearly right, which is what makes it dangerous. The
 barrier is inside the timed region, and the wrong figure is kept in
 `data/baselines.json` as a regression marker.
 
-**Its Score now comes from the declared source.** After the timed loop the
-kernel captures a profile, reads `hbm_read_bytes` and `total_time`, and
-computes `hbm_read_bytes / total_time / 1e9` — exactly the formula the
-registry declares. If the profiler is unavailable it degrades to the
-analytic figure (bytes requested over wall time) rather than failing the
-run, and the row's `Score Method` field records which was used. A
-provisional number is never presented as the real one.
+**Its Score has never actually come from the declared source.** The kernel
+captures a profile after the timed loop and computes
+`hbm_read_bytes / total_time / 1e9`, exactly the formula the registry
+declares — but that capture replays the NEFF, which needs a NeuronCore, and
+the workload process held every one of them. Every scored run in this
+suite's history has therefore degraded to the analytic figure. The row's
+`Score Method` records which was used, so no provisional number was ever
+presented as the real one, but the declared path had never once run.
+
+The run now reserves a core for the profiler (`kernels/cores.py`), which
+should close this. That reservation is written and tested but has **not**
+been exercised on hardware.
 
 The distinction matters: the analytic figure counts bytes we *asked* for
 and cannot detect loads the compiler eliminated. A kernel whose DMA was
@@ -124,12 +130,13 @@ while the profiler reports almost no HBM traffic.
 `memory_read.verify_against_analytic` compares the two and puts the
 divergence in the row's `Detail`.
 
-The profiler reader (`kernels/profiler.py`) encodes four environment traps,
-each found the hard way during the probes: `view` exits on an unset `$HOME`;
-the Neuron bin directory must be on `PATH` because the tools shell out to
-each other; `capture` writes readable NTFF v6 while `inspect` writes v115
-that the same AMI's tooling cannot read; and the tools interleave log lines
-with JSON on stdout.
+The profiler reader (`kernels/profiler.py`) encodes five environment traps,
+each found the hard way on hardware: `view` exits on an unset `$HOME`; the
+Neuron bin directory must be on `PATH` because the tools shell out to each
+other; `capture` writes readable NTFF v6 while `inspect` writes v115 that the
+same AMI's tooling cannot read; the tools interleave log lines with JSON on
+stdout; and `capture` needs a NeuronCore of its own, because it replays the
+NEFF rather than reading counters from the running process.
 
 ### memory_write
 
@@ -145,10 +152,9 @@ reduces its loads so they have a consumer; here the hazard is inverted —
 stores into a buffer nothing reads are dead code. The destination is the
 kernel's returned output, which is what keeps the stores alive.
 
-Every NKI primitive it uses was exercised on hardware by `memory_read` on
-2026-08-27. This particular arrangement of them has not run, so it carries
-the same bring-up caveat: first hardware run is validation, not
-measurement.
+It ran for the first time on inf2.xlarge 2026-09-07 and its destination
+check passed exactly, at 4 GiB (255.1 GB/s) and 6 GiB (162.5 GB/s). The
+pinned 8 GiB does not fit; see the bring-up notes above.
 
 ## Requirements
 

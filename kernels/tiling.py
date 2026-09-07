@@ -42,7 +42,12 @@ def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
     }
 
 
-TORCH_DTYPES = {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32"}
+# int8 is here for the integer compute workloads. It is deliberately absent
+# from the bandwidth kernels' usable set in practice: their tile geometry is
+# expressed in elements, so a 1-byte dtype quarters the bytes moved per tile
+# and would make a GB/s figure incomparable with the bf16 runs beside it.
+TORCH_DTYPES = {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32",
+                "int8": "int8"}
 
 
 def torch_dtype(dtype: str):

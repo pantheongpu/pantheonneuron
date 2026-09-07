@@ -17,8 +17,8 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import (memory_read, memory_write, nki_backend, registry,
-                     tensor_virus)
+from kernels import (cores, memory_read, memory_write, nki_backend,
+                     registry, tensor_virus)
 
 try:
     import psutil
@@ -91,6 +91,55 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
 
 
 # --- Execution --------------------------------------------------------------
+
+def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
+    """Keep one NeuronCore free so the profiler can replay a NEFF.
+
+    Must run before the first workload, because the Neuron runtime reads
+    ``NEURON_RT_VISIBLE_CORES`` when it initialises and ignores later
+    changes. That is also why this is all-or-nothing for a run: the split
+    cannot be renegotiated per workload from inside one process.
+
+    Returns the reserved core, or None when nothing was reserved.
+
+    An explicit setting from the caller wins: someone who pinned cores by
+    hand is answering a question we should not overrule, and silently
+    re-pinning their run would change what it measures.
+
+    A workload that declares ``cores: "all"`` wins too, and for the same
+    reason. ``memory_read_agg`` measures aggregate bandwidth across every
+    NeuronCore; holding one back would still produce a number, and that
+    number would quietly be the aggregate of all-but-one core under a name
+    that says otherwise. A missing profiler Score announces itself in the
+    row; a Score over the wrong core count does not.
+    """
+    if nki_backend.mock_mode():
+        return None
+    if os.environ.get(cores.VISIBLE_CORES):
+        return None
+
+    aggregate = [w.name for w in workloads
+                 if (w.problem or {}).get("cores") == "all"]
+    if aggregate:
+        print(
+            f"[PANTHEON-NEURON] no core reserved: {aggregate[0]} measures all "
+            "cores, so these Scores use the analytic fallback"
+        )
+        return None
+
+    total = sum(device.neuroncores for device in devices)
+    plan = cores.split(total)
+    if plan is None:
+        return None
+
+    os.environ[cores.VISIBLE_CORES] = plan["workload"]
+    os.environ[cores.RESERVED_CORE] = plan["profiler"]
+    print(
+        f"[PANTHEON-NEURON] cores {plan['workload']} to the workload, "
+        f"{plan['profiler']} reserved for neuron-profile"
+    )
+    return plan["profiler"]
+
 
 def run_workload(workload, devices, duration: int, monitor_period: float) -> dict:
     """Execute one workload and return its result row."""
@@ -298,7 +347,11 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
     if workload.name == "memory_write":
         return _execute_bandwidth(workload, duration, memory_write)
 
-    if workload.name == "tensor_virus":
+    if workload.name in ("tensor_virus", "int_virus"):
+        # One kernel, two workloads: int_virus is the same GEMM over int8
+        # operands, which the registry declares by dtype rather than by
+        # naming a different kernel.
+        #
         # Returns the analytic cross-check, not the declared Score: that one
         # is mean(effective_flops) and does not exist until the monitor
         # stops, so run_workload reads it and overrides this figure. Keeping
@@ -320,7 +373,7 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
 # workload there instead would quietly stop testing anything the day that
 # workload got a kernel.
 IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
-                         "tensor_virus"})
+                         "tensor_virus", "int_virus"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:
@@ -414,6 +467,8 @@ def main(argv=None) -> int:
         f"[PANTHEON-NEURON] {len(devices)} device(s) [{', '.join(arches)}], "
         f"{len(workloads)} workload(s)"
     )
+
+    reserve_profiler_core(devices, workloads)
 
     snapshot = get_system_snapshot(devices)
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
