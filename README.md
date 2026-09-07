@@ -42,10 +42,36 @@ Still unverified:
 | Workload | Kernel | Score source |
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ✅ **verified on trn1.2xlarge** | `neuron-profile`, analytic fallback |
-| `memory_write` | ⚠️ written; primitives verified, arrangement untested | `neuron-profile`, analytic fallback |
-| `tensor_virus` | ⚠️ written; `nl.matmul` and PSUM are new here, untested | `neuron-monitor`, analytic fallback |
+| `memory_read` | ✅ **verified on trn1.2xlarge and inf2.xlarge** | `neuron-profile`, analytic fallback |
+| `memory_write` | ✅ **verified on inf2.xlarge**, but not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
+| `tensor_virus` | ✅ **verified on inf2.xlarge** at 1024³/2048³, not at the pinned 8192³ | `neuron-monitor`, analytic fallback |
 | the other 22 | ❌ none | — |
+
+### What the 2026-09-07 inf2.xlarge bring-up changed
+
+Three bugs, each of which produced a plausible-looking number rather than an
+error, and none of which any test could have caught:
+
+**The warm-up compiled a different graph than the loop ran.** Holding the
+kernel result makes the output live at the `mark_step()` cut, so a warm-up
+that discards it compiles one graph and leaves the real one to be built
+*inside* the timed region. `memory_read` reported **0.0208 GB/s over 478 s**
+with two executions and 0.02% NeuronCore utilisation, because a seven-minute
+compile was measured as bandwidth. Warming up with the same liveness gives
+**236.9 GB/s over 8,826 passes**.
+
+**`memory_write` allocated a full-size source for a kernel that reads one
+tile.** 8 GiB of source for 256 KiB of use, against an 8 GiB destination on a
+16 GB core.
+
+**The pinned 8 GiB write does not fit, even so.** The destination is the
+whole plan and the runtime still holds the previous one when the next is
+allocated. Measured ceiling on this part: 4 GiB runs at 255.1 GB/s and 6 GiB
+at 162.5 GB/s, both with the destination check at exactly 1.0; 8 GiB fails
+with 8.59 GB requested against 8.099 GB resident. Both parts this suite
+targets have 32 GB across 2 cores, so the pin is unreachable on either.
+Lowering it or splitting the destination across cores is a registry
+decision and is left open.
 
 `tensor_virus` is the first kernel whose Score does not come from the kernel.
 `effective_flops` lives only in the neuron-monitor stream and does not exist

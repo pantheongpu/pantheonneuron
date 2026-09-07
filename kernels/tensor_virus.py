@@ -20,14 +20,18 @@ dead code, and one over constant operands can in principle be folded at
 compile time. The output is the kernel's return value, held live by the
 caller across ``mark_step()``, for the reason memory_read documents.
 
-STATUS: UNTESTED ON HARDWARE. ``nl.load``, ``nl.store``, ``nl.ndarray`` with
-``shared_hbm``, ``nl.zeros``, ``nl.affine_range`` and ``nl.par_dim`` were all
-exercised on trn1.2xlarge on 2026-08-27 by ``memory_read``. ``nl.matmul`` and
-the PSUM accumulation buffer were **not** -- they are new here. Treat the
-first hardware run as bring-up, not measurement, and read
-``verify_product_is_correct`` first: with all-ones operands every output
-element must equal K exactly, which is what distinguishes a real GEMM from
-one the compiler reshaped.
+STATUS: verified on inf2.xlarge 2026-09-07, at reduced shapes. ``nl.matmul``
+and the PSUM accumulator ran correctly on their first execution:
+``verify_product_is_correct`` returned exactly 1.0 at 1024^3 (2.68 TFLOPS,
+12,481 passes) and 2048^3 (21.05 TFLOPS, 12,257 passes), so both sampled
+corners held exactly K and the GEMM computed the declared problem.
+
+The pinned 8192^3 shape has **not** run. It unrolls to 65,536 matmul calls,
+four times the 16,384-iteration graph that already took roughly seven
+minutes to compile on this part, so its compile cost is the open question
+rather than its correctness. The near-8x throughput jump between the two
+verified shapes says the smaller one is launch-overhead bound, so neither
+figure should be read as this part's compute capability.
 """
 
 import time
@@ -160,10 +164,17 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     rhs = torch.ones((plan["k"], plan["n"]), dtype=torch_dtype, device=device)
     xm.mark_step()
 
-    # Compile outside the timed region; a NEFF build is tens of seconds and
-    # would otherwise be counted as execution.
-    kernel(lhs_t, rhs)
+    # Compile outside the timed region, and compile the graph the loop will
+    # actually run. Holding the result changes the graph -- the output
+    # becomes live at the mark_step() cut -- so a warm-up that discards it
+    # compiles a different graph and leaves the real one to be built inside
+    # the measurement. memory_read measured that on inf2.xlarge 2026-09-07:
+    # 0.0208 GB/s over a 45 s run, because a seven-minute compile landed in
+    # the middle of it.
+    warm = kernel(lhs_t, rhs)
+    xm.mark_step()
     xm.wait_device_ops()
+    del warm
 
     # The barrier belongs inside the timed region and the result must stay
     # live -- both lessons are memory_read's, measured on trn1.2xlarge

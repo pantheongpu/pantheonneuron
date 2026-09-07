@@ -102,10 +102,22 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     )
     xm.mark_step()
 
-    # Warm up so compilation is not inside the timed region. A NEFF
-    # compile is tens of seconds and would swamp the measurement.
-    kernel(source)
+    # Warm up so compilation is not inside the timed region -- and warm up
+    # the graph the loop actually runs. Holding the result changes the
+    # graph, because the output becomes live at the mark_step() cut, so a
+    # warm-up that discards it compiles a different one and leaves the real
+    # graph to be built inside the measurement.
+    #
+    # Measured on inf2.xlarge 2026-09-07 with the pinned 8 GiB problem: the
+    # discarding warm-up compiled at 22:22:53, the timed loop's first call
+    # triggered a second compile that finished at 22:29:46, and the run
+    # reported 0.0208 GB/s over 478 s with total_executions=2 and 0.02%
+    # NeuronCore utilisation. Nearly seven minutes of compilation was
+    # measured as though it were bandwidth.
+    warm = kernel(source)
     xm.mark_step()
+    xm.wait_device_ops()
+    del warm
 
     # xm.mark_step() queues work and returns; it does not wait for the
     # device. Timing without a barrier measures queue submission, not
