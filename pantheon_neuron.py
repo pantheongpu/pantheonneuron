@@ -17,7 +17,8 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import memory_read, memory_write, nki_backend, registry
+from kernels import (memory_read, memory_write, nki_backend, registry,
+                     tensor_virus)
 
 try:
     import psutil
@@ -246,12 +247,29 @@ def _score_method(workload, score) -> typing.Optional[str]:
     if run and run.get("score_method"):
         method = run["score_method"]
         if method == "analytic":
-            counter = {"memory_read": "hbm_read_bytes",
-                       "memory_write": "hbm_write_bytes"}.get(workload.name, "")
-            return (f"analytic (bytes moved / wall time); declared source "
-                    f"is neuron-profile {counter}".rstrip())
+            # Both halves of this label have to come from the workload. The
+            # basis differs by kernel -- bytes for the bandwidth kernels,
+            # FLOPs for the compute ones -- and so does the source that was
+            # missed, which is neuron-profile for one and neuron-monitor for
+            # the other. A fixed string would misdescribe whichever workload
+            # it was not written for, and a provisional number wearing a
+            # confident label is the failure this function exists to prevent.
+            basis = run.get("analytic_basis") or "wall-clock arithmetic"
+            return f"analytic ({basis}); declared source is {_declared(workload)}"
         return method
     return workload.score_source.source if workload.score_source else None
+
+
+def _declared(workload) -> str:
+    """Name the Score source the registry declares, with its lead counter."""
+    source = workload.score_source
+    if source is None:
+        return "unspecified"
+    counter = source.counters[0] if source.counters else ""
+    # Counter paths are namespaced in the registry ('neuroncore_counters.*.
+    # effective_flops'); the leaf is what a reader recognises.
+    leaf = counter.rsplit(".", 1)[-1]
+    return f"{source.source} {leaf}".rstrip()
 
 
 def _execute(workload, devices, duration: int) -> typing.Optional[float]:
@@ -280,10 +298,29 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
     if workload.name == "memory_write":
         return _execute_bandwidth(workload, duration, memory_write)
 
+    if workload.name == "tensor_virus":
+        # Returns the analytic cross-check, not the declared Score: that one
+        # is mean(effective_flops) and does not exist until the monitor
+        # stops, so run_workload reads it and overrides this figure. Keeping
+        # the analytic number here means a run whose telemetry came back
+        # empty still reports what the kernel issued, labelled as analytic.
+        result = tensor_virus.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_tflops"]
+
     nki_backend.require_toolchain()
     raise NotImplementedError(
         f"Workload '{workload.name}' has no NKI implementation yet."
     )
+
+
+# The workloads _execute can actually run. Kept beside the dispatch it
+# describes so the two cannot drift: tests assert that everything absent from
+# this set raises rather than reporting a silent PASS, and naming a specific
+# workload there instead would quietly stop testing anything the day that
+# workload got a kernel.
+IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
+                         "tensor_virus"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:

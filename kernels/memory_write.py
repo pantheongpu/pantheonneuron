@@ -101,15 +101,39 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # 1636 GB/s against a true 264 GB/s, because elapsed time stayed
     # constant regardless of buffer size. The barrier belongs inside the
     # timed region.
+    # The returned destination must stay LIVE across mark_step(). Returning it
+    # from the kernel keeps the stores alive inside the graph, but that is only
+    # half the problem: if the caller drops the handle, nothing references the
+    # graph at the cut point and XLA proves the whole thing dead. memory_read
+    # measured this on trn1.2xlarge 2026-08-27 -- a 90s run reported 14,513
+    # GB/s, 17x the part's HBM, while neuron-monitor recorded a single
+    # execution. Holding `sink` is what makes the loop submit real work.
+    sink = None
     passes = 0
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
-        kernel(source)
+        sink = kernel(source)
         xm.mark_step()
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+
+    # The source is all ones and the kernel broadcasts one tile across every
+    # row, so every element of the destination must be 1.0. Checking the LAST
+    # row is the point: it is written by the final iteration of the store
+    # loop, so a loop that exited early or was partly elided fails here. This
+    # needs no profiler, which matters because the profiler being unavailable
+    # is exactly when the analytic figure becomes the Score.
+    write_verified = None
+    if sink is not None:
+        try:
+            last_row = float(sink[plan["tiles"] * PARTITION - 1][0])
+            first_row = float(sink[0][0])
+        except Exception:  # materialisation failed; leave unverified
+            last_row = first_row = None
+        if last_row is not None and first_row is not None:
+            write_verified = (first_row + last_row) / 2.0
 
     bytes_written = plan["actual_bytes"] * passes
     analytic = bytes_written / elapsed / 1e9
@@ -121,9 +145,17 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_gbps": analytic,
         "profiler_gbps": None,
         "score_method": "analytic",
+        "analytic_basis": "bytes moved / wall time",
         "warning": None,
         "plan": plan,
+        # 1.0 means the first and last rows both hold the broadcast value.
+        "write_verified_ratio": write_verified,
     }
+
+    elided = verify_write_completed(write_verified)
+    if elided:
+        result["warning"] = elided
+        return result
 
     try:
         result.update(_profile(workdir))
@@ -177,6 +209,34 @@ def verify_against_analytic(
             f"profiler {profiler_gbps:.1f} GB/s and analytic "
             f"{analytic_gbps:.1f} GB/s differ by more than {tolerance:.0%} "
             f"(ratio {ratio:.2f})"
+        )
+    return None
+
+
+def verify_write_completed(
+    write_verified_ratio: typing.Optional[float], tolerance: float = 0.01
+) -> typing.Optional[str]:
+    """Check the stores actually landed in the destination.
+
+    ``verify_against_analytic`` and ``verify_write_dominates_read`` both need
+    the profiler, and the profiler failing is precisely when the analytic
+    figure becomes the Score -- so those nets have a hole exactly where it
+    matters. This check closes it from the destination alone.
+
+    A ratio of 1.0 means the first and last rows both hold the broadcast
+    value. Anything else means the store loop did not cover the buffer the
+    plan describes, so the byte count behind the analytic bandwidth is
+    fiction.
+    """
+    if write_verified_ratio is None:
+        return (
+            "destination could not be read back -- write coverage unverified"
+        )
+    if abs(write_verified_ratio - 1.0) > tolerance:
+        return (
+            f"destination holds {write_verified_ratio:.3f}x the written value "
+            "-- the stores were coalesced or eliminated, so the analytic "
+            "bandwidth is not a measurement"
         )
     return None
 

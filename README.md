@@ -44,7 +44,19 @@ Still unverified:
 | `baseline_metrics` | ✅ telemetry only, no load | — |
 | `memory_read` | ✅ **verified on trn1.2xlarge** | `neuron-profile`, analytic fallback |
 | `memory_write` | ⚠️ written; primitives verified, arrangement untested | `neuron-profile`, analytic fallback |
-| the other 23 | ❌ none | — |
+| `tensor_virus` | ⚠️ written; `nl.matmul` and PSUM are new here, untested | `neuron-monitor`, analytic fallback |
+| the other 22 | ❌ none | — |
+
+`tensor_virus` is the first kernel whose Score does not come from the kernel.
+`effective_flops` lives only in the neuron-monitor stream and does not exist
+until the monitor stops, so `pantheon_neuron.monitor_score` reads it after the
+run and the kernel supplies FLOPs-over-wall-time as the cross-check. The two
+answer different questions: the analytic figure counts arithmetic issued, the
+counter counts what the Tensor Engine retired, and a matmul folded away at
+compile time shows up as the gap between them. Its all-ones operands make
+every output element exactly K, which is what `verify_product_is_correct`
+checks — the far corner especially, since it is produced by the last tile of
+both loops.
 
 `memory_read` is the first real kernel. Two caveats travel with it:
 

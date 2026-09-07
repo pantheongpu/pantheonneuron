@@ -164,6 +164,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_gbps": analytic,
         "profiler_gbps": None,
         "score_method": "analytic",
+        "analytic_basis": "bytes moved / wall time",
         "warning": None,
         "plan": plan,
         # 1.0 means the last pass read exactly the planned bytes.
