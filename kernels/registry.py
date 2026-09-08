@@ -360,7 +360,13 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("speculative_decode", "inference",
              "Draft-and-verify speculative decoding.", _COMPUTE,
              unit="verified-tokens/s",
-             problem={"draft_len": 4, "hidden": 4096, "dtype": "bf16"},
+             # layers is pinned because a verification pass runs the target
+             # model, and the kernel used to run one of its blocks -- making
+             # the expensive half of speculative decoding a thirty-second of
+             # its real cost, which is the half the technique exists to
+             # amortise. Same defect serving_mix had.
+             problem={"draft_len": 4, "hidden": 4096, "layers": 32,
+                      "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'verified_tokens',

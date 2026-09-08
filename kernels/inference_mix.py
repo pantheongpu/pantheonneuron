@@ -320,6 +320,11 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
 
     draft_len = int(problem["draft_len"])
     hidden = int(problem["hidden"])
+    # A verification pass runs the target *model*, not one of its blocks.
+    # Running a single block was the same defect serving_mix had: it makes
+    # the expensive half of speculative decoding 1/layers of its real cost,
+    # which is the half the whole technique is trying to amortise.
+    layers = int(problem.get("layers", 32))
     dtype = tiling.torch_dtype(str(problem["dtype"]))
 
     device = xm.xla_device()
@@ -343,12 +348,16 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
             proposals.append(state)
         drafted = torch.cat(proposals, dim=1)
 
-        # Verify: one batched pass over all drafted positions at full width.
-        # Batching the verification is the entire economic argument for
-        # speculative decoding, so verifying one at a time would measure a
-        # different algorithm.
-        wide = torch.matmul(drafted, project_up)
-        return transformer_ops.block(wide, target)
+        # Verify: one batched pass over all drafted positions at full
+        # width, through every layer of the target. Batching the
+        # verification is the entire economic argument for speculative
+        # decoding, so verifying one at a time would measure a different
+        # algorithm -- and verifying through one block would measure a
+        # thirty-second of the cost the technique exists to amortise.
+        state = torch.matmul(drafted, project_up)
+        for _ in range(layers):
+            state = transformer_ops.block(state, target)
+        return state
 
     warm = cycle()
     xm.mark_step()
@@ -372,6 +381,13 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         "verified_tokens": verified,
         "cycles": cycles,
         "draft_len": draft_len,
+        "target_layers": layers,
+        # The verification cost, which is what speculative decoding is
+        # amortising. A cycle count alone cannot show whether the target
+        # model was actually run.
+        "verify_blocks_per_cycle": layers,
+        "verify_flops_per_cycle": layers * transformer_ops.block_flops(
+            hidden, draft_len),
         "elapsed_s": elapsed,
         "verified_tokens_per_s": verified / elapsed if elapsed else 0.0,
         "score_method": "workload",

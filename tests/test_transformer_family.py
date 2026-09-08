@@ -776,3 +776,40 @@ def test_serving_plan_still_rejects_a_bad_ratio():
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         inference_mix.serving_plan(
             {"prefill_ratio": 1.5, "batch": 8, "prompt": 8, "decode": 8})
+
+
+def test_speculative_decode_verifies_through_the_target_model():
+    """Verification runs every layer, not one block.
+
+    Speculative decoding exists to amortise the target model's cost across
+    several drafted tokens. Verifying through a single block makes that
+    cost a thirty-second of itself, so the workload would report the
+    technique winning against a target it never ran.
+    """
+    code = sourcecheck.function_code(inference_mix.run_speculative_decode)
+    assert "for _ in range ( layers )" in code
+    assert "state = transformer_ops . block ( state , target )" in code
+
+
+def test_the_pinned_speculative_problem_names_its_target_depth():
+    problem = PROBLEMS["speculative_decode"]
+    assert problem["layers"] == 32
+    assert problem["draft_len"] == 4
+
+
+def test_verification_dominates_drafting():
+    """The economic premise: drafting must be cheap relative to verifying.
+
+    If it is not, speculative decoding is a slower way to decode, and a
+    workload whose draft costs as much as its verify is measuring
+    something other than the technique.
+    """
+    problem = PROBLEMS["speculative_decode"]
+    hidden, draft_len, layers = (problem["hidden"], problem["draft_len"],
+                                 problem["layers"])
+
+    verify = layers * transformer_ops.block_flops(hidden, draft_len)
+    # The draft runs at a quarter width, one matmul per token.
+    draft = draft_len * 2 * (hidden // 4) ** 2
+
+    assert verify > 100 * draft

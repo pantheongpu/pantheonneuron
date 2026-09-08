@@ -116,7 +116,7 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `fused_attention` | heads=32, seq=2048, head_dim=128, dtype=bf16 |
 | `quantized_gemm` | op=matmul, shape=[4096, 4096, 4096], dtype=int8 |
 | `serving_mix` | prefill_ratio=0.2, batch=8, prompt=1024, decode=256 |
-| `speculative_decode` | draft_len=4, hidden=4096, dtype=bf16 |
+| `speculative_decode` | draft_len=4, hidden=4096, layers=32, dtype=bf16 |
 | `moe_router` | experts=8, top_k=2, hidden=4096, tokens=4096 |
 | `transformer_train_step` | hidden=4096, layers=4, batch=1, seq=2048, dtype=bf16 |
 | `allocation_fragmentation` | allocations=10000, size_min=4096, size_max=16777216 |
