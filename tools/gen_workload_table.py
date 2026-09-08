@@ -155,6 +155,26 @@ def _prose():
         "name suggests. The Neuron implementations count the real thing — "
         "tokens generated, cache updates applied, training steps completed.",
         "",
+        "## Where the units match and the quantities do not",
+        "",
+        f"{len(registry.SAME_UNIT_DIFFERENT_QUANTITY)} workloads join "
+        "cleanly on (Test Name, Unit) and should not be read as a "
+        "comparison. This is the worse of the two failure modes: a failed "
+        "join is visible, a successful join between unlike quantities is "
+        "not.",
+        "",
+        "| Workload | Why the two numbers differ |",
+        "|---|---|",
+    ] + [
+        f"| `{name}` | {reason} |"
+        for name, reason in sorted(
+            registry.SAME_UNIT_DIFFERENT_QUANTITY.items())
+    ] + [
+        "",
+        "Nothing here changes what joins. See "
+        "`docs/cross_platform_comparability.md` for the evidence and the "
+        "three options, none of them taken.",
+        "",
         f"Copying `{registry.GPU_SYNTHETIC_AI_UNIT}` here would restore the "
         "join and compare unlike quantities, so these keep their own units and "
         "are listed in `registry.NOT_COMPARABLE_WITH_GPU`. "

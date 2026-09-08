@@ -319,7 +319,8 @@ def select_by_plan(candidates: typing.Sequence[str],
                    session_path: str,
                    direction: str,
                    expected_bytes: int,
-                   floor: float = 0.5) -> typing.Dict[str, typing.Any]:
+                   floor: float = 0.5,
+                   exact: float = 0.05) -> typing.Dict[str, typing.Any]:
     """Find which of ``candidates`` is the graph the kernel actually ran.
 
     The reason this exists: ``find_neffs`` ranks by mtime, and mtime picked
@@ -331,15 +332,27 @@ def select_by_plan(candidates: typing.Sequence[str],
     with a declared source that has still never produced a number.
 
     So the plan check stops being only a rejector and becomes the selector:
-    capture each candidate in turn and keep the first that accounts for the
-    planned traffic. The verdict is unchanged -- a graph that covers less
-    than ``floor`` of the plan is still not this kernel's -- but a wrong
-    first guess now costs another capture instead of the whole Score.
+    capture candidates and keep the one that accounts for the planned
+    traffic.
 
-    Each attempt is a real NEFF replay, so the search is capped (see
-    ``MAX_CANDIDATES``). Exhausting it raises with what every candidate
-    actually reported, which is the diagnosis the single-guess version
-    could never give: it said one graph was wrong, not that none was right.
+    **The best match, not the first acceptable one.** Taking the first
+    candidate over ``floor`` made the declared Score irreproducible: three
+    runs of memory_read returned 256.17, 178.7 and 119.19 GB/s, and the
+    last cleared a 0.5 floor while diverging from its own analytic
+    cross-check by 56%. A partial match is not a coalesced version of the
+    right graph, it is a different graph -- memory_read's own
+    ``read_verified_ratio`` already confirms the kernel touched every
+    planned byte, so the right NEFF reports coverage at 1.0 and anything
+    well under it is somebody else's work.
+
+    A candidate inside ``exact`` of 1.0 is taken immediately, because
+    nothing can beat it and each extra attempt is a real NEFF replay.
+    Otherwise the search continues and returns the closest to 1.0 it found,
+    so a wrong first guess costs captures rather than correctness.
+
+    Exhausting the cap raises with what every candidate reported, which is
+    the diagnosis the single-guess version could never give: it said one
+    graph was wrong, not that none was right.
 
     Returns the counters, the NEFF they came from, and how hard it looked.
     """
@@ -347,6 +360,7 @@ def select_by_plan(candidates: typing.Sequence[str],
         raise ProfilerUnavailable("no NEFF candidates to profile")
 
     attempts = []
+    best = None
     for position, neff in enumerate(candidates, start=1):
         try:
             counters = read_counters(neff, session_path)
@@ -360,17 +374,35 @@ def select_by_plan(candidates: typing.Sequence[str],
             attempts.append(f"{os.path.basename(neff)}: {error}")
             continue
 
-        if coverage is None or coverage >= floor:
-            return {
-                "counters": counters,
-                "neff": neff,
-                "plan_coverage": coverage,
-                "candidates_tried": position,
-                "candidates_available": len(candidates),
-            }
+        found = {
+            "counters": counters,
+            "neff": neff,
+            "plan_coverage": coverage,
+            "candidates_tried": position,
+            "candidates_available": len(candidates),
+        }
+
+        # No plan to check against: nothing can rank these, so the first
+        # capture is the answer.
+        if coverage is None:
+            return found
+
+        if abs(coverage - 1.0) <= exact:
+            # This is the kernel's own graph. Stop paying for replays.
+            return found
+
+        if best is None or abs(coverage - 1.0) < abs(best["plan_coverage"] - 1.0):
+            best = found
         attempts.append(
             f"{os.path.basename(neff)}: covered {coverage:.4g} of the plan"
         )
+
+    if best is not None and best["plan_coverage"] >= floor:
+        # Nothing matched exactly, but something cleared the floor. It is
+        # the closest to the plan of everything on the machine, and the
+        # row's plan_coverage says how close, so a reader can see that this
+        # was a near miss rather than a clean identification.
+        return best
 
     raise ProfilerUnavailable(
         f"none of {len(candidates)} candidate NEFF(s) moved the planned "

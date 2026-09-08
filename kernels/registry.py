@@ -504,11 +504,42 @@ GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 # provenance -- and the bias has a direction, because it puts the GPU's
 # secondary math path against Neuron's primary one.
 #
-# Deliberately not encoded as data yet: deciding what to do about it changes
-# what the two suites claim about each other, and probably means work in the
-# other repo. The evidence is written up in
-# docs/cross_platform_comparability.md so the decision can be made from
-# measurements rather than from memory.
+# Encoded below as its own register rather than forced into
+# NOT_COMPARABLE_WITH_GPU, whose tests define it as "the units diverge".
+# These units do not diverge -- that is the whole problem. The evidence is
+# in docs/cross_platform_comparability.md.
+SAME_UNIT_DIFFERENT_QUANTITY = {
+    "tensor_virus": (
+        "pantheongpu runs __hfma2 chains on the FP16 vector lanes with no "
+        "matrix at all, counted analytically from occupancy; this is a dense "
+        "systolic GEMM read from a hardware counter."
+    ),
+    "int_virus": (
+        "pantheongpu runs integer FMA chains counted from occupancy; this is "
+        "a dense uint8 GEMM on the Tensor Engine."
+    ),
+    "pulse_virus": (
+        "pantheongpu duty-cycles scalar fp32 fmaf chains; this duty-cycles a "
+        "dense bf16 GEMM."
+    ),
+    "omni_virus": (
+        "pantheongpu sums analytic per-engine op counts; this drives four "
+        "engines in one dependent chain and reads effective_flops."
+    ),
+}
+
+# transformer_virus is deliberately absent. pantheongpu does use real matrix
+# instructions there (MFMA/WMMA), so the functional-unit objection does not
+# apply -- though the path sits behind an experimental flag with a
+# non-matrix fallback under the same name, and the issued-versus-retired
+# difference still stands. Listing it would overstate what is known; the
+# doc records the caveat.
+
+# Nothing consumes this to change a join. It exists so the comparison
+# tooling can render a warning where a row would otherwise join silently,
+# and so the finding cannot be lost. Fixing it properly means deciding what
+# the two suites claim about each other, which is not a decision a commit
+# should make on its own.
 
 
 SUITES = (

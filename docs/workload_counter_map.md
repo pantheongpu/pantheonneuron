@@ -77,6 +77,19 @@ The Neuron runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation, so th
 
 pantheongpu v1.0.19 replaced their units with a single `ai-ops/s`. Ten of its AI workloads shared one kernel body and six compiled to byte-identical SASS, so what it reports is generic synthetic throughput rather than the quantity each name suggests. The Neuron implementations count the real thing — tokens generated, cache updates applied, training steps completed.
 
+## Where the units match and the quantities do not
+
+4 workloads join cleanly on (Test Name, Unit) and should not be read as a comparison. This is the worse of the two failure modes: a failed join is visible, a successful join between unlike quantities is not.
+
+| Workload | Why the two numbers differ |
+|---|---|
+| `int_virus` | pantheongpu runs integer FMA chains counted from occupancy; this is a dense uint8 GEMM on the Tensor Engine. |
+| `omni_virus` | pantheongpu sums analytic per-engine op counts; this drives four engines in one dependent chain and reads effective_flops. |
+| `pulse_virus` | pantheongpu duty-cycles scalar fp32 fmaf chains; this duty-cycles a dense bf16 GEMM. |
+| `tensor_virus` | pantheongpu runs __hfma2 chains on the FP16 vector lanes with no matrix at all, counted analytically from occupancy; this is a dense systolic GEMM read from a hardware counter. |
+
+Nothing here changes what joins. See `docs/cross_platform_comparability.md` for the evidence and the three options, none of them taken.
+
 Copying `ai-ops/s` here would restore the join and compare unlike quantities, so these keep their own units and are listed in `registry.NOT_COMPARABLE_WITH_GPU`. `tests/test_score_schema.py` fails if a unit diverges without being declared there.
 
 ## Pinned problems

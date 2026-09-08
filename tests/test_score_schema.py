@@ -212,3 +212,44 @@ def test_report_round_trips_score_fields(mock_env, tmp_path, monkeypatch):
         written = json.load(handle)["test_results"][0]
     assert written["Unit"] == "tokens/s"
     assert written["Problem"]["hidden"] == 4096
+
+
+# -- same unit, different quantity -------------------------------------------
+
+def test_same_unit_different_quantity_is_disjoint_from_unit_divergence():
+    """Two different failure modes, two registers, no overlap.
+
+    NOT_COMPARABLE_WITH_GPU means the units diverge, so the join fails and
+    the absence is visible. This register means the opposite and worse
+    case: the unit matches, the join succeeds, and the quantities differ.
+    """
+    overlap = (set(registry.SAME_UNIT_DIFFERENT_QUANTITY)
+               & set(registry.NOT_COMPARABLE_WITH_GPU))
+    assert not overlap, overlap
+
+
+def test_same_unit_different_quantity_really_does_share_the_unit():
+    """If a unit ever diverges, the row belongs in the other register."""
+    for name in registry.SAME_UNIT_DIFFERENT_QUANTITY:
+        assert _get(name).unit == PANTHEONGPU_UNITS[name], (
+            f"{name}'s unit now diverges -- it belongs in "
+            "NOT_COMPARABLE_WITH_GPU instead"
+        )
+
+
+def test_every_flagged_name_is_a_real_workload_with_a_reason():
+    for name, reason in registry.SAME_UNIT_DIFFERENT_QUANTITY.items():
+        assert name in {w.name for w in registry.WORKLOADS}
+        assert len(reason) > 40, f"{name}: the reason must say what differs"
+
+
+def test_the_register_does_not_change_what_joins():
+    """It records a finding; it must not silently drop rows.
+
+    The comparison still has the same rows it had before, because deciding
+    what to do about this is not a decision a commit should make.
+    """
+    comparable = {name for name in PANTHEONGPU_UNITS
+                  if name not in registry.NOT_COMPARABLE_WITH_GPU}
+    assert set(registry.SAME_UNIT_DIFFERENT_QUANTITY) <= comparable
+    assert len(comparable) >= 12

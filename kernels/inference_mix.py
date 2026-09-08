@@ -130,11 +130,19 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
 
     ops = passes * 2 * m * n * k
 
+    rate = ops / elapsed if elapsed else 0.0
+
     return {
         "quantized_ops": ops,
         "passes": passes,
         "elapsed_s": elapsed,
-        "quantized_ops_per_s": ops / elapsed if elapsed else 0.0,
+        "quantized_ops_per_s": rate,
+        # The same number a reader can hold in their head. The registry
+        # declares quantized-ops/s and that stays the Score, but 1.8e13 is
+        # not a figure anyone checks against a datasheet -- the 2026-09-08
+        # run printed 18442342834453.8 and it says nothing at a glance.
+        # Recorded beside it, never instead of it.
+        "quantized_tops": rate / 1e12,
         "score_method": "workload",
         "analytic_basis": "quantised ops / wall time",
         **transformer_ops.output_check(

@@ -423,6 +423,11 @@ _PROVENANCE_KEYS = (
     "profiler_total_time_s",
     # The cross-check the profiler figure is meant to be compared against.
     "analytic_gbps",
+    # A raw ops/s rate nobody can read, restated at a human scale.
+    "quantized_tops",
+    # MoE dispatch: slots per expert, which is what the arithmetic scales
+    # with once routing is balanced.
+    "capacity",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",

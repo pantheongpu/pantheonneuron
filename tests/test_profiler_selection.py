@@ -322,3 +322,92 @@ def test_plan_coverage_is_none_without_a_plan():
 def test_plan_coverage_raises_when_the_counter_is_absent():
     with pytest.raises(profiler.ProfilerUnavailable, match="hbm_read_bytes"):
         profiler.plan_coverage({"total_time": 1.0}, "read", 1 << 30)
+
+
+# -- best match, not first acceptable ----------------------------------------
+#
+# Taking the first candidate over the floor made the declared Score
+# irreproducible: three runs of memory_read returned 256.17, 178.7 and
+# 119.19 GB/s, and the last cleared a 0.5 floor while diverging from its own
+# analytic cross-check by 56%.
+
+def test_the_best_covering_candidate_wins_not_the_first_acceptable(monkeypatch):
+    planned = 8 << 30
+    fake = _FakeCaptures({
+        # Clears the floor, but is plainly not the kernel's graph.
+        "/tmp/partial.neff": {"hbm_read_bytes": int(planned * 0.55),
+                              "total_time": 0.02},
+        "/tmp/real.neff": {"hbm_read_bytes": planned, "total_time": 0.03},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/partial.neff", "/tmp/real.neff"], "/tmp/s.ntff", "read", planned)
+
+    assert found["neff"] == "/tmp/real.neff"
+    assert found["plan_coverage"] == 1.0
+    assert fake.captured == ["/tmp/partial.neff", "/tmp/real.neff"]
+
+
+def test_an_exact_match_stops_the_search_immediately():
+    """Each further attempt is a real NEFF replay, so nothing beats 1.0."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/a.neff": {"hbm_read_bytes": planned, "total_time": 0.01},
+        "/tmp/b.neff": {"hbm_read_bytes": planned, "total_time": 0.01},
+    })
+    import pytest as _pytest
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(profiler, "read_counters", fake)
+        found = profiler.select_by_plan(
+            ["/tmp/a.neff", "/tmp/b.neff"], "/tmp/s.ntff", "read", planned)
+    assert found["candidates_tried"] == 1
+    assert fake.captured == ["/tmp/a.neff"]
+
+
+def test_a_near_miss_is_still_returned_but_says_how_near(monkeypatch):
+    """Nothing matched exactly; the closest above the floor is the answer.
+
+    The row carries plan_coverage, so a near miss reads as a near miss
+    rather than as a clean identification.
+    """
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/a.neff": {"hbm_read_bytes": int(planned * 0.60), "total_time": 0.01},
+        "/tmp/b.neff": {"hbm_read_bytes": int(planned * 0.85), "total_time": 0.01},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/a.neff", "/tmp/b.neff"], "/tmp/s.ntff", "read", planned)
+    assert found["neff"] == "/tmp/b.neff"
+    assert 0.84 < found["plan_coverage"] < 0.86
+    assert found["candidates_tried"] == 2
+
+
+def test_overshoot_is_ranked_by_distance_from_one(monkeypatch):
+    """A graph moving twice the plan is as wrong as one moving half."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/double.neff": {"hbm_read_bytes": planned * 2, "total_time": 0.01},
+        "/tmp/close.neff": {"hbm_read_bytes": int(planned * 0.9), "total_time": 0.01},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/double.neff", "/tmp/close.neff"], "/tmp/s.ntff", "read", planned)
+    assert found["neff"] == "/tmp/close.neff"
+
+
+def test_everything_below_the_floor_still_raises(monkeypatch):
+    """A best-of-a-bad-lot must not become a Score."""
+    planned = 8 << 30
+    fake = _FakeCaptures({
+        "/tmp/a.neff": {"hbm_read_bytes": int(planned * 0.38), "total_time": 0.01},
+        "/tmp/b.neff": {"hbm_read_bytes": int(planned * 0.06), "total_time": 0.01},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    with pytest.raises(profiler.ProfilerUnavailable, match="none of 2 candidate"):
+        profiler.select_by_plan(
+            ["/tmp/a.neff", "/tmp/b.neff"], "/tmp/s.ntff", "read", planned)
