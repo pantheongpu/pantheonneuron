@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import platform
+import statistics
 import sys
 import time
 import typing
@@ -189,8 +190,8 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     return plan["profiler"]
 
 
-def run_workload(workload, devices, duration: int, monitor_period: float) -> dict:
-    """Execute one workload and return its result row."""
+def _measure_once(workload, devices, duration: int, monitor_period: float) -> dict:
+    """One execution of one workload, scored. See ``run_workload``."""
     skip = workload.skip_reason(devices)
     if skip is not None:
         # A skipped row still declares its Unit and Problem, so a
@@ -209,6 +210,7 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
             # Declared and empty, like Score above: a cross-platform
             # comparison reads an explicit gap, not a missing key.
             "Measurement": None,
+            "Repeats": None,
             "Problem": dict(workload.problem) if workload.problem else None,
             "Telemetry": {"samples": 0},
         }
@@ -282,9 +284,104 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         "Unit": workload.unit,
         "Score Method": _score_method(workload, score),
         "Measurement": _provenance(workload),
+        # Filled in by run_workload when more than one repeat ran; declared
+        # here so every row has the same shape.
+        "Repeats": None,
         "Problem": dict(workload.problem) if workload.problem else None,
         "Telemetry": metrics,
     }
+
+
+def run_workload(workload, devices, duration: int, monitor_period: float,
+                 repeat: int = 1) -> dict:
+    """Execute one workload ``repeat`` times and return its result row.
+
+    **A single sample is not a measurement, and this suite spent a day
+    finding that out.** memory_read's declared profiler Score read 256.17,
+    178.7 and 119.19 GB/s on three separate runs of the same pinned problem
+    -- a 2x spread nobody would have seen, because every run reported one
+    number and moved on. The cause was real and is fixed, but the reason it
+    went unnoticed for so long is that nothing ever ran a workload twice.
+
+    So the row now carries the spread alongside the Score. ``Score`` is the
+    median of the successful repeats, which is what a reader should quote;
+    ``Repeats`` records how many ran, the range, and the coefficient of
+    variation, which is what tells them whether to trust it.
+
+    Repeats are separate executions with separate telemetry, not one
+    execution measured twice: a compile is amortised across them the way a
+    real run amortises it, and a monitor-sourced Score is read per repeat
+    from the counters that repeat produced.
+
+    A failure in any repeat fails the row. A workload that works four times
+    in five is not a workload that works.
+    """
+    rows = [_measure_once(workload, devices, duration, monitor_period)
+            for _ in range(max(1, repeat))]
+
+    row = rows[-1]
+    if len(rows) == 1:
+        return row
+
+    # A skip is a property of the hardware, not of the run: repeating it
+    # says nothing, so the first answer stands.
+    if row["Status"] == "SKIPPED":
+        return row
+
+    failed = [r for r in rows if r["Status"] == "FAIL"]
+    if failed:
+        row = dict(failed[0])
+        row["Detail"] = (
+            f"{len(failed)} of {len(rows)} repeats failed: {failed[0]['Detail']}"
+        )
+
+    scores = [r["Score"] for r in rows
+              if isinstance(r.get("Score"), (int, float))]
+    row["Repeats"] = _spread(scores, len(rows))
+    if scores and row["Status"] == "PASS":
+        row["Score"] = round(statistics.median(scores), 4)
+        unstable = _unstable(row["Repeats"])
+        if unstable:
+            row["Detail"] = "; ".join(filter(None, [row.get("Detail"), unstable]))
+    return row
+
+
+# Above this, repeats of the same pinned problem disagree enough that the
+# median is not a summary of them. Chosen to be loud rather than strict:
+# memory_read's three runs spanned 256.17 to 119.19 GB/s, a coefficient of
+# variation near 0.4, and that is the kind of thing a row has to say out
+# loud rather than average away.
+UNSTABLE_CV = 0.10
+
+
+def _spread(scores, attempted: int) -> dict:
+    """What the repeats actually did, so a Score can be judged."""
+    summary = {"attempted": attempted, "scored": len(scores)}
+    if not scores:
+        return summary
+    summary["min"] = round(min(scores), 4)
+    summary["max"] = round(max(scores), 4)
+    summary["median"] = round(statistics.median(scores), 4)
+    if len(scores) > 1:
+        mean = statistics.fmean(scores)
+        deviation = statistics.stdev(scores)
+        summary["stdev"] = round(deviation, 4)
+        # Relative, because these Scores span GB/s and tokens/s and a
+        # absolute threshold would mean something different for each.
+        summary["cv"] = round(deviation / mean, 4) if mean else None
+    return summary
+
+
+def _unstable(spread: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
+    """Say so when repeats of one problem do not agree."""
+    cv = spread.get("cv")
+    if not isinstance(cv, (int, float)) or cv <= UNSTABLE_CV:
+        return None
+    return (
+        f"repeats disagree: {spread['min']} to {spread['max']} "
+        f"(cv {cv:.2f} over {spread['scored']} runs), so the median is a "
+        "summary of unlike numbers rather than a measurement"
+    )
 
 
 # Workloads whose Score does not yet come from the source the registry
@@ -699,6 +796,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force the CPU mock backend (same as PANTHEON_NEURON_MOCK=1)",
     )
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Run each workload this many times and report the spread "
+             "(default: 1). A single sample cannot show that a Score is "
+             "irreproducible, which is how a 2x swing in memory_read went "
+             "unnoticed.",
+    )
+    parser.add_argument(
         "--list", action="store_true", help="List workloads and exit"
     )
     parser.add_argument(
@@ -750,10 +856,16 @@ def main(argv=None) -> int:
 
     for workload in workloads:
         print(f"[PANTHEON-NEURON] -> {workload.name}")
-        row = run_workload(workload, devices, args.duration, args.monitor_period)
+        row = run_workload(workload, devices, args.duration,
+                           args.monitor_period, repeat=args.repeat)
         results.append(row)
         detail = f" ({row['Detail']})" if row.get("Detail") else ""
         print(f"[PANTHEON-NEURON]    {row['Status']}{detail}")
+        spread = row.get("Repeats") or {}
+        if spread.get("scored", 0) > 1:
+            print(f"[PANTHEON-NEURON]    {spread['scored']} repeats: "
+                  f"{spread['min']} to {spread['max']}, "
+                  f"median {spread['median']}, cv {spread.get('cv')}")
 
     if not args.no_report:
         path = write_report(snapshot, results, run_id)

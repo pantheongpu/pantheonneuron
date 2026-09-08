@@ -439,6 +439,27 @@ Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
 workload), `--device` (indices or `all`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
+### Repeats
+
+Every Score in this README is from a single run, and one of the few
+quantities ever measured twice turned out not to be reproducible:
+`memory_read`'s declared profiler Score read 256.17, 178.7 and 119.19 GB/s
+on three runs of the same pinned problem. The cause was real and is fixed,
+but nothing would have caught it, because nothing ever ran a workload twice.
+
+```bash
+python pantheon_neuron.py --test memory_read --duration 60 --repeat 5
+```
+
+The row then carries `Repeats` beside the Score: the range, the median and
+the coefficient of variation. **`Score` becomes the median**, which is what
+to quote; the spread is what says whether to quote it at all. Above a
+coefficient of variation of 0.10 the row says so in its `Detail`, because a
+median of unlike numbers is not a measurement.
+
+A failure in any repeat fails the row. A workload that works four times in
+five is not a workload that works.
+
 ### What `--test all` cannot measure
 
 The profiler needs a NeuronCore of its own to replay a NEFF, and the Neuron
