@@ -135,9 +135,16 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         leg_started = time.perf_counter()
         while time.perf_counter() < min(share, deadline):
             if direction == "h2d":
-                # copy_ into the resident tensor rather than rebinding it:
-                # `resident = host.to(device)` would allocate a new device
-                # buffer per pass, which is the same defect the d2h leg had.
+                # SUSPECT: this reads as "copy into the existing buffer, so
+                # no per-pass allocation", and that rests on in-place
+                # semantics XLA does not have. An assignment lowers to a
+                # dynamic-update-slice that produces a *new* tensor -- see
+                # docs/xla_has_no_in_place_write.md, where kv_cache_churn
+                # measured it -- so this leg may allocate 1 GiB a pass
+                # anyway. The fix it belongs to moved d2h 1.0 -> 1.1 and
+                # h2d 6.0 -> 6.4 GB/s, which is consistent with it having
+                # changed nothing. Unresolved, and it needs a hardware run
+                # rather than a third guess.
                 resident.copy_(host if passes % 2 == 0 else host_alt)
                 # Lazy: the copy is queued, so the barrier is what makes
                 # this a transfer measurement rather than a submission one.

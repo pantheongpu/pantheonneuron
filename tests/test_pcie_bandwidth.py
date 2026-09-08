@@ -214,3 +214,21 @@ def test_the_floor_is_where_it_is_documented():
         "h2d": {"gbps": 8.0}, "d2h": {"gbps": 2.1},
     })
     assert flagged is not None and quiet is None
+
+
+def test_the_in_place_assumption_is_flagged_not_asserted():
+    """The h2d leg's justification rests on semantics XLA does not have.
+
+    kv_cache_churn measured that an assignment produces a new tensor
+    rather than writing in place. The same reasoning underpins this leg's
+    "no per-pass allocation" claim, and the fix it belongs to moved the
+    numbers by noise. Until a hardware run settles it, the source must say
+    so rather than claim the allocation was avoided.
+    """
+    import inspect
+
+    source = inspect.getsource(pcie_bandwidth.run)
+    assert "SUSPECT" in source
+    assert "xla_has_no_in_place_write" in source
+    # The old, confident phrasing must not come back.
+    assert "would allocate a new device\n                # buffer per pass" not in source
