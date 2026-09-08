@@ -9,13 +9,15 @@ values already resident in SBUF are not re-read. An analytic figure
 a large divergence between the two means the kernel is not doing what it
 looks like it is doing.
 
-STATUS: UNTESTED ON HARDWARE. Written against the NKI programming model
-but never executed on a Neuron device -- there was no instance available
-when this was written. The tile-loop structure and byte accounting are
-covered by tests that run without hardware; the NKI API calls themselves
-are not. Treat the first hardware run as a bring-up, not a measurement,
-and see `verify_against_analytic` for the check that will catch a kernel
-that compiles but reads nothing.
+STATUS: verified on trn1.2xlarge 2026-08-27 and inf2.xlarge 2026-09-07.
+The read-coverage check has returned exactly 1.0 on both parts, so the
+kernel reads every byte the plan describes. Measured 264 GB/s on trn1 at
+1 GiB and 236.9 GB/s on inf2 at the pinned 8 GiB.
+
+Its declared Score source, however, has never produced a number: the
+profiler needs a NeuronCore to replay the NEFF and the workload held them
+all, so every run so far has reported the analytic figure. A core is now
+reserved for it (kernels/cores.py), untested on hardware.
 """
 
 import os
@@ -101,6 +103,10 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         (rows, plan["free"]), dtype=torch_dtype, device=device
     )
     xm.mark_step()
+
+    # Taken before the kernel compiles, so the profiler can tell this
+    # kernel's graph apart from every other NEFF in the compiler's cache.
+    compile_started = time.time()
 
     # Warm up so compilation is not inside the timed region -- and warm up
     # the graph the loop actually runs. Holding the result changes the
@@ -192,7 +198,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # figure rather than aborting the run -- but the row records which was
     # used, so a provisional number is never mistaken for the real one.
     try:
-        result.update(_profile(workdir))
+        result.update(_profile(workdir, compile_started, plan["actual_bytes"]))
     except profiler.ProfilerUnavailable as error:
         result["warning"] = f"profiler unavailable, Score is analytic: {error}"
         return result
@@ -203,11 +209,17 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     return result
 
 
-def _profile(workdir: str) -> dict:
-    """Capture a profile and read the declared counters out of it."""
-    neff = profiler.find_neff(workdir)
+def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
+    """Capture a profile and read the declared counters out of it.
+
+    ``since`` and ``planned_bytes`` both exist to make sure the counters
+    came from this kernel: the first narrows which graph is captured, the
+    second refuses the result if it plainly did not.
+    """
+    neff = profiler.find_neff(workdir, since=since)
     session = os.path.join(workdir, "memory_read.ntff")
     counters = profiler.read_counters(neff, session)
+    profiler.verify_profile_covers_plan(counters, "read", planned_bytes)
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "read"),
         # Matches registry.PROFILER exactly, so "declared source" and

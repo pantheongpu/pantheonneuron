@@ -120,6 +120,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # inside the timed region. memory_read measured that on inf2.xlarge
     # 2026-09-07: a 45 s run reported 478 s and 0.0208 GB/s because a
     # seven-minute compile landed in the middle of the measurement.
+    compile_started = time.time()
     warm = kernel(source)
     xm.mark_step()
     xm.wait_device_ops()
@@ -207,7 +208,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         return result
 
     try:
-        result.update(_profile(workdir))
+        result.update(_profile(workdir, compile_started, plan["actual_bytes"]))
     except profiler.ProfilerUnavailable as error:
         result["warning"] = f"profiler unavailable, Score is analytic: {error}"
         return result
@@ -224,10 +225,17 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     return result
 
 
-def _profile(workdir: str) -> dict:
-    neff = profiler.find_neff(workdir)
+def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
+    """Capture a profile and read the declared counters out of it.
+
+    ``since`` and ``planned_bytes`` both exist to make sure the counters
+    came from this kernel: the first narrows which graph is captured, the
+    second refuses the result if it plainly did not.
+    """
+    neff = profiler.find_neff(workdir, since=since)
     session = os.path.join(workdir, "memory_write.ntff")
     counters = profiler.read_counters(neff, session)
+    profiler.verify_profile_covers_plan(counters, "write", planned_bytes)
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "write"),
         "score_method": registry.PROFILER,

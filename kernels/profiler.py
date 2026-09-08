@@ -127,15 +127,24 @@ DEFAULT_WORKDIRS = (
 )
 
 
-def find_neff(workdir: str) -> str:
+def find_neff(workdir: str, since: typing.Optional[float] = None) -> str:
     """Locate the compiled NEFF a capture needs.
 
     Searches the caller's workdir first, then the compiler's own default
     locations -- an @nki.jit kernel ignores compiler_workdir and writes to
     its own tree, so looking only where the caller asked finds nothing.
 
-    Returns the most recently modified NEFF: a session may compile several
-    (one per distinct input shape), and the newest is the one just run.
+    ``since`` is a timestamp taken before the kernel compiled, and narrows
+    the search to graphs built after it. Without it this returns the newest
+    NEFF anywhere, which is a bad guess for two reasons seen on inf2.xlarge
+    2026-09-07: a single run compiles several graphs and the last one is
+    often a trivial epilogue -- capturing one reported ``hbm_write_bytes:
+    2`` against an 8 GiB plan -- and a cache hit leaves the kernel's own
+    NEFF with an old mtime while some unrelated graph compiles fresh.
+
+    Narrowing helps but cannot be trusted on its own, which is why
+    ``verify_profile_covers_plan`` checks the counters against the work the
+    plan describes rather than assuming this picked right.
     """
     candidates = []
     for root in (workdir, *DEFAULT_WORKDIRS):
@@ -149,6 +158,12 @@ def find_neff(workdir: str) -> str:
                         candidates.append((os.path.getmtime(path), path))
                     except OSError:
                         continue
+
+    if since is not None:
+        fresh = [entry for entry in candidates if entry[0] >= since]
+        if fresh:
+            candidates = fresh
+
     if candidates:
         return max(candidates)[1]
 
@@ -197,6 +212,43 @@ def summary(neff_path: str, session_path: str) -> typing.Dict[str, typing.Any]:
 def read_counters(neff_path: str, session_path: str) -> typing.Dict[str, typing.Any]:
     capture(neff_path, session_path)
     return summary(neff_path, session_path)
+
+
+def verify_profile_covers_plan(
+    counters: typing.Mapping[str, typing.Any],
+    direction: str,
+    expected_bytes: int,
+    floor: float = 0.5,
+) -> None:
+    """Reject a profile that did not come from the kernel we measured.
+
+    ``find_neff`` picks a graph out of a directory the compiler shares with
+    every other compile on the machine, and it can pick wrong: a run builds
+    several graphs, and on inf2.xlarge 2026-09-07 a capture of the newest
+    reported ``hbm_write_bytes: 2`` for a kernel whose plan moves 8 GiB.
+
+    Nothing downstream would have noticed. The bytes divide by a real
+    ``total_time`` and produce a real-looking GB/s, which is worse than an
+    error because it is publishable. So the counters are checked against the
+    work the plan describes, and a profile carrying less than ``floor`` of
+    the planned bytes is refused -- which degrades the Score to the analytic
+    figure and says so, rather than reporting another graph's traffic.
+
+    One NEFF execution moves the plan's bytes once, so the comparison is
+    against a single pass, not the whole timed loop.
+    """
+    key = {"read": "hbm_read_bytes", "write": "hbm_write_bytes"}[direction]
+    measured = counters.get(key)
+    if not isinstance(measured, (int, float)):
+        raise ProfilerUnavailable(f"{key} missing from profiler output")
+    if expected_bytes <= 0:
+        return
+    if measured < expected_bytes * floor:
+        raise ProfilerUnavailable(
+            f"profiled graph moved {int(measured)} bytes against a plan of "
+            f"{expected_bytes} -- this is not the kernel that was measured, "
+            "so its counters describe someone else's graph"
+        )
 
 
 def bandwidth_gbps(counters: typing.Mapping[str, typing.Any],
