@@ -143,7 +143,7 @@ def test_both_legs_copy_into_a_preallocated_destination():
     assert loop.count("copy_") == 2, "one copy_ per direction"
 
     # Both destinations exist before the timed region begins.
-    assert "landing = torch . empty" in setup
+    assert "landing" in setup and "host_buffer" in setup
     assert "resident = host . to ( device )" in setup
 
 
@@ -168,10 +168,47 @@ def test_the_symmetry_check_fails_the_code_it_was_written_for():
 
 
 def test_the_result_records_how_the_number_was_produced():
-    """A row without this key predates the fix and is not comparable."""
+    """A row without these keys predates a fix and is not comparable.
+
+    Three methodologies have now produced a d2h figure -- per-pass
+    allocation, preallocated pageable, preallocated pinned -- and they are
+    not comparable with each other. The row has to say which it was.
+    """
     import inspect
 
-    assert '"buffers": "preallocated"' in inspect.getsource(pcie_bandwidth.run)
+    source = inspect.getsource(pcie_bandwidth.run)
+    for key in ('"buffers": "preallocated"', '"host_source_pinned"',
+                '"host_landing_pinned"', '"h2d_sources_alternate"'):
+        assert key in source, key
+
+
+def test_pinning_is_reported_as_achieved_not_as_requested():
+    """pin_memory() is a CUDA-shaped API and may not apply on this stack.
+
+    If it silently no-ops, the bounce-buffer explanation for the d2h
+    asymmetry is still live -- so the flag has to come from whether the call
+    succeeded, not from whether it was attempted.
+    """
+    import inspect
+
+    source = inspect.getsource(pcie_bandwidth.run)
+    assert "def host_buffer(" in source
+    assert "except (RuntimeError, NotImplementedError, AssertionError)" in source
+    assert "return plain, False" in source
+
+
+def test_the_h2d_leg_does_not_send_identical_bytes_every_pass():
+    """Otherwise an inflated h2d and a depressed d2h look the same.
+
+    If the runtime can serve a repeated identical copy without moving
+    bytes, the 6.0 GB/s is the wrong number rather than the 1.1 -- and the
+    ratio alone cannot tell those apart.
+    """
+    import inspect
+
+    code = _code_only(inspect.getsource(pcie_bandwidth.run))
+    loop = code[code.index("while time . perf_counter"):]
+    assert "host_alt" in loop, "h2d must alternate its source buffer"
 
 
 def test_the_asymmetry_warning_points_at_the_harness_first():

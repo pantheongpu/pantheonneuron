@@ -42,13 +42,70 @@ $PY -c "import neuronxcc, torch; print('neuronxcc', neuronxcc.__version__, '| to
 # the whole reporting path, which is the only way to exercise the Score
 # sources: the profiler needs the reserved core the orchestrator sets up,
 # and the monitor Score is read after the monitor stops.
+#
+# Every single-device workload is here. Until 2026-09-08 this list held four
+# names and 18 of 26 workloads had never touched hardware at all -- which is
+# how omni_virus shipped a NameError that only its first real run could have
+# found. A workload absent from this list is a workload nobody is checking.
+#
+# The two collectives are absent because they cannot run: they need 2+
+# devices and trn1.32xlarge needs 128 vCPUs against a granted 64. They skip
+# themselves at runtime, so including them would print a skip rather than
+# tell us anything.
+#
+# Each name is timed out and failures are recorded rather than fatal: a
+# workload that fails is a result, and it must not cost the run every
+# workload after it.
 # ---------------------------------------------------------------------------
-for workload in memory_read memory_write pcie_bandwidth allocation_fragmentation; do
+ORCHESTRATED=${ORCHESTRATED:-"
+  memory_read memory_write pcie_bandwidth allocation_fragmentation
+  tensor_virus int_virus pulse_virus transformer_virus omni_virus
+  graph_replay
+  llm_prefill llm_decode kv_cache_churn
+  fused_attention quantized_gemm moe_router speculative_decode serving_mix
+  rag_embedding vision_encoder
+  transformer_train_step
+  memory_read_agg memory_write_agg
+"}
+
+# Per-workload ceiling. The pinned 8192^3 compiles in about 80s now that the
+# accumulation loop is rolled, but the transformer family has never compiled
+# at all and its graphs are deeper, so this is generous on purpose. It is a
+# ceiling, not a budget: a workload that hits it is telling us something.
+WORKLOAD_TIMEOUT=${WORKLOAD_TIMEOUT:-2400}
+
+for workload in $ORCHESTRATED; do
   hr "orchestrated: $workload (pinned problem)"
-  timeout 2400 $PY pantheon_neuron.py --test "$workload" --duration "$DURATION" 2>&1 \
+  timeout "$WORKLOAD_TIMEOUT" $PY pantheon_neuron.py \
+      --test "$workload" --duration "$DURATION" 2>&1 \
     | grep -vE 'CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc' \
     | tail -6
+  status=${PIPESTATUS[0]}
+  if [ "$status" -eq 124 ]; then
+    echo "[VALIDATE] $workload TIMED OUT after ${WORKLOAD_TIMEOUT}s"
+  elif [ "$status" -ne 0 ]; then
+    echo "[VALIDATE] $workload exited $status"
+  fi
 done
+
+# ---------------------------------------------------------------------------
+# The NEFF search, against a cache that is no longer empty.
+#
+# The 2026-09-08 run scored from neuron-profile on the first candidate, from
+# a candidate list of one: a fresh instance with PANTHEON_NEURON_WORKDIR set
+# holds exactly one NEFF, so the ranking had nothing to rank and the search
+# -- the actual fix -- went unexercised. Every workload above has now
+# compiled into the same tree, so running memory_read again here asks the
+# question the first pass could not: with many graphs to choose between,
+# does the plan check still find ours?
+# ---------------------------------------------------------------------------
+hr "NEFF search against a warm compile cache"
+echo "NEFFs now on this machine:"
+find "$PANTHEON_NEURON_WORKDIR" /tmp/no-user/neuroncc_compile_workdir \
+     /var/tmp/neuron-compile-cache -name '*.neff' 2>/dev/null | wc -l
+timeout "$WORKLOAD_TIMEOUT" $PY pantheon_neuron.py \
+    --test memory_read --duration "$DURATION" 2>&1 \
+  | grep -vE 'CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc' | tail -4
 
 # ---------------------------------------------------------------------------
 # Reduced-shape kernel runs. Direct calls, so no Score is produced and none
@@ -100,7 +157,7 @@ $PY - <<'PYEOF'
 import glob, json, os
 
 reports = sorted(glob.glob("database/pantheon_neuron_report_*.json"),
-                 key=os.path.getmtime)[-6:]
+                 key=os.path.getmtime)
 for path in reports:
     with open(path, encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -108,6 +165,13 @@ for path in reports:
         if row["Test Name"] not in ("memory_read", "memory_write"):
             continue
         print(f"  {row['Test Name']:14} via {row.get('Score Method')}")
+        measured = row.get("Measurement") or {}
+        tried = measured.get("profiler_candidates_tried")
+        if tried is not None:
+            print(f"    candidate {tried} of "
+                  f"{measured.get('profiler_candidates_available')}, "
+                  f"coverage {measured.get('profiler_plan_coverage')}, "
+                  f"graph {measured.get('profiler_neff')}")
         detail = (row.get("Detail") or "").strip()
         if detail:
             print(f"    {detail[:200]}")
@@ -125,8 +189,10 @@ hr "summary: which Score sources fired"
 $PY - <<'PYEOF'
 import glob, json, os
 
+# Every report this run wrote, not the last four: the orchestrated list is
+# now the whole registry, so a window that truncates hides workloads.
 reports = sorted(glob.glob("database/pantheon_neuron_report_*.json"),
-                 key=os.path.getmtime)[-4:]
+                 key=os.path.getmtime)
 if not reports:
     print("  no reports written")
 seen = {}
@@ -147,7 +213,16 @@ for name, row in sorted(seen.items()):
 
 declared = [r for r in seen.values()
             if r.get("Score Method") in ("neuron-profile", "neuron-monitor")]
-print(f"\n  Scores from a declared hardware source: {len(declared)} of {len(seen)}")
+passed = [r for r in seen.values() if r["Status"] == "PASS"]
+failed = [r for r in seen.values() if r["Status"] == "FAIL"]
+print(f"\n  Workloads run: {len(seen)}  "
+      f"PASS {len(passed)}  FAIL {len(failed)}  "
+      f"SKIP {len(seen) - len(passed) - len(failed)}")
+print(f"  Scores from a declared hardware source: {len(declared)} of {len(seen)}")
+if failed:
+    print("\n  Failures:")
+    for r in failed:
+        print(f"    {r['Test Name']:26} {(r.get('Detail') or '')[:110]}")
 PYEOF
 
 hr "done"
