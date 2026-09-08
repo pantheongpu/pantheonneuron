@@ -34,6 +34,7 @@ verified shapes says the smaller one is launch-overhead bound, so neither
 figure should be read as this part's compute capability.
 """
 
+import os
 import time
 import typing
 
@@ -47,6 +48,25 @@ from . import nki_backend, tiling
 CONTRACTION = tiling.PARTITION      # K per matmul call
 STATIONARY = tiling.PARTITION       # M per matmul call
 MOVING = 512                        # N per matmul call
+
+# Which tiling the kernel uses. Both compute the same product; they differ
+# only in how often an operand tile is re-read from HBM.
+#
+#   "streaming"  both operands loaded inside the contraction loop. Every
+#                (row, col) pair re-reads every tile it touches, so operand
+#                traffic scales as n^3 -- the same order as the FLOPs, which
+#                leaves arithmetic intensity flat at ~102 FLOP/byte no
+#                matter how large the problem gets.
+#   "blocked"    one column's rhs tiles are held in SBUF across the whole
+#                row loop, so each is read once per column instead of once
+#                per (row, col). At 8192^3 that is 10.74 GB/pass -> 2.28,
+#                and intensity 102 -> 482 FLOP/byte, for 8 MiB of SBUF.
+#
+# This exists as a switch rather than a replacement because the streaming
+# path is the one with hardware behind it, and a kernel that computes the
+# wrong product quickly is worse than one that computes the right product
+# slowly. tools/compare_tiling.py measures both and checks they agree.
+TILING = os.environ.get("PANTHEON_NEURON_GEMM_TILING", "blocked")
 
 
 def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
@@ -102,7 +122,7 @@ def accumulator_dtype(dtype: str, nl):
     return nl.int32 if tiling.is_integer(dtype) else nl.float32
 
 
-def _build_kernel(dtype: str = "bf16"):
+def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = None):
     """Import NKI and construct the kernel.
 
     Lazy so this module can be imported, and its tile maths tested, on a
@@ -112,6 +132,14 @@ def _build_kernel(dtype: str = "bf16"):
     the tensors. int_virus runs this same kernel over int8 inputs, which is
     the whole reason the accumulator is a parameter rather than a literal.
     """
+    # Checked before the toolchain import, so a bad strategy fails on any
+    # machine rather than only on one with the Neuron SDK installed.
+    strategy = tiling_strategy or TILING
+    if strategy not in ("streaming", "blocked"):
+        raise ValueError(
+            f"unknown tiling {strategy!r}; expected 'streaming' or 'blocked'"
+        )
+
     import neuronxcc.nki as nki  # type: ignore
     import neuronxcc.nki.language as nl  # type: ignore
 
@@ -202,7 +230,74 @@ def _build_kernel(dtype: str = "bf16"):
                 )
         return out
 
-    return nki, nl, tensor_virus_kernel
+    @nki.jit
+    def tensor_virus_blocked(lhs_t, rhs):
+        """Same product, one column's rhs tiles held in SBUF.
+
+        The streaming kernel above re-reads every operand tile for every
+        (row, col) pair, so operand traffic scales as n^3 -- the same order
+        as the FLOPs. Arithmetic intensity is therefore flat at about 102
+        FLOP/byte at any shape, and at the pinned 8192^3 the kernel is
+        bound by HBM bandwidth rather than by the Tensor Engine it is named
+        for: measured operand traffic 256.4 GB/s against memory_read's
+        256.2 GB/s on the same part, a match to within 0.1%.
+
+        Hoisting the rhs tiles out of the row loop is what breaks that.
+        Each is then read once per column instead of once per (row, col):
+        10.74 GB/pass becomes 2.28 at 8192^3, intensity 102 becomes 482,
+        and the cost is one SBUF block of k_tiles x CONTRACTION x MOVING --
+        8 MiB at the pinned shape, against roughly 24 MB of SBUF.
+
+        lhs is deliberately left streaming. Holding it too would need the
+        whole 128 MiB left operand resident, and the rhs tile is four times
+        the size of the lhs tile, so hoisting rhs alone takes most of the
+        win for a fraction of the space.
+        """
+        k, m = lhs_t.shape
+        _, n = rhs.shape
+        k_tiles = k // CONTRACTION
+
+        out = nl.ndarray((m, n), dtype=accumulate_into, buffer=nl.shared_hbm)
+
+        for col in nl.affine_range(n // MOVING):
+            # This column's slice of the moving operand, read once and
+            # reused by every row below.
+            rhs_block = nl.ndarray(
+                (k_tiles, nl.par_dim(CONTRACTION), MOVING),
+                dtype=rhs.dtype, buffer=nl.sbuf,
+            )
+            for depth in nl.affine_range(k_tiles):
+                rhs_block[depth] = nl.load(
+                    rhs[depth * CONTRACTION:(depth + 1) * CONTRACTION,
+                        col * MOVING:(col + 1) * MOVING]
+                )
+
+            for row in nl.affine_range(m // STATIONARY):
+                acc = nl.zeros(
+                    (nl.par_dim(STATIONARY), MOVING),
+                    dtype=accumulate_into, buffer=nl.psum,
+                )
+                # Rolled, like the streaming kernel: this accumulates into
+                # `acc`, and unrolling it is what made the pinned shape
+                # uncompilable.
+                for depth in nl.sequential_range(k_tiles):
+                    lhs_tile = nl.load(
+                        lhs_t[depth * CONTRACTION:(depth + 1) * CONTRACTION,
+                              row * STATIONARY:(row + 1) * STATIONARY]
+                    )
+                    acc += nl.matmul(lhs_tile, rhs_block[depth],
+                                     transpose_x=True)
+
+                nl.store(
+                    out[row * STATIONARY:(row + 1) * STATIONARY,
+                        col * MOVING:(col + 1) * MOVING],
+                    value=acc,
+                )
+        return out
+
+    chosen = (tensor_virus_blocked if strategy == "blocked"
+              else tensor_virus_kernel)
+    return nki, nl, chosen
 
 
 def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
@@ -219,7 +314,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
     dtype = str(problem["dtype"])
     plan = gemm_plan(problem["shape"], dtype)
-    _, _, kernel = _build_kernel(dtype)
+    strategy = str(problem.get("tiling") or TILING)
+    _, _, kernel = _build_kernel(dtype, strategy)
 
     device = xm.xla_device()
     torch_dtype = tiling.torch_dtype(dtype)
@@ -287,6 +383,10 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
             else "FLOPs issued / wall time"
         ),
         "warning": None,
+        # Which tiling produced this figure. The two differ by ~4.7x in
+        # operand traffic at the pinned shape, so a number without this
+        # label is not comparable with one that has it.
+        "tiling": strategy,
         "plan": plan,
         # 1.0 means both sampled elements equal K exactly.
         "product_verified_ratio": product_verified,

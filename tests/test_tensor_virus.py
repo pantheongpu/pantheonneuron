@@ -9,6 +9,7 @@ real GEMM from one the compiler reshaped.
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import registry, tensor_virus, tiling
 from neuron_device import NeuronDevice
 
@@ -276,27 +277,84 @@ def test_an_integer_run_is_labelled_tops_not_tflops():
 def test_the_accumulation_loop_is_not_unrolled():
     """The pinned 8192^3 problem compiles only because this loop is rolled.
 
-    The `depth` loop accumulates into `acc`, which is a loop-carried
-    dependency; NKI reserves `affine_range` for loops without one, and it
-    fully unrolls. The unroll is cubic in the shape -- 1,024 matmul calls at
-    2048^3 against 65,536 at 8192^3 -- which is why the pinned problem never
+    The `depth` loop that accumulates into `acc` carries a dependency; NKI
+    reserves `affine_range` for loops without one, and it fully unrolls.
+    The unroll is cubic in the shape -- 1,024 matmul calls at 2048^3
+    against 65,536 at 8192^3 -- which is why the pinned problem never
     compiled and why no compute workload had ever produced the
     neuron-monitor Score its registry entry declares.
 
-    Checked textually because reproducing it needs a compiler. The two outer
-    loops stay affine: they are genuinely independent, and rolling them
-    would cost throughput for nothing.
+    Both kernels must obey it, so this counts accumulation loops rather
+    than trusting that a new one inherited the property.
     """
-    import inspect
+    source = sourcecheck.function_code(tensor_virus._build_kernel)
 
-    source = inspect.getsource(tensor_virus._build_kernel)
-    assert "for depth in nl.sequential_range(" in source, (
-        "the accumulation loop must stay rolled or the pinned shape stops "
-        "compiling"
+    # Every loop that accumulates into `acc` is rolled...
+    assert source.count("for depth in nl . sequential_range (") == 2, (
+        "each kernel needs exactly one rolled accumulation loop"
     )
-    assert "for depth in nl.affine_range(" not in source
-    # The independent loops are unchanged.
-    assert source.count("nl.affine_range(") == 2
+    # ...and none of them is the unrolling kind.
+    assert "for depth in nl . affine_range ( k // CONTRACTION )" not in source
+
+
+def test_the_blocked_kernel_preloads_and_reuses_the_moving_operand():
+    """The whole point of it: rhs read once per column, not per (row, col).
+
+    The load must sit outside the row loop, or nothing has changed.
+    """
+    source = sourcecheck.function_code(tensor_virus._build_kernel)
+    blocked = source[source.index("def tensor_virus_blocked"):]
+
+    assert "rhs_block = nl . ndarray" in blocked
+    assert "buffer = nl . sbuf" in blocked
+    # The preload precedes the row loop, and the matmul reads the block.
+    assert blocked.index("rhs_block [ depth ] = nl . load") < blocked.index(
+        "for row in nl . affine_range")
+    assert "nl . matmul ( lhs_tile , rhs_block [ depth ]" in blocked
+    # lhs is still streamed: holding it too would need the whole operand.
+    assert "lhs_tile = nl . load" in blocked
+
+
+@pytest.mark.parametrize("strategy", ["streaming", "blocked"])
+def test_both_tilings_are_selectable(strategy, monkeypatch):
+    monkeypatch.setenv("PANTHEON_NEURON_GEMM_TILING", strategy)
+    import importlib
+    reloaded = importlib.reload(tensor_virus)
+    assert reloaded.TILING == strategy
+    monkeypatch.delenv("PANTHEON_NEURON_GEMM_TILING", raising=False)
+    importlib.reload(tensor_virus)
+
+
+def test_an_unknown_tiling_is_refused():
+    with pytest.raises(ValueError, match="unknown tiling"):
+        tensor_virus._build_kernel("bf16", "sideways")
+
+
+def test_the_blocked_sbuf_block_fits_on_chip():
+    """8 MiB against roughly 24 MB of SBUF at the pinned shape."""
+    plan = tensor_virus.gemm_plan([8192, 8192, 8192], "bf16")
+    block_bytes = (plan["k_tiles"] * tensor_virus.CONTRACTION
+                   * tensor_virus.MOVING * 2)
+    assert block_bytes == 8 * 1024**2
+    assert block_bytes < 20 * 1024**2, "must leave room for lhs and psum"
+
+
+def test_blocking_raises_arithmetic_intensity_where_streaming_cannot():
+    """Streaming's intensity is flat in the shape; blocking's grows."""
+    def intensity(n, blocked):
+        plan = tensor_virus.gemm_plan([n, n, n], "bf16")
+        tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+        lhs = tiles * tensor_virus.CONTRACTION * tensor_virus.STATIONARY * 2
+        rhs_reads = (plan["n_tiles"] * plan["k_tiles"] if blocked else tiles)
+        rhs = rhs_reads * tensor_virus.CONTRACTION * tensor_virus.MOVING * 2
+        return (2 * n ** 3) / (lhs + rhs)
+
+    streaming = [intensity(n, False) for n in (2048, 4096, 8192)]
+    blocked = [intensity(n, True) for n in (2048, 4096, 8192)]
+
+    assert max(streaming) / min(streaming) < 1.01, "flat, which is the defect"
+    assert blocked[-1] > 4 * streaming[-1]
+    assert blocked[-1] > blocked[0], "and it improves with size"
 
 
 def test_the_unroll_is_cubic_in_the_shape():
