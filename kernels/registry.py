@@ -476,6 +476,25 @@ NOT_COMPARABLE_WITH_GPU = {
 GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 
 
+# NOT_COMPARABLE_WITH_GPU covers one failure mode: the units diverge, so the
+# join fails and the absence is visible. There is a second, worse one that
+# has no register here -- names where the unit matches, the join succeeds,
+# and the two numbers measure different quantities.
+#
+# It applies to the compute viruses. pantheongpu's tensor_virus is __hfma2
+# chains on the FP16 vector lanes with no matrix at all, counted analytically
+# from occupancy; Neuron's is a dense systolic GEMM read from a hardware
+# counter. Same name, same TFLOPS, different functional unit and different
+# provenance -- and the bias has a direction, because it puts the GPU's
+# secondary math path against Neuron's primary one.
+#
+# Deliberately not encoded as data yet: deciding what to do about it changes
+# what the two suites claim about each other, and probably means work in the
+# other repo. The evidence is written up in
+# docs/cross_platform_comparability.md so the decision can be made from
+# measurements rather than from memory.
+
+
 SUITES = (
     "baseline",
     "core",
