@@ -42,9 +42,64 @@ Still unverified:
 | Workload | Kernel | Score source |
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ✅ **verified on trn1.2xlarge** | `neuron-profile`, analytic fallback |
-| `memory_write` | ⚠️ written; primitives verified, arrangement untested | `neuron-profile`, analytic fallback |
-| the other 23 | ❌ none | — |
+| `memory_read` | ✅ **verified on trn1.2xlarge and inf2.xlarge** | `neuron-profile`, analytic fallback |
+| `memory_write` | ✅ **verified on inf2.xlarge**, but not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
+| `tensor_virus` | ✅ **verified on inf2.xlarge** at 1024³/2048³, not at the pinned 8192³ | `neuron-monitor`, analytic fallback |
+| `int_virus` | ⚠️ written; same GEMM over int8, untested | `neuron-monitor`, analytic fallback |
+| `pulse_virus` | ⚠️ written; tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor`, analytic fallback |
+| `pcie_bandwidth` | ⚠️ written; no NKI, host transfers, untested | workload |
+| `allocation_fragmentation` | ⚠️ written; no NKI, allocator churn, untested | workload |
+| the other 18 | ❌ none | — |
+
+The three written after the bring-up deliberately avoid unverified NKI
+primitives. `pulse_virus` reuses `tensor_virus`'s kernel and adds only
+wall-clock duty cycling; `pcie_bandwidth` and `allocation_fragmentation`
+use no NKI at all, reaching the runtime through ordinary device tensors.
+That keeps the untested surface to the arrangement rather than the API,
+which is where the 2026-09-07 bugs actually lived.
+
+`pulse_virus`'s Score is **not** comparable with `tensor_virus`'s: the
+monitor averages `effective_flops` over a run that is half idle by
+construction, so a healthy part reports roughly the duty cycle times the
+sustained figure. The kernel records a loaded-only figure beside it for
+the comparison that does make sense.
+
+### What the 2026-09-07 inf2.xlarge bring-up changed
+
+Three bugs, each of which produced a plausible-looking number rather than an
+error, and none of which any test could have caught:
+
+**The warm-up compiled a different graph than the loop ran.** Holding the
+kernel result makes the output live at the `mark_step()` cut, so a warm-up
+that discards it compiles one graph and leaves the real one to be built
+*inside* the timed region. `memory_read` reported **0.0208 GB/s over 478 s**
+with two executions and 0.02% NeuronCore utilisation, because a seven-minute
+compile was measured as bandwidth. Warming up with the same liveness gives
+**236.9 GB/s over 8,826 passes**.
+
+**`memory_write` allocated a full-size source for a kernel that reads one
+tile.** 8 GiB of source for 256 KiB of use, against an 8 GiB destination on a
+16 GB core.
+
+**The pinned 8 GiB write does not fit, even so.** The destination is the
+whole plan and the runtime still holds the previous one when the next is
+allocated. Measured ceiling on this part: 4 GiB runs at 255.1 GB/s and 6 GiB
+at 162.5 GB/s, both with the destination check at exactly 1.0; 8 GiB fails
+with 8.59 GB requested against 8.099 GB resident. Both parts this suite
+targets have 32 GB across 2 cores, so the pin is unreachable on either.
+Lowering it or splitting the destination across cores is a registry
+decision and is left open.
+
+`tensor_virus` is the first kernel whose Score does not come from the kernel.
+`effective_flops` lives only in the neuron-monitor stream and does not exist
+until the monitor stops, so `pantheon_neuron.monitor_score` reads it after the
+run and the kernel supplies FLOPs-over-wall-time as the cross-check. The two
+answer different questions: the analytic figure counts arithmetic issued, the
+counter counts what the Tensor Engine retired, and a matmul folded away at
+compile time shows up as the gap between them. Its all-ones operands make
+every output element exactly K, which is what `verify_product_is_correct`
+checks — the far corner especially, since it is produced by the last tile of
+both loops.
 
 `memory_read` is the first real kernel. Two caveats travel with it:
 
@@ -71,13 +126,18 @@ buffers it looks nearly right, which is what makes it dangerous. The
 barrier is inside the timed region, and the wrong figure is kept in
 `data/baselines.json` as a regression marker.
 
-**Its Score now comes from the declared source.** After the timed loop the
-kernel captures a profile, reads `hbm_read_bytes` and `total_time`, and
-computes `hbm_read_bytes / total_time / 1e9` — exactly the formula the
-registry declares. If the profiler is unavailable it degrades to the
-analytic figure (bytes requested over wall time) rather than failing the
-run, and the row's `Score Method` field records which was used. A
-provisional number is never presented as the real one.
+**Its Score has never actually come from the declared source.** The kernel
+captures a profile after the timed loop and computes
+`hbm_read_bytes / total_time / 1e9`, exactly the formula the registry
+declares — but that capture replays the NEFF, which needs a NeuronCore, and
+the workload process held every one of them. Every scored run in this
+suite's history has therefore degraded to the analytic figure. The row's
+`Score Method` records which was used, so no provisional number was ever
+presented as the real one, but the declared path had never once run.
+
+The run now reserves a core for the profiler (`kernels/cores.py`), which
+should close this. That reservation is written and tested but has **not**
+been exercised on hardware.
 
 The distinction matters: the analytic figure counts bytes we *asked* for
 and cannot detect loads the compiler eliminated. A kernel whose DMA was
@@ -86,12 +146,13 @@ while the profiler reports almost no HBM traffic.
 `memory_read.verify_against_analytic` compares the two and puts the
 divergence in the row's `Detail`.
 
-The profiler reader (`kernels/profiler.py`) encodes four environment traps,
-each found the hard way during the probes: `view` exits on an unset `$HOME`;
-the Neuron bin directory must be on `PATH` because the tools shell out to
-each other; `capture` writes readable NTFF v6 while `inspect` writes v115
-that the same AMI's tooling cannot read; and the tools interleave log lines
-with JSON on stdout.
+The profiler reader (`kernels/profiler.py`) encodes five environment traps,
+each found the hard way on hardware: `view` exits on an unset `$HOME`; the
+Neuron bin directory must be on `PATH` because the tools shell out to each
+other; `capture` writes readable NTFF v6 while `inspect` writes v115 that the
+same AMI's tooling cannot read; the tools interleave log lines with JSON on
+stdout; and `capture` needs a NeuronCore of its own, because it replays the
+NEFF rather than reading counters from the running process.
 
 ### memory_write
 
@@ -107,10 +168,9 @@ reduces its loads so they have a consumer; here the hazard is inverted —
 stores into a buffer nothing reads are dead code. The destination is the
 kernel's returned output, which is what keeps the stores alive.
 
-Every NKI primitive it uses was exercised on hardware by `memory_read` on
-2026-08-27. This particular arrangement of them has not run, so it carries
-the same bring-up caveat: first hardware run is validation, not
-measurement.
+It ran for the first time on inf2.xlarge 2026-09-07 and its destination
+check passed exactly, at 4 GiB (255.1 GB/s) and 6 GiB (162.5 GB/s). The
+pinned 8 GiB does not fit; see the bring-up notes above.
 
 ## Requirements
 

@@ -4,8 +4,9 @@ This is how a Score reaches its declared source. ``neuron-monitor`` streams
 telemetry but has no HBM byte counters; only the profiler does, and only as
 a per-execution capture.
 
-Four environment traps are encoded here, each one observed during the
-2026-08-26 probes and each one costing a round trip to find:
+Five environment traps are encoded here, each one observed on hardware and
+each one costing a round trip to find. The first four came out of the
+2026-08-26 probes; the fifth out of the 2026-09-07 bring-up:
 
 1. ``neuron-profile view`` exits with "$HOME is not defined" when HOME is
    unset. Anything running under SSM or a bare service manager hits this.
@@ -16,10 +17,16 @@ Four environment traps are encoded here, each one observed during the
    cannot read at all ("supported: 1 - 6"). Use capture.
 4. The tools emit klog lines on stdout alongside the JSON, so the payload
    starts at the first ``{`` and everything before it is noise.
+5. ``capture`` replays the NEFF and so needs a NeuronCore of its own. The
+   workload process holds every visible core, so without a reserved core
+   this fails with "Requested:2 Available:0" and the Score degrades to the
+   analytic figure -- which, until 2026-09-07, it always had. See
+   kernels/cores.py.
 
-STATUS: UNTESTED. Written from captures taken by hand on an inf2.xlarge;
-this code path has never run. See docs/neuron_counters.md for the raw
-output it parses.
+STATUS: capture verified on inf2.xlarge 2026-09-07 -- it produced a session
+against a real NEFF once no workload held the device. The counter-reading
+path above it is still exercised only by hand-taken captures. See
+docs/neuron_counters.md for the raw output it parses.
 """
 
 import json
@@ -27,6 +34,8 @@ import os
 import shutil
 import subprocess
 import typing
+
+from . import cores
 
 
 NEURON_BIN = "/opt/aws/neuron/bin"
@@ -43,6 +52,15 @@ def _environment() -> typing.Dict[str, str]:
     path = env.get("PATH", "")
     if NEURON_BIN not in path.split(os.pathsep):  # trap 2
         env["PATH"] = os.pathsep.join([NEURON_BIN, path]) if path else NEURON_BIN
+
+    # trap 5: capture replays the NEFF, so it needs a NeuronCore of its own.
+    # The workload process holds every core the runtime made visible to it,
+    # so without a reserved core this fails with "Requested:2 Available:0"
+    # and the Score silently falls back to the analytic figure. The
+    # orchestrator reserves one and names it here; see kernels/cores.py.
+    reserved = env.get(cores.RESERVED_CORE)
+    if reserved:
+        env[cores.VISIBLE_CORES] = reserved
     return env
 
 
@@ -109,15 +127,24 @@ DEFAULT_WORKDIRS = (
 )
 
 
-def find_neff(workdir: str) -> str:
+def find_neff(workdir: str, since: typing.Optional[float] = None) -> str:
     """Locate the compiled NEFF a capture needs.
 
     Searches the caller's workdir first, then the compiler's own default
     locations -- an @nki.jit kernel ignores compiler_workdir and writes to
     its own tree, so looking only where the caller asked finds nothing.
 
-    Returns the most recently modified NEFF: a session may compile several
-    (one per distinct input shape), and the newest is the one just run.
+    ``since`` is a timestamp taken before the kernel compiled, and narrows
+    the search to graphs built after it. Without it this returns the newest
+    NEFF anywhere, which is a bad guess for two reasons seen on inf2.xlarge
+    2026-09-07: a single run compiles several graphs and the last one is
+    often a trivial epilogue -- capturing one reported ``hbm_write_bytes:
+    2`` against an 8 GiB plan -- and a cache hit leaves the kernel's own
+    NEFF with an old mtime while some unrelated graph compiles fresh.
+
+    Narrowing helps but cannot be trusted on its own, which is why
+    ``verify_profile_covers_plan`` checks the counters against the work the
+    plan describes rather than assuming this picked right.
     """
     candidates = []
     for root in (workdir, *DEFAULT_WORKDIRS):
@@ -131,6 +158,12 @@ def find_neff(workdir: str) -> str:
                         candidates.append((os.path.getmtime(path), path))
                     except OSError:
                         continue
+
+    if since is not None:
+        fresh = [entry for entry in candidates if entry[0] >= since]
+        if fresh:
+            candidates = fresh
+
     if candidates:
         return max(candidates)[1]
 
@@ -179,6 +212,43 @@ def summary(neff_path: str, session_path: str) -> typing.Dict[str, typing.Any]:
 def read_counters(neff_path: str, session_path: str) -> typing.Dict[str, typing.Any]:
     capture(neff_path, session_path)
     return summary(neff_path, session_path)
+
+
+def verify_profile_covers_plan(
+    counters: typing.Mapping[str, typing.Any],
+    direction: str,
+    expected_bytes: int,
+    floor: float = 0.5,
+) -> None:
+    """Reject a profile that did not come from the kernel we measured.
+
+    ``find_neff`` picks a graph out of a directory the compiler shares with
+    every other compile on the machine, and it can pick wrong: a run builds
+    several graphs, and on inf2.xlarge 2026-09-07 a capture of the newest
+    reported ``hbm_write_bytes: 2`` for a kernel whose plan moves 8 GiB.
+
+    Nothing downstream would have noticed. The bytes divide by a real
+    ``total_time`` and produce a real-looking GB/s, which is worse than an
+    error because it is publishable. So the counters are checked against the
+    work the plan describes, and a profile carrying less than ``floor`` of
+    the planned bytes is refused -- which degrades the Score to the analytic
+    figure and says so, rather than reporting another graph's traffic.
+
+    One NEFF execution moves the plan's bytes once, so the comparison is
+    against a single pass, not the whole timed loop.
+    """
+    key = {"read": "hbm_read_bytes", "write": "hbm_write_bytes"}[direction]
+    measured = counters.get(key)
+    if not isinstance(measured, (int, float)):
+        raise ProfilerUnavailable(f"{key} missing from profiler output")
+    if expected_bytes <= 0:
+        return
+    if measured < expected_bytes * floor:
+        raise ProfilerUnavailable(
+            f"profiled graph moved {int(measured)} bytes against a plan of "
+            f"{expected_bytes} -- this is not the kernel that was measured, "
+            "so its counters describe someone else's graph"
+        )
 
 
 def bandwidth_gbps(counters: typing.Mapping[str, typing.Any],

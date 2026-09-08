@@ -57,6 +57,12 @@ Two cases deliberately produce no Score rather than a number:
 
 `graph_replay` is also neuron-monitor-sourced but is **not** on this path: its formula is `delta(completed) / period` in graph-steps/s. The gate matches on the declared counter, not on the source, so the FLOPS arithmetic cannot reach it.
 
+## The declared profiler Score has never been produced by a run
+
+`memory_read` and `memory_write` declare `neuron-profile` as their Score source, and every run degrades to the analytic fallback instead. The cause, isolated on inf2.xlarge 2026-09-07: `neuron-profile capture` replays the NEFF, which needs NeuronCores, and the workload process holds them all — `Logical Neuron Core(s) not available - Requested:2 Available:0`. The same capture against the same NEFF succeeds once no workload is running, which is why the profiler figures in `data/baselines.json` exist at all: they came from standalone probe sessions, never from a scored run.
+
+The fallback is therefore not a rare degradation, it is the only path these Scores have ever taken. Fixing it means capturing the profile after the workload releases the device, which changes how `run` is structured rather than patching the profiler, and is not done yet.
+
 ## Where the comparison does not hold
 
 Twelve workloads exist on both platforms under the same name and must **not** be compared: `fused_attention`, `graph_replay`, `kv_cache_churn`, `llm_decode`, `llm_prefill`, `moe_router`, `quantized_gemm`, `rag_embedding`, `serving_mix`, `speculative_decode`, `transformer_train_step`, `vision_encoder`.

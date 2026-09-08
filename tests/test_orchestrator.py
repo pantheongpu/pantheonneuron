@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 
 import pytest
 
@@ -51,13 +52,44 @@ def test_workload_runs_in_mock_mode(mock_env):
 
 
 def test_unimplemented_workload_does_not_silently_pass_on_hardware(monkeypatch):
-    """A missing NKI kernel must never be reported as a successful run."""
+    """A missing NKI kernel must never be reported as a successful run.
+
+    Driven from pantheon_neuron.IMPLEMENTED rather than a named workload.
+    This test used to name tensor_virus, which stopped testing anything the
+    moment tensor_virus got a kernel -- it ran the real kernel instead and
+    failed for an unrelated reason. Deriving the list means a workload that
+    gains a kernel leaves the test, and one that never had a kernel cannot
+    quietly escape it.
+    """
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
     monkeypatch.setattr(
         nki_backend, "require_toolchain", lambda: {"neuronxcc": "2.x"}
     )
-    with pytest.raises(NotImplementedError):
-        pantheon_neuron._execute(_workload("tensor_virus"), TRN1, duration=1)
+
+    unimplemented = [
+        w for w in registry.WORKLOADS
+        if w.name not in pantheon_neuron.IMPLEMENTED
+        and w.skip_reason(TRN1) is None
+    ]
+    assert unimplemented, "every workload has a kernel; retire this test"
+
+    for workload in unimplemented:
+        with pytest.raises(NotImplementedError):
+            pantheon_neuron._execute(workload, TRN1, duration=1)
+
+
+def test_implemented_set_matches_what_execute_dispatches():
+    """IMPLEMENTED is a claim about _execute; keep it honest.
+
+    A name listed here but not dispatched would make the test above skip a
+    workload that silently raises in production.
+    """
+    source = pathlib.Path(pantheon_neuron.__file__).read_text(encoding="utf-8")
+    body = source.split("def _execute(", 1)[1].split("\ndef ", 1)[0]
+    # Matches the name however it is dispatched -- a direct comparison or
+    # membership in a tuple, since one kernel can serve several workloads.
+    for name in pantheon_neuron.IMPLEMENTED:
+        assert f'"{name}"' in body, name
 
 
 def test_execution_errors_flip_a_pass_to_fail(mock_env, monkeypatch):

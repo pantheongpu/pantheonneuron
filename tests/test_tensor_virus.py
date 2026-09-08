@@ -1,0 +1,223 @@
+"""The tensor_virus kernel: tile maths, FLOP accounting, and its guards.
+
+The NKI kernel needs hardware. What is testable here is the arithmetic that
+decides whether a number means anything -- the GEMM tiling, the FLOP count
+behind the analytic cross-check, and the correctness guard that separates a
+real GEMM from one the compiler reshaped.
+"""
+
+import pytest
+
+import pantheon_neuron
+from kernels import registry, tensor_virus, tiling
+from neuron_device import NeuronDevice
+
+
+TRN1 = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
+
+
+def _workload():
+    return next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+
+
+# -- tile geometry -----------------------------------------------------------
+
+def test_contraction_rides_the_hardware_partition_limit():
+    """K sits on the partition axis, so pmax bounds it -- 128, read on both parts."""
+    assert tensor_virus.CONTRACTION == tiling.PARTITION == 128
+    assert tensor_virus.STATIONARY == 128
+
+
+def test_pinned_problem_divides_into_whole_tiles():
+    problem = _workload().problem
+    plan = tensor_virus.gemm_plan(problem["shape"], problem["dtype"])
+
+    assert plan["m_tiles"] == 8192 // 128
+    assert plan["n_tiles"] == 8192 // 512
+    assert plan["k_tiles"] == 8192 // 128
+
+
+def test_partial_tiles_are_rejected_rather_than_rounded():
+    """A rounded shape makes the FLOP count describe work that did not happen."""
+    with pytest.raises(ValueError):
+        tensor_virus.gemm_plan([8192, 8192, 100], "bf16")
+    with pytest.raises(ValueError):
+        tensor_virus.gemm_plan([200, 8192, 8192], "bf16")
+
+
+def test_shape_must_be_three_dimensional():
+    with pytest.raises(ValueError):
+        tensor_virus.gemm_plan([8192, 8192], "bf16")
+
+
+def test_unsupported_dtype_is_rejected():
+    with pytest.raises(ValueError):
+        tensor_virus.gemm_plan([8192, 8192, 8192], "fp8")
+
+
+# -- FLOP accounting ---------------------------------------------------------
+
+def test_a_gemm_is_two_flops_per_multiply_accumulate():
+    """2*M*N*K: one multiply and one add per element of the contraction."""
+    plan = tensor_virus.gemm_plan([128, 512, 128], "bf16")
+    assert plan["flops_per_pass"] == 2 * 128 * 512 * 128
+
+
+def test_pinned_problem_flop_count():
+    problem = _workload().problem
+    plan = tensor_virus.gemm_plan(problem["shape"], problem["dtype"])
+    assert plan["flops_per_pass"] == 2 * 8192**3
+
+
+# -- correctness guard -------------------------------------------------------
+
+def test_guard_accepts_an_exact_product():
+    """All-ones operands make every element exactly K."""
+    assert tensor_virus.verify_product_is_correct(1.0) is None
+
+
+def test_guard_flags_a_product_that_is_not_k():
+    message = tensor_virus.verify_product_is_correct(0.5)
+    assert message is not None
+    assert "did not compute the pinned problem" in message
+
+
+def test_guard_flags_an_unreadable_product():
+    message = tensor_virus.verify_product_is_correct(None)
+    assert message is not None
+    assert "unverified" in message
+
+
+# -- monitor cross-check -----------------------------------------------------
+
+def test_cross_check_accepts_agreement():
+    assert tensor_virus.verify_against_monitor(90.0, 100.0) is None
+
+
+def test_cross_check_flags_an_idle_engine():
+    """The signal that the matmuls were folded away."""
+    message = tensor_virus.verify_against_monitor(0.0, 100.0)
+    assert message is not None
+    assert "eliminated" in message
+
+
+def test_cross_check_flags_order_of_magnitude_disagreement():
+    message = tensor_virus.verify_against_monitor(5.0, 100.0)
+    assert message is not None
+    assert "differ by more than" in message
+
+
+def test_cross_check_is_quiet_when_the_monitor_said_nothing():
+    """Absent telemetry is handled by monitor_score, not reported as divergence."""
+    assert tensor_virus.verify_against_monitor(None, 100.0) is None
+
+
+def test_cross_check_flags_zero_analytic_throughput():
+    message = tensor_virus.verify_against_monitor(10.0, 0.0)
+    assert message is not None
+    assert "no arithmetic was issued" in message
+
+
+# -- orchestrator integration ------------------------------------------------
+
+def test_registry_declares_the_flops_counter():
+    source = _workload().score_source
+    assert source.source == registry.MONITOR
+    assert pantheon_neuron.FLOPS_COUNTER in source.counters
+    assert _workload().unit == "TFLOPS"
+
+
+def test_analytic_fallback_names_the_monitor_not_the_profiler():
+    """The label has to describe this workload, not the bandwidth ones.
+
+    tensor_virus falls back to FLOPs over wall time and its declared source
+    is neuron-monitor. The old label was hardcoded to 'bytes moved' and
+    'neuron-profile', which would have misdescribed both halves.
+    """
+    pantheon_neuron._LAST_RUN["tensor_virus"] = {
+        "score_method": "analytic",
+        "analytic_basis": "FLOPs issued / wall time",
+    }
+    method = pantheon_neuron._score_method(_workload(), 12.5)
+    pantheon_neuron._LAST_RUN.pop("tensor_virus", None)
+
+    assert "FLOPs issued / wall time" in method
+    assert "neuron-monitor" in method
+    assert "effective_flops" in method
+    assert "bytes moved" not in method
+    assert "neuron-profile" not in method
+
+
+def test_monitor_score_overrides_the_analytic_figure(monkeypatch):
+    """The declared source wins when the counter is there."""
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 3.0)
+    monkeypatch.setattr(
+        pantheon_neuron.neuron_monitor.NeuronMonitor, "start",
+        lambda self, indices: True,
+    )
+    monkeypatch.setattr(
+        pantheon_neuron.neuron_monitor.NeuronMonitor, "stop",
+        lambda self: {
+            "samples": 5,
+            "effective_flops": {"0": {"mean": int(9e12), "peak": int(9e12)}},
+        },
+    )
+
+    row = pantheon_neuron.run_workload(
+        _workload(), TRN1, duration=1, monitor_period=0.1
+    )
+    assert row["Score"] == 9.0
+    assert row["Score Method"] == registry.MONITOR
+
+
+def test_mock_mode_invents_no_score(monkeypatch):
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    row = pantheon_neuron.run_workload(
+        _workload(), TRN1, duration=1, monitor_period=0.1
+    )
+    assert row["Score"] is None
+
+
+# -- int_virus rides the same kernel -----------------------------------------
+
+class _FakeNL:
+    """Stands in for neuronxcc.nki.language, which needs the toolchain."""
+    int32 = "int32"
+    float32 = "float32"
+
+
+def _int_virus():
+    return next(w for w in registry.WORKLOADS if w.name == "int_virus")
+
+
+def test_int8_accumulates_into_int32():
+    """Not fp32: an all-ones int8 GEMM reaches K, and rounding loses it."""
+    assert tensor_virus.accumulator_dtype("int8", _FakeNL) == "int32"
+
+
+def test_float_operands_accumulate_into_fp32():
+    for dtype in ("bf16", "fp16", "fp32"):
+        assert tensor_virus.accumulator_dtype(dtype, _FakeNL) == "float32"
+
+
+def test_int_virus_shares_the_pinned_shape_and_tiling():
+    """Same GEMM, different dtype -- so the tile plan must agree."""
+    plan = tensor_virus.gemm_plan(*[
+        _int_virus().problem["shape"], _int_virus().problem["dtype"]
+    ])
+    bf16 = tensor_virus.gemm_plan(*[
+        _workload().problem["shape"], _workload().problem["dtype"]
+    ])
+    assert plan["m_tiles"] == bf16["m_tiles"]
+    assert plan["k_tiles"] == bf16["k_tiles"]
+    assert plan["element_bytes"] == 1
+
+
+def test_int_virus_is_dispatched_by_the_orchestrator():
+    assert "int_virus" in pantheon_neuron.IMPLEMENTED
+
+
+def test_int_virus_reports_tops_not_tflops():
+    """The arithmetic is identical; the unit is not, and the row must say so."""
+    assert _int_virus().unit == "TOPS"
+    assert _workload().unit == "TFLOPS"
