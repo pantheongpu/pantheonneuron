@@ -607,40 +607,67 @@ def test_a_step_writes_every_layer_not_one():
     one_layer_one_token = 2 * problem["hidden"] * 2
     assert plan["bytes_per_step"] == (
         plan["tokens_per_step"] * plan["layers"] * one_layer_one_token)
-    assert plan["bytes_per_step"] == 32 * 1024**2
+    assert plan["bytes_per_step"] == 256 * 1024**2
 
 
 def test_the_pinned_step_is_large_enough_to_time_the_write():
-    """131 us of bandwidth against roughly 115 us of dispatch.
+    """About 1 ms of bandwidth per step, against a per-step overhead
+    measured in hundreds of microseconds.
 
-    Below that ratio the wall clock is dominated by the runtime and the
-    rate stops being a cache measurement, which is what it was.
+    Below that ratio the wall clock is dominated by everything except the
+    write, and the rate stops being a cache measurement -- which is what
+    it was for both earlier shapes.
     """
     plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
     at_hbm_us = plan["bytes_per_step"] / (llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6
-    measured_dispatch_us = 115.0
-    assert at_hbm_us > measured_dispatch_us
+    assert at_hbm_us > 500.0
 
-    # And the old pin was nowhere near it.
-    old_step = 2 * 4096 * 2
-    assert old_step / (llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6 < 1.0
+    # The first pin -- one layer, one token -- was three orders below it.
+    one_layer_one_token = 2 * 4096 * 2
+    assert one_layer_one_token / (
+        llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6 < 1.0
+
+
+def test_the_ring_compiles_one_graph_per_slot_and_no_more():
+    """Each slot is a static slice, so the count is the compile cost.
+
+    A position per token would be `context` graphs; 8 slots is 8.
+    """
+    plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
+    assert plan["ring_slots"] == 8
+    assert plan["ring_slots"] * plan["tokens_per_step"] == plan["context"]
+    assert plan["ring_slots"] < 16, "each slot costs a compile"
 
 
 @pytest.mark.parametrize("bad", [
     {"hidden": 0, "context": 4096, "dtype": "bf16"},
     {"hidden": 4096, "context": 0, "dtype": "bf16"},
     {"hidden": 4096, "context": 4096, "layers": 0, "dtype": "bf16"},
-    {"hidden": 4096, "context": 4096, "tokens_per_step": 0, "dtype": "bf16"},
+    {"hidden": 4096, "context": 4096, "ring_slots": 0, "dtype": "bf16"},
 ])
 def test_cache_plan_rejects_impossible_geometry(bad):
     with pytest.raises(ValueError, match="must be positive"):
         llm_inference.cache_plan(bad)
 
 
-def test_a_step_cannot_be_wider_than_the_cache():
-    with pytest.raises(ValueError, match="exceeds"):
-        llm_inference.cache_plan({"hidden": 4096, "context": 64,
-                                  "tokens_per_step": 128, "dtype": "bf16"})
+def test_the_ring_must_divide_the_context():
+    """A partial slot would make one step write a different amount."""
+    with pytest.raises(ValueError, match="whole ring slots"):
+        llm_inference.cache_plan({"hidden": 4096, "context": 100,
+                                  "ring_slots": 8, "dtype": "bf16"})
+
+
+def test_the_write_is_a_static_slice_not_a_scatter():
+    """The primitive is the finding: scatter cost 54x the bytes it moved.
+
+    Read as code, because the comment explaining the defect names it.
+    """
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
+    assert "index_copy_" not in code, "a runtime index means a scatter"
+    assert "cache_k [ : , start : stop , : ] = entry" in code
+    # Slot bounds are Python ints closed over per writer, so each slot is
+    # its own graph rather than an index reaching the device.
+    assert "start , stop = slot * tokens" in code
 
 
 def test_the_old_measurement_would_now_be_flagged():

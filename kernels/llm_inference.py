@@ -176,39 +176,46 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
 
 def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int]:
-    """Cache geometry and the traffic one step of it moves.
+    """Cache geometry, and the traffic one ring slot of it moves.
 
-    A KV cache is per layer, so a decode step appends K and V for *every*
-    layer, not one. And a step writes whatever the server has in flight --
-    one token when decoding, a chunk of them when prefilling.
+    A KV cache is per layer, so a step appends K and V for *every* layer,
+    not one. And the append is a contiguous block: a server writes whatever
+    it has in flight, and it writes it as a slice.
 
-    Pure, so the sizing can be checked without a device: the cache has to
-    fit on a NeuronCore and the per-step traffic has to be large enough
-    that the write is what is being timed.
+    **The ring is a small number of fixed slots, and that is load-bearing.**
+    Writing at a runtime-valued index means a scatter, and scatter is
+    catastrophically slow here: measured on trn1.2xlarge 2026-09-08, 64
+    ``index_copy_`` calls moving 32 MiB took 455 ms -- 3,471x longer than
+    HBM needs for those bytes, and 54x longer than rewriting every layer's
+    entire slice would take. The cost was the scatter, not the traffic.
+    Fixed slots make each write a static contiguous slice instead, at the
+    price of one compiled graph per slot.
+
+    Pure, so the sizing can be checked without a device.
     """
     hidden = int(problem["hidden"])
     context = int(problem["context"])
     layers = int(problem.get("layers", 32))
-    tokens = int(problem.get("tokens_per_step", 64))
+    slots = int(problem.get("ring_slots", 8))
     width = tiling.DTYPE_BYTES[str(problem["dtype"])]
 
     for label, value in (("hidden", hidden), ("context", context),
-                         ("layers", layers), ("tokens_per_step", tokens)):
+                         ("layers", layers), ("ring_slots", slots)):
         if value <= 0:
             raise ValueError(f"{label} must be positive, got {value}")
-    if tokens > context:
+    if context % slots:
         raise ValueError(
-            f"tokens_per_step {tokens} exceeds the {context}-entry cache"
+            f"context {context} must divide into {slots} whole ring slots"
         )
 
-    # Two caches, K and V, each [layers, context, hidden].
+    tokens = context // slots
     resident = 2 * layers * context * hidden * width
-    # One step appends `tokens` positions to both, in every layer.
     per_step = tokens * layers * 2 * hidden * width
 
     return {
         "hidden": hidden, "context": context, "layers": layers,
-        "tokens_per_step": tokens, "element_bytes": width,
+        "ring_slots": slots, "tokens_per_step": tokens,
+        "element_bytes": width,
         "resident_bytes": resident, "bytes_per_step": per_step,
     }
 
@@ -256,60 +263,62 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
     plan = cache_plan(problem)
     hidden, context = plan["hidden"], plan["context"]
     layers, tokens = plan["layers"], plan["tokens_per_step"]
+    slots = plan["ring_slots"]
     dtype = tiling.torch_dtype(str(problem["dtype"]))
 
     device = xm.xla_device()
     # Per layer, as a real cache is. Writing one layer's worth per step was
-    # what made this workload measure the runtime instead of the memory.
+    # what first made this workload measure the runtime instead of memory.
     cache_k = torch.ones((layers, context, hidden), dtype=dtype, device=device)
     cache_v = torch.ones((layers, context, hidden), dtype=dtype, device=device)
-    entry = torch.ones((tokens, hidden), dtype=dtype, device=device)
+    entry = torch.ones((layers, tokens, hidden), dtype=dtype, device=device)
     xm.mark_step()
     xm.wait_device_ops()
 
-    # A ring buffer, which is how a server actually evicts: the write index
-    # wraps and overwrites the oldest entries. Writing always to position
-    # zero would let the compiler keep one row in SBUF and never touch HBM,
-    # measuring a register file instead of a cache.
+    # A ring buffer, which is how a server evicts: the write wraps and
+    # overwrites the oldest entries. Always writing slot zero would let the
+    # compiler keep one block resident and never touch HBM.
     #
-    # The indices have to reach the device as *values*, not Python ints.
-    # `cache_k[position] = ...` bakes the position into the graph, so every
-    # distinct position is a different graph and every iteration pays a
-    # compile. Measured on trn1.2xlarge 2026-09-08: 0.85 cache-updates/s,
-    # which is a compiler's throughput. Copying a host tensor into a device
-    # tensor of fixed shape keeps one graph and makes the positions inputs.
-    offsets = torch.arange(tokens, dtype=torch.int64)
-    host_index = torch.zeros(tokens, dtype=torch.int64)
-    index = torch.zeros(tokens, dtype=torch.int64, device=device)
+    # Each slot is a *static* slice, so the write is a contiguous copy and
+    # the slot index never reaches the graph as a value. That is the whole
+    # point. The previous version used index_copy_ with a runtime index --
+    # a scatter -- and on trn1.2xlarge 2026-09-08 that cost 455 ms to move
+    # 32 MiB: 3,471x what HBM needs for those bytes, and 54x more than
+    # rewriting every layer's entire slice would have cost. The bytes were
+    # never the problem; the scatter was.
+    #
+    # The price is one compiled graph per slot, which is why the ring is a
+    # handful of large slots rather than a position per token.
+    def writer(slot):
+        start, stop = slot * tokens, (slot + 1) * tokens
 
-    def churn(start):
-        torch.remainder(offsets + start, context, out=host_index)
-        index.copy_(host_index)
-        # Unrolled over layers on purpose: the layer index is a constant at
-        # trace time, so this is one graph with 2 x layers scatters in it
-        # rather than a graph per layer.
-        for layer in range(layers):
-            cache_k[layer].index_copy_(0, index, entry)
-            cache_v[layer].index_copy_(0, index, entry)
+        def write():
+            cache_k[:, start:stop, :] = entry
+            cache_v[:, start:stop, :] = entry
 
-    churn(0)
-    xm.mark_step()
+        return write
+
+    writers = [writer(slot) for slot in range(slots)]
+
+    for write in writers:      # compile every slot before the clock starts
+        write()
+        xm.mark_step()
     xm.wait_device_ops()
 
     updates = 0
-    position = 0
+    step = 0
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
-        churn(position)
+        writers[step % slots]()
         xm.mark_step()
-        position = (position + tokens) % context
+        step += 1
         updates += tokens
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
     observed = transformer_ops.read_back(cache_k)
-    steps = updates // tokens if tokens else 0
+    steps = step
     bytes_written = steps * plan["bytes_per_step"]
     bytes_per_s = bytes_written / elapsed if elapsed else 0.0
 
