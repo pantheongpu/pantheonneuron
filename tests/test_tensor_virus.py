@@ -271,3 +271,41 @@ def test_an_integer_run_is_labelled_tops_not_tflops():
     workload = {w.name: w for w in registry.WORKLOADS}["int_virus"]
     assert workload.unit == "TOPS"
     assert tiling.is_integer(workload.problem["dtype"])
+
+
+def test_the_accumulation_loop_is_not_unrolled():
+    """The pinned 8192^3 problem compiles only because this loop is rolled.
+
+    The `depth` loop accumulates into `acc`, which is a loop-carried
+    dependency; NKI reserves `affine_range` for loops without one, and it
+    fully unrolls. The unroll is cubic in the shape -- 1,024 matmul calls at
+    2048^3 against 65,536 at 8192^3 -- which is why the pinned problem never
+    compiled and why no compute workload had ever produced the
+    neuron-monitor Score its registry entry declares.
+
+    Checked textually because reproducing it needs a compiler. The two outer
+    loops stay affine: they are genuinely independent, and rolling them
+    would cost throughput for nothing.
+    """
+    import inspect
+
+    source = inspect.getsource(tensor_virus._build_kernel)
+    assert "for depth in nl.sequential_range(" in source, (
+        "the accumulation loop must stay rolled or the pinned shape stops "
+        "compiling"
+    )
+    assert "for depth in nl.affine_range(" not in source
+    # The independent loops are unchanged.
+    assert source.count("nl.affine_range(") == 2
+
+
+def test_the_unroll_is_cubic_in_the_shape():
+    """Why the pinned shape was unreachable, as arithmetic rather than prose."""
+    def bodies(n):
+        plan = tensor_virus.gemm_plan([n, n, n], "bf16")
+        return plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+
+    assert bodies(2048) == 1024
+    assert bodies(8192) == 65536
+    # 4x the shape is 64x the unrolled body count.
+    assert bodies(8192) == 64 * bodies(2048)

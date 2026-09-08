@@ -143,7 +143,20 @@ def _build_kernel(dtype: str = "bf16"):
                     (nl.par_dim(STATIONARY), MOVING),
                     dtype=accumulate_into, buffer=nl.psum,
                 )
-                for depth in nl.affine_range(k // CONTRACTION):
+                # sequential_range, not affine_range: this loop accumulates
+                # into `acc`, which is a loop-carried dependency, and NKI
+                # reserves affine_range for loops that do not have one.
+                #
+                # It is also what makes the pinned problem compilable.
+                # affine_range is fully unrolled, and the unroll is cubic in
+                # the shape: 2048^3 is 1,024 matmul calls and compiles in
+                # seconds, while 8192^3 is 65,536 and has never compiled at
+                # all -- which is why every compute workload in this suite
+                # has only ever run at a reduced shape, and why none of them
+                # has ever produced the neuron-monitor Score the registry
+                # declares. Rolling the innermost loop divides the unrolled
+                # body count by k_tiles: 64x at the pinned shape.
+                for depth in nl.sequential_range(k // CONTRACTION):
                     lhs_tile = nl.load(
                         lhs_t[depth * CONTRACTION:(depth + 1) * CONTRACTION,
                               row * STATIONARY:(row + 1) * STATIONARY]

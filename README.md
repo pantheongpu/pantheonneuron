@@ -47,9 +47,9 @@ differs is how much of each has met hardware.
 | `baseline_metrics` | ✅ telemetry only, no load | — |
 | `memory_read` | ✅ **verified**, and **scored from `neuron-profile`** on both parts | `neuron-profile` |
 | `memory_write` | ✅ **verified** on both parts at the 4 GiB pin; **scored from `neuron-profile`** | `neuron-profile` |
-| `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
-| `int_virus` | ✅ **verified** at uint8 on both parts at 2048³ | `neuron-monitor` |
-| `pulse_virus` | ✅ **verified on trn1.2xlarge** at 2048³ | `neuron-monitor` |
+| `tensor_virus` | ✅ **verified at the pinned 8192³**; scored from `neuron-monitor` | `neuron-monitor` |
+| `int_virus` | ✅ **verified at the pinned 8192³** at uint8; scored from `neuron-monitor` | `neuron-monitor` |
+| `pulse_virus` | ✅ **verified at the pinned 8192³**; scored from `neuron-monitor` | `neuron-monitor` |
 | `omni_virus` | ⚠️ all four engines in one dependent chain, untested; a NameError that would have failed its first hardware run is now fixed | `neuron-monitor` |
 | `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
 | `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
@@ -115,6 +115,50 @@ But that was not the cause. **The rerun measured d2h at 1.1 GB/s against h2d
 was a real defect in the harness and removing it moved nothing. See the
 2026-09-08 rerun below for what the two parts then said, which is the useful
 part.
+
+### The pinned problem compiles, and neuron-monitor finally scored
+
+`tensor_virus` and its four relatives declare `mean(effective_flops) / 1e12`
+from neuron-monitor. **That source had never once produced a Score**, and the
+reason was not the monitor: the pinned 8192³ problem had never compiled, so
+the compute workloads had only ever been run by hand at a reduced shape,
+which bypasses `monitor_score` entirely.
+
+**The cause was one word.** The kernel's innermost loop accumulates into
+`acc` — a loop-carried dependency — but was declared `nl.affine_range`, which
+NKI reserves for loops *without* one and which the compiler fully unrolls.
+The unroll is cubic in the shape:
+
+| shape | matmul calls | before | after |
+|---|--:|---|---|
+| 2048³ | 1,024 | compiled | 22.46 TFLOPS, product verified 1.0 |
+| 4096³ | 8,192 | untested | **36.56 TFLOPS**, verified |
+| 8192³ | 65,536 | **never compiled** | **26.24 TFLOPS in 77 s**, verified |
+
+`nl.sequential_range` is both the semantically correct choice for an
+accumulator and the one that rolls the loop, dividing the unrolled body count
+by `k_tiles` — 64× at the pinned shape.
+
+With the pinned problem reachable, the orchestrated run produced this:
+
+| Workload | Score | Source | Problem |
+|---|--:|---|---|
+| `tensor_virus` | 22.60 TFLOPS | **`neuron-monitor`** | 8192³ bf16 |
+| `int_virus` | 27.28 TOPS | **`neuron-monitor`** | 8192³ uint8 |
+| `pulse_virus` | 13.38 TFLOPS | **`neuron-monitor`** | 8192³ bf16, 50% duty |
+
+Three things worth reading off that table. **uint8 is faster than bf16**
+(27.28 against 22.60), which is what an 8-bit integer datapath should do and
+is the first evidence the repin measures a real path rather than just a
+compilable one. **`pulse_virus` lands at 59% of sustained** for a 50% duty
+cycle, consistent with the wall-clock/loaded-only split it reports itself.
+And the counter reads **below** the kernel's analytic figure — 22.60 against
+26.24 at the same shape — which is the right direction: the analytic number
+counts arithmetic issued and the counter counts what the engine retired.
+
+**4096³ is faster than the pinned 8192³**, by a wide margin. The pinned
+problem is not the peak, and why it is not is an open question rather than a
+result.
 
 ### What the 2026-09-08 rerun found, on both parts
 
