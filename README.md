@@ -48,14 +48,14 @@ differs is how much of each has met hardware.
 | `memory_read` | ✅ **verified** on trn1.2xlarge and inf2.xlarge | `neuron-profile`, analytic fallback |
 | `memory_write` | ✅ **verified** on inf2.xlarge, not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
 | `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
-| `int_virus` | ⚠️ same GEMM over int8, untested | `neuron-monitor` |
-| `pulse_virus` | ⚠️ tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor` |
+| `int_virus` | ❌ **int8 is unsupported by trn1's Tensor Engine** | `neuron-monitor` |
+| `pulse_virus` | ✅ **verified on trn1.2xlarge** at 2048³ | `neuron-monitor` |
 | `omni_virus` | ⚠️ all four engines in one dependent chain, untested | `neuron-monitor` |
 | `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
 | `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
 | `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
-| `pcie_bandwidth` | ⚠️ host transfers, untested | workload |
-| `allocation_fragmentation` | ⚠️ allocator churn, untested | workload |
+| `pcie_bandwidth` | ✅ **verified on trn1.2xlarge**; its asymmetry guard fired | workload |
+| `allocation_fragmentation` | ✅ **verified on trn1.2xlarge** | workload |
 | `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
 | `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |
 | `speculative_decode` / `serving_mix` | ⚠️ untested | workload |
@@ -68,6 +68,41 @@ the smallest instance with device-to-device NeuronLink and needs 128 vCPUs
 against a granted 64, so they are written against the documented
 `nccom-test` output rather than against observed output, and their tests are
 the only thing behind them until that quota lands.
+
+### What the 2026-09-08 trn1.2xlarge validation found
+
+The first Trainium run of the harness, and the first time the reserved
+profiler core was exercised.
+
+**int8 does not exist on this Tensor Engine.** `int_virus` failed with
+`nc_matmul does not support stationary.dtype=int8`; the supported set is
+fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and **uint8**. The registry pins
+int8, so the workload is unreachable on trn1 as declared. Moving it to uint8
+or fp8 is a registry decision and is left open -- silently switching the
+dtype would change what the number means without saying so.
+
+**The reserved core worked and the profiler still produced nothing.** The run
+logged `cores 0 to the workload, 1 reserved for neuron-profile`, so the
+capture ran for the first time. It then captured the wrong graph, and
+`verify_profile_covers_plan` refused it: *profiled graph moved 4 bytes
+against a plan of 8589934592*. Scores from a declared hardware source: 0 of
+4. Narrowing NEFF selection by compile timestamp is not enough to identify
+the kernel's own graph, so that remains open -- but the failure is now loud
+rather than a plausible bandwidth computed from four bytes.
+
+**pulse_virus behaves as designed.** Its loaded-only figure (23.74 TFLOPS)
+lands on `tensor_virus`'s sustained figure (23.25 TFLOPS) while its
+wall-clock figure is 11.88, which is what a 50% duty cycle should look like
+if pulsing costs no throughput while loaded.
+
+**memory_write fails at the pinned 8 GiB on trn1 exactly as on inf2**, same
+`NRT_RESOURCE` exhaustion. Both target parts have 32 GB across two cores, so
+the pin is unreachable on either -- now confirmed rather than inferred.
+
+**pcie_bandwidth's asymmetry guard fired on its first run**: d2h 1.0 GB/s
+against h2d 6.0 GB/s. Whether that is a real link property or an artifact of
+`.cpu()` being synchronous needs a second look before the number is read as
+a transfer rate.
 
 ### Why the AI workloads are separate workloads
 

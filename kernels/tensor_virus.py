@@ -86,6 +86,13 @@ def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
 def accumulator_dtype(dtype: str, nl):
     """The type the Tensor Engine accumulates a product of ``dtype`` into.
 
+    Note that int8 operands do not reach here on trn1 at all: the engine
+    rejects them before accumulation, with `nc_matmul does not support
+    stationary.dtype=int8`. Measured 2026-09-08. The supported operand set
+    is fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and uint8 -- uint8 is
+    accepted where int8 is not, which is why int_virus is a registry
+    decision rather than a kernel fix.
+
     Integer operands accumulate into int32, floating-point ones into fp32.
     Accumulating int8 into a float would round partial sums and break the
     exactness the all-ones check relies on -- and an int8 GEMM of size K
