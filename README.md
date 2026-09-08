@@ -441,11 +441,21 @@ sampling interval), `--mock`, `--no-report`.
 
 ### Repeats
 
-Every Score in this README is from a single run, and one of the few
-quantities ever measured twice turned out not to be reproducible:
-`memory_read`'s declared profiler Score read 256.17, 178.7 and 119.19 GB/s
-on three runs of the same pinned problem. The cause was real and is fixed,
-but nothing would have caught it, because nothing ever ran a workload twice.
+Most Scores in this README are from a single run, and the one quantity that
+was ever measured twice turned out not to be reproducible: `memory_read`'s
+declared profiler Score read 256.17, 178.7 and 119.19 GB/s on three runs of
+the same pinned problem.
+
+The cause was the NEFF selector taking the first candidate over the coverage
+floor rather than the best match, so a partially-matching graph could win.
+With the selector fixed, three consecutive runs read **256.2692, 256.2847
+and 256.1250 GB/s** — a coefficient of variation of 0.0003 against roughly
+0.4 before — each identifying its graph at coverage exactly 1.0, on the
+second of three candidates. The search skipping a wrong first candidate is
+the fix doing its job.
+
+What is not fixed by finding that is that nothing would have caught it,
+because nothing ever ran a workload twice.
 
 ```bash
 python pantheon_neuron.py --test memory_read --duration 60 --repeat 5
