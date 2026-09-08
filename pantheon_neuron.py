@@ -17,9 +17,11 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import (allocation_fragmentation, cores, memory_read,
-                     memory_write, nki_backend, pcie_bandwidth, pulse_virus,
-                     registry, tensor_virus)
+from kernels import (allocation_fragmentation, collectives, cores,
+                     encoders, graph_replay, inference_mix, llm_inference,
+                     memory_agg, memory_read, memory_write, nki_backend,
+                     omni_virus, pcie_bandwidth, pulse_virus, registry,
+                     tensor_virus, transformer_compute)
 
 try:
     import psutil
@@ -196,9 +198,12 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
             )
-        elif _wants_monitor_score(workload) and score is None:
+        elif score is None and (_wants_monitor_score(workload)
+                                or _wants_execution_rate(workload)):
+            counter = ("effective_flops" if _wants_monitor_score(workload)
+                       else "an execution rate")
             detail = detail or (
-                "neuron-monitor reported no effective_flops, so this run has "
+                f"neuron-monitor reported no {counter}, so this run has "
                 "no Score from its declared source"
             )
 
@@ -238,6 +243,22 @@ _LAST_RUN: typing.Dict[str, dict] = {}
 # NOT_COMPARABLE_WITH_GPU exists to prevent.
 FLOPS_COUNTER = "neuroncore_counters.*.effective_flops"
 
+# The other monitor-sourced formula. graph_replay declares
+# delta(completed) / period in graph-steps/s, which is a rate over the
+# execution counter rather than an average of a throughput counter -- the
+# reason the flops gate matches on its counter and not on the source.
+EXECUTIONS_COUNTER = "execution_stats.execution_summary.completed"
+
+
+def _wants_execution_rate(workload) -> bool:
+    """Is this workload scored from the monitor's execution counter?"""
+    source = workload.score_source
+    return bool(
+        source
+        and source.source == registry.MONITOR
+        and EXECUTIONS_COUNTER in source.counters
+    )
+
 
 def _wants_monitor_score(workload) -> bool:
     """Is this workload scored from the monitor's effective_flops counter?"""
@@ -269,6 +290,14 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     reached the Tensor Engine. A fabricated Score would flow into a report
     and be compared against real GPU results.
     """
+    if _wants_execution_rate(workload):
+        # delta(completed) / period, computed by the monitor over the span it
+        # actually observed. Absent when fewer than two samples carried the
+        # counter, which is the honest answer for a run too short to measure
+        # a rate over.
+        rate = metrics.get("executions_per_s")
+        return rate if isinstance(rate, (int, float)) else None
+
     if not _wants_monitor_score(workload):
         return None
 
@@ -384,6 +413,106 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         _LAST_RUN[workload.name] = result
         return result["analytic_gbps"]
 
+    # The transformer family. Same building blocks, deliberately different
+    # computations: prefill runs a whole prompt through every layer, decode
+    # runs one token against a cache, and churn never runs the model at all.
+    if workload.name == "llm_prefill":
+        result = llm_inference.run_prefill(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["prompt_tokens_per_s"]
+
+    if workload.name == "llm_decode":
+        result = llm_inference.run_decode(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["tokens_per_s"]
+
+    if workload.name == "kv_cache_churn":
+        result = llm_inference.run_cache_churn(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["cache_updates_per_s"]
+
+    if workload.name == "transformer_virus":
+        result = transformer_compute.run_virus(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_tflops"]
+
+    if workload.name == "transformer_train_step":
+        result = transformer_compute.run_train_step(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["train_steps_per_s"]
+
+    if workload.name == "fused_attention":
+        result = inference_mix.run_fused_attention(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["attention_tiles_per_s"]
+
+    if workload.name == "quantized_gemm":
+        result = inference_mix.run_quantized_gemm(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["quantized_ops_per_s"]
+
+    if workload.name == "moe_router":
+        result = inference_mix.run_moe_router(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["routed_tokens_per_s"]
+
+    if workload.name == "speculative_decode":
+        result = inference_mix.run_speculative_decode(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["verified_tokens_per_s"]
+
+    if workload.name == "serving_mix":
+        result = inference_mix.run_serving_mix(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["requests_per_s"]
+
+    if workload.name == "rag_embedding":
+        result = encoders.run_rag_embedding(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["embedding_vectors_per_s"]
+
+    if workload.name == "vision_encoder":
+        result = encoders.run_vision_encoder(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["image_tiles_per_s"]
+
+    if workload.name == "omni_virus":
+        result = omni_virus.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_tflops"]
+
+    # Aggregate bandwidth: one process per core, because the runtime binds a
+    # process to its visible cores at initialisation and two threads would
+    # share one allocation and measure the same core twice.
+    if workload.name in ("memory_read_agg", "memory_write_agg"):
+        direction = "read" if workload.name.startswith("memory_read") else "write"
+        core_count = sum(device.neuroncores for device in devices)
+        result = memory_agg.run(workload.problem, duration, direction, core_count)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_gbps"]
+
+    # Collectives come from AWS's own benchmark rather than a counter. Both
+    # need two or more devices, so skip_reason keeps them off single-device
+    # parts before execution reaches here.
+    if workload.name == "all_reduce":
+        result = collectives.run_all_reduce(workload.problem, devices)
+        _LAST_RUN[workload.name] = result
+        return result["busbw_gbps"]
+
+    if workload.name == "p2p_thrasher":
+        result = collectives.run_p2p(workload.problem, devices)
+        _LAST_RUN[workload.name] = result
+        return result["busbw_gbps"]
+
+    if workload.name == "graph_replay":
+        # Its declared Score is the monitor's execution rate; this figure
+        # counts submissions instead, and run_workload prefers the counter.
+        # The two disagreeing means the runtime accepted more replays than
+        # the device finished, which is worth seeing rather than smoothing.
+        result = graph_replay.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["graph_steps_per_s"]
+
     nki_backend.require_toolchain()
     raise NotImplementedError(
         f"Workload '{workload.name}' has no NKI implementation yet."
@@ -397,7 +526,15 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
 # workload got a kernel.
 IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
                          "tensor_virus", "int_virus", "pulse_virus",
-                         "allocation_fragmentation", "pcie_bandwidth"})
+                         "allocation_fragmentation", "pcie_bandwidth",
+                         "graph_replay", "llm_prefill", "llm_decode",
+                         "kv_cache_churn", "transformer_virus",
+                         "transformer_train_step", "fused_attention",
+                         "quantized_gemm", "moe_router",
+                         "speculative_decode", "serving_mix",
+                         "rag_embedding", "vision_encoder", "omni_virus",
+                         "memory_read_agg", "memory_write_agg",
+                         "all_reduce", "p2p_thrasher"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:

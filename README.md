@@ -39,30 +39,47 @@ Still unverified:
 
 ## Kernel status
 
+Every workload in the registry now has an implementation: **26 of 26**. What
+differs is how much of each has met hardware.
+
 | Workload | Kernel | Score source |
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ✅ **verified on trn1.2xlarge and inf2.xlarge** | `neuron-profile`, analytic fallback |
-| `memory_write` | ✅ **verified on inf2.xlarge**, but not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
-| `tensor_virus` | ✅ **verified on inf2.xlarge** at 1024³/2048³, not at the pinned 8192³ | `neuron-monitor`, analytic fallback |
-| `int_virus` | ⚠️ written; same GEMM over int8, untested | `neuron-monitor`, analytic fallback |
-| `pulse_virus` | ⚠️ written; tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor`, analytic fallback |
-| `pcie_bandwidth` | ⚠️ written; no NKI, host transfers, untested | workload |
-| `allocation_fragmentation` | ⚠️ written; no NKI, allocator churn, untested | workload |
-| the other 18 | ❌ none | — |
+| `memory_read` | ✅ **verified** on trn1.2xlarge and inf2.xlarge | `neuron-profile`, analytic fallback |
+| `memory_write` | ✅ **verified** on inf2.xlarge, not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
+| `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
+| `int_virus` | ⚠️ same GEMM over int8, untested | `neuron-monitor` |
+| `pulse_virus` | ⚠️ tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor` |
+| `omni_virus` | ⚠️ all four engines in one dependent chain, untested | `neuron-monitor` |
+| `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
+| `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
+| `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
+| `pcie_bandwidth` | ⚠️ host transfers, untested | workload |
+| `allocation_fragmentation` | ⚠️ allocator churn, untested | workload |
+| `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
+| `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |
+| `speculative_decode` / `serving_mix` | ⚠️ untested | workload |
+| `rag_embedding` / `vision_encoder` | ⚠️ untested | workload |
+| `transformer_train_step` | ⚠️ untested; skips on Inferentia | workload |
+| `all_reduce` / `p2p_thrasher` | ⚠️ **cannot be run yet** | `nccom-test` |
 
-The three written after the bring-up deliberately avoid unverified NKI
-primitives. `pulse_virus` reuses `tensor_virus`'s kernel and adds only
-wall-clock duty cycling; `pcie_bandwidth` and `allocation_fragmentation`
-use no NKI at all, reaching the runtime through ordinary device tensors.
-That keeps the untested surface to the arrangement rather than the API,
-which is where the 2026-09-07 bugs actually lived.
+`all_reduce` and `p2p_thrasher` need two or more devices. `trn1.32xlarge` is
+the smallest instance with device-to-device NeuronLink and needs 128 vCPUs
+against a granted 64, so they are written against the documented
+`nccom-test` output rather than against observed output, and their tests are
+the only thing behind them until that quota lands.
 
-`pulse_virus`'s Score is **not** comparable with `tensor_virus`'s: the
-monitor averages `effective_flops` over a run that is half idle by
-construction, so a healthy part reports roughly the duty cycle times the
-sustained figure. The kernel records a loaded-only figure beside it for
-the comparison that does make sense.
+### Why the AI workloads are separate workloads
+
+They share transformer primitives and compose them into deliberately
+different computations. pantheongpu collapsed twelve AI workloads into one
+`ai-ops/s` because ten shared a kernel body and six compiled to
+byte-identical SASS -- one measurement wearing twelve names. Here,
+`llm_prefill` runs a 2048-token prompt through every layer and is quadratic
+in sequence; `llm_decode` runs a single token against a cache and is linear
+in context, roughly three orders of magnitude less arithmetic per step; and
+`kv_cache_churn` never runs the model at all. Anything that would make two
+of them compile to the same graph belongs in one workload, not two.
 
 ### What the 2026-09-07 inf2.xlarge bring-up changed
 
