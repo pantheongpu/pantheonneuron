@@ -111,8 +111,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "matmul FLOPs issued / wall time, chain stages excluded",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "chain output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "chain output"),
     }
 
 

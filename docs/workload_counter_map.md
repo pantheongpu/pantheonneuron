@@ -8,8 +8,7 @@ Do not hand-edit.
 `nccom` = nccom-test, `kernel` = counted by the workload itself.
 
 Instance columns show whether the capability gate admits the workload —
-**not** whether a kernel exists. Only `baseline_metrics` is implemented;
-everything else raises `NotImplementedError` on hardware.
+**not** whether its kernel has met hardware. Every workload in the registry has an implementation (26 of 26); a name absent from `pantheon_neuron.IMPLEMENTED` raises `NotImplementedError` on hardware rather than reporting a silent PASS. See the README for which kernels have actually run on a device.
 
 | Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
 |---|---|---|---|--:|:--:|:--:|:--:|:--:|
@@ -59,13 +58,22 @@ Two cases deliberately produce no Score rather than a number:
 
 ## The declared profiler Score has never been produced by a run
 
-`memory_read` and `memory_write` declare `neuron-profile` as their Score source, and every run degrades to the analytic fallback instead. The cause, isolated on inf2.xlarge 2026-09-07: `neuron-profile capture` replays the NEFF, which needs NeuronCores, and the workload process holds them all — `Logical Neuron Core(s) not available - Requested:2 Available:0`. The same capture against the same NEFF succeeds once no workload is running, which is why the profiler figures in `data/baselines.json` exist at all: they came from standalone probe sessions, never from a scored run.
+`memory_read` and `memory_write` declare `neuron-profile` as their Score source, and every run so far has degraded to the analytic fallback instead. Two causes, found in that order:
 
-The fallback is therefore not a rare degradation, it is the only path these Scores have ever taken. Fixing it means capturing the profile after the workload releases the device, which changes how `run` is structured rather than patching the profiler, and is not done yet.
+- **inf2.xlarge 2026-09-07** — `neuron-profile capture` replays the NEFF, which needs NeuronCores, and the workload process held them all (`Logical Neuron Core(s) not available - Requested:2 Available:0`). That is why the profiler figures in `data/baselines.json` exist at all: they came from standalone probe sessions, never from a scored run. `kernels/cores.py` now reserves a core to close it.
+- **trn1.2xlarge 2026-09-08** — the reservation worked and the capture ran for the first time, against the wrong graph. `verify_profile_covers_plan` refused it: *profiled graph moved 4 bytes against a plan of 8589934592*. Narrowing NEFF selection by compile timestamp is not enough to identify the kernel's own graph. Scores from a declared hardware source that run: 0 of 4.
+
+So the fallback is not a rare degradation, it is the only path these Scores have ever taken — but it is now a loud one. The failure is a refusal rather than a plausible bandwidth computed from four bytes, and the row's `Score Method` names the method actually used.
+
+## Reserving the core costs a selection
+
+The Neuron runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation, so the workload/profiler split is fixed for a whole run and cannot be renegotiated per workload. `memory_read_agg` and `memory_write_agg` declare `cores: "all"`, and holding a core back from them would report the aggregate of all-but-one core under a name that says otherwise — so their presence turns the reservation off for the entire run.
+
+**`--test all` and `--test memory` both select them**, which means neither invocation can reach the profiler for `memory_read` or `memory_write`. The declared source is available only to a selection with no `cores: "all"` workload in it, such as `--test memory_read`. `pantheon_neuron.reservation_cost` derives which workloads are paying and the run names them on the console.
 
 ## Where the comparison does not hold
 
-Twelve workloads exist on both platforms under the same name and must **not** be compared: `fused_attention`, `graph_replay`, `kv_cache_churn`, `llm_decode`, `llm_prefill`, `moe_router`, `quantized_gemm`, `rag_embedding`, `serving_mix`, `speculative_decode`, `transformer_train_step`, `vision_encoder`.
+12 workloads exist on both platforms under the same name and must **not** be compared: `fused_attention`, `graph_replay`, `kv_cache_churn`, `llm_decode`, `llm_prefill`, `moe_router`, `quantized_gemm`, `rag_embedding`, `serving_mix`, `speculative_decode`, `transformer_train_step`, `vision_encoder`.
 
 pantheongpu v1.0.19 replaced their units with a single `ai-ops/s`. Ten of its AI workloads shared one kernel body and six compiled to byte-identical SASS, so what it reports is generic synthetic throughput rather than the quantity each name suggests. The Neuron implementations count the real thing — tokens generated, cache updates applied, training steps completed.
 

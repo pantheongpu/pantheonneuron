@@ -50,7 +50,136 @@ def _devices(arch, count, cores, training):
     ]
 
 
-def main() -> None:
+def _not_comparable() -> str:
+    """Name the workloads that share a GPU name but not a quantity.
+
+    Read from ``registry.NOT_COMPARABLE_WITH_GPU`` rather than typed out, so
+    adding a workload to that dict cannot leave this paragraph listing the
+    old set. The count is derived for the same reason.
+    """
+    names = sorted(registry.NOT_COMPARABLE_WITH_GPU)
+    listed = ", ".join(f"`{name}`" for name in names)
+    return (
+        f"{len(names)} workloads exist on both platforms under the same name "
+        f"and must **not** be compared: {listed}."
+    )
+
+
+def _prose():
+    """The narrative sections of the reference.
+
+    These live here, not in the Markdown. The generated file says "do not
+    hand-edit" and means it: prose added to the output was deleted the next
+    time anyone ran this script, which is exactly the sort of silent loss the
+    rest of this suite is built to avoid. Anything that belongs in the
+    reference belongs in this function.
+    """
+    return [
+        "## How a monitor-sourced Score is read",
+        "",
+        "The five compute workloads declare `mean(effective_flops) / 1e12`. "
+        "That counter exists only in the neuron-monitor stream — it is absent "
+        "from the CloudWatch metric set, and sysfs leaves `flop_count` at zero "
+        "— so unlike the bandwidth kernels, their Score cannot come from the "
+        "kernel. `pantheon_neuron.monitor_score` reads it from the telemetry "
+        "the run just collected, after the monitor stops.",
+        "",
+        "`mean` is across NeuronCores. A part reports one series per core, and "
+        "a workload that saturates the device runs on all of them; summing "
+        "would make a two-core part look twice as fast as the same silicon "
+        "reported per core.",
+        "",
+        "Two cases deliberately produce no Score rather than a number:",
+        "",
+        "- **The counter is absent** — a mock run, telemetry disabled, or a "
+        "kernel that never reached the Tensor Engine. The row records a PASS "
+        "with no Score and says why.",
+        "- **The workload failed** — telemetry keeps sampling through a "
+        "failure, so without a status gate a FAIL row would carry whatever the "
+        "monitor caught and read as a measurement.",
+        "",
+        "`graph_replay` is also neuron-monitor-sourced but is **not** on this "
+        "path: its formula is `delta(completed) / period` in graph-steps/s. "
+        "The gate matches on the declared counter, not on the source, so the "
+        "FLOPS arithmetic cannot reach it.",
+        "",
+        "## The declared profiler Score has never been produced by a run",
+        "",
+        "`memory_read` and `memory_write` declare `neuron-profile` as their "
+        "Score source, and every run so far has degraded to the analytic "
+        "fallback instead. Two causes, found in that order:",
+        "",
+        "- **inf2.xlarge 2026-09-07** — `neuron-profile capture` replays the "
+        "NEFF, which needs NeuronCores, and the workload process held them all "
+        "(`Logical Neuron Core(s) not available - Requested:2 Available:0`). "
+        "That is why the profiler figures in `data/baselines.json` exist at "
+        "all: they came from standalone probe sessions, never from a scored "
+        "run. `kernels/cores.py` now reserves a core to close it.",
+        "- **trn1.2xlarge 2026-09-08** — the reservation worked and the "
+        "capture ran for the first time, against the wrong graph. "
+        "`verify_profile_covers_plan` refused it: *profiled graph moved 4 "
+        "bytes against a plan of 8589934592*. Narrowing NEFF selection by "
+        "compile timestamp is not enough to identify the kernel's own graph. "
+        "Scores from a declared hardware source that run: 0 of 4.",
+        "",
+        "So the fallback is not a rare degradation, it is the only path these "
+        "Scores have ever taken — but it is now a loud one. The failure is a "
+        "refusal rather than a plausible bandwidth computed from four bytes, "
+        "and the row's `Score Method` names the method actually used.",
+        "",
+        "## Reserving the core costs a selection",
+        "",
+        "The Neuron runtime reads `NEURON_RT_VISIBLE_CORES` once at "
+        "initialisation, so the workload/profiler split is fixed for a whole "
+        "run and cannot be renegotiated per workload. `memory_read_agg` and "
+        "`memory_write_agg` declare `cores: \"all\"`, and holding a core back "
+        "from them would report the aggregate of all-but-one core under a name "
+        "that says otherwise — so their presence turns the reservation off for "
+        "the entire run.",
+        "",
+        "**`--test all` and `--test memory` both select them**, which means "
+        "neither invocation can reach the profiler for `memory_read` or "
+        "`memory_write`. The declared source is available only to a selection "
+        "with no `cores: \"all\"` workload in it, such as `--test memory_read`. "
+        "`pantheon_neuron.reservation_cost` derives which workloads are paying "
+        "and the run names them on the console.",
+        "",
+        "## Where the comparison does not hold",
+        "",
+        _not_comparable(),
+        "",
+        "pantheongpu v1.0.19 replaced their units with a single "
+        f"`{registry.GPU_SYNTHETIC_AI_UNIT}`. Ten of its AI workloads shared "
+        "one kernel body and six compiled to byte-identical SASS, so what it "
+        "reports is generic synthetic throughput rather than the quantity each "
+        "name suggests. The Neuron implementations count the real thing — "
+        "tokens generated, cache updates applied, training steps completed.",
+        "",
+        f"Copying `{registry.GPU_SYNTHETIC_AI_UNIT}` here would restore the "
+        "join and compare unlike quantities, so these keep their own units and "
+        "are listed in `registry.NOT_COMPARABLE_WITH_GPU`. "
+        "`tests/test_score_schema.py` fails if a unit diverges without being "
+        "declared there.",
+        "",
+    ]
+
+
+TARGET = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "docs",
+    "workload_counter_map.md",
+)
+
+
+def render() -> str:
+    """Build the whole reference as a string.
+
+    Split from ``main`` so a test can compare the rendered text against the
+    committed file without writing to it. That guard is the only thing that
+    makes "do not hand-edit" enforceable: a registry change that nobody
+    regenerated for now fails CI instead of leaving the reference describing
+    a suite that no longer exists.
+    """
     out = [
         "# Workload reference",
         "",
@@ -62,8 +191,12 @@ def main() -> None:
         "`nccom` = nccom-test, `kernel` = counted by the workload itself.",
         "",
         "Instance columns show whether the capability gate admits the workload —",
-        "**not** whether a kernel exists. Only `baseline_metrics` is implemented;",
-        "everything else raises `NotImplementedError` on hardware.",
+        "**not** whether its kernel has met hardware. Every workload in the "
+        f"registry has an implementation ({len(registry.WORKLOADS)} of "
+        f"{len(registry.WORKLOADS)}); a name absent from "
+        "`pantheon_neuron.IMPLEMENTED` raises `NotImplementedError` on "
+        "hardware rather than reporting a silent PASS. See the README for "
+        "which kernels have actually run on a device.",
         "",
         "| Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |",
         "|---|---|---|---|--:|:--:|:--:|:--:|:--:|",
@@ -97,6 +230,11 @@ def main() -> None:
         "`all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and "
         "`transformer_train_step` needs a Trainium part.",
         "",
+    ]
+
+    out += _prose()
+
+    out += [
         "## Pinned problems",
         "",
         "A Score is comparable across platforms only if both ran the same "
@@ -148,14 +286,14 @@ def main() -> None:
         "",
     ]
 
-    target = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "docs",
-        "workload_counter_map.md",
-    )
-    with open(target, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(out))
-    print(f"wrote {target} ({len(out)} lines)")
+    return "\n".join(out)
+
+
+def main() -> None:
+    text = render()
+    with open(TARGET, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    print(f"wrote {TARGET} ({text.count(chr(10)) + 1} lines)")
 
 
 if __name__ == "__main__":

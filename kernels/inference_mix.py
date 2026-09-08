@@ -81,8 +81,8 @@ def run_fused_attention(problem: typing.Mapping[str, typing.Any],
         "flops_issued": flops,
         "score_method": "workload",
         "analytic_basis": "attention tiles / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "attention output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "attention output"),
     }
 
 
@@ -137,8 +137,8 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
         "quantized_ops_per_s": ops / elapsed if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "quantised ops / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "quantised output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "quantised output"),
     }
 
 
@@ -207,8 +207,8 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
         "top_k": top_k,
         "score_method": "workload",
         "analytic_basis": "routed tokens / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "router output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "router output"),
     }
 
 
@@ -282,9 +282,31 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         # synthetic workload cannot honestly simulate. The number is
         # verification throughput, not end-to-end speculative speedup.
         "analytic_basis": "verified tokens / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "verification output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "verification output"),
     }
+
+
+def interleave_period(ratio: float) -> int:
+    """One prefill every N requests, for a requested prefill ratio.
+
+    A deterministic interleave rather than a sampled one: sampling would
+    make two runs of the same workload measure different mixes, and the mix
+    *is* the workload. Returns 0 for a ratio of zero, meaning no prefills at
+    all.
+
+    **The period quantises the ratio, and the row reports both.** A period
+    is a whole number of requests, so only ratios of the form 1/N are
+    reproduced exactly. The pinned 0.2 is one of them (period 5). A ratio of
+    0.6 rounds to period 2 and actually serves 0.5, which is why the result
+    carries ``observed_prefill_ratio`` beside the requested one rather than
+    echoing back the number that was asked for.
+    """
+    if not 0 <= ratio <= 1:
+        raise ValueError(f"prefill_ratio must be in [0, 1], got {ratio}")
+    if not ratio:
+        return 0
+    return max(int(round(1 / ratio)), 1)
 
 
 def run_serving_mix(problem: typing.Mapping[str, typing.Any],
@@ -300,8 +322,10 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
     prompt = int(problem["prompt"])
     decode = int(problem["decode"])
 
-    if not 0 <= ratio <= 1:
-        raise ValueError(f"prefill_ratio must be in [0, 1], got {ratio}")
+    # Resolved before anything is allocated, so a bad ratio is rejected
+    # rather than discovered after the weights are on the device. It also
+    # validates: interleave_period raises on a ratio outside [0, 1].
+    period = interleave_period(ratio)
 
     hidden = 4096
     dtype = torch.bfloat16
@@ -323,10 +347,6 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
     started = time.perf_counter()
     deadline = started + duration
 
-    # A deterministic interleave rather than a sampled one: one prefill
-    # every 1/ratio requests. Sampling would make two runs of the same
-    # workload measure different mixes, and the mix is the workload.
-    period = max(int(round(1 / ratio)), 1) if ratio else 0
     while time.perf_counter() < deadline:
         is_prefill = period and (requests % period == 0)
         if is_prefill:
@@ -351,15 +371,6 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         "requested_decode_length": decode,
         "score_method": "workload",
         "analytic_basis": "requests completed / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "serving output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "serving output"),
     }
-
-
-def _read_back(tensor) -> typing.Optional[float]:
-    if tensor is None:
-        return None
-    try:
-        return float(tensor.reshape(-1)[0])
-    except Exception:  # materialisation failed; leave unverified
-        return None

@@ -50,7 +50,7 @@ differs is how much of each has met hardware.
 | `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
 | `int_virus` | ❌ **int8 is unsupported by trn1's Tensor Engine** | `neuron-monitor` |
 | `pulse_virus` | ✅ **verified on trn1.2xlarge** at 2048³ | `neuron-monitor` |
-| `omni_virus` | ⚠️ all four engines in one dependent chain, untested | `neuron-monitor` |
+| `omni_virus` | ⚠️ all four engines in one dependent chain, untested; a NameError that would have failed its first hardware run is now fixed | `neuron-monitor` |
 | `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
 | `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
 | `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
@@ -103,6 +103,39 @@ the pin is unreachable on either -- now confirmed rather than inferred.
 against h2d 6.0 GB/s. Whether that is a real link property or an artifact of
 `.cpu()` being synchronous needs a second look before the number is read as
 a transfer rate.
+
+### What the transformer family's first tests found
+
+The five modules behind the ten AI workloads — `transformer_ops`,
+`llm_inference`, `inference_mix`, `encoders`, `transformer_compute` — were
+the only kernel modules no test imported, roughly 1,100 lines. Adding
+`tests/test_transformer_family.py` found one defect immediately:
+
+**`omni_virus` called a `_read_back` it did not have.** The helper was copied
+privately into four modules and `omni_virus` was not one of them, so its
+`run()` ended in `NameError: name '_read_back' is not defined` — *after* the
+full-duration stress loop, turning a completed run into a FAIL row with
+nothing to show for the device time. It could only ever have surfaced on
+hardware, and `omni_virus` has never run there.
+
+The helper now lives once, in `transformer_ops.read_back`. Two tests keep
+that class of defect closed: one asserts there is exactly one definition, and
+one walks every kernel module's AST for names that are neither defined,
+imported, nor builtin — with a self-test that the checker actually fails the
+`omni_virus` code, since a checker that cannot catch its own motivating bug
+proves nothing.
+
+The rest of the file covers what can be checked without a device: the FLOP
+arithmetic (including that prefill and decode still differ by orders of
+magnitude, which is the registry's stated reason for keeping them separate
+workloads), the vision encoder's patch geometry, the serving interleave, and
+that every workload's dispatch key exists in the kernel that must produce it.
+
+`verify_output_is_finite` was renamed to `verify_output_is_a_number`. Its
+name and summary line promised an inf check the body deliberately did not do
+— inf is expected here, since all-ones weights with no normalisation saturate
+bf16 — and a check whose name overstates it is the same defect this suite
+spends its Score labelling on.
 
 ### Why the AI workloads are separate workloads
 
@@ -255,6 +288,30 @@ Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
 workload), `--device` (indices or `all`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
+### What `--test all` cannot measure
+
+The profiler needs a NeuronCore of its own to replay a NEFF, and the Neuron
+runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation — so the split
+between workload and profiler is fixed for a whole run and cannot be
+renegotiated per workload.
+
+`memory_read_agg` and `memory_write_agg` declare `cores: "all"`. Holding a
+core back from them would report the aggregate of all-but-one core under a
+name that says otherwise, so their presence in a selection turns the
+reservation off for the entire run. **`--test all` and `--test memory` both
+select them**, which means `memory_read` and `memory_write` report the
+analytic fallback rather than the `neuron-profile` Score they declare.
+
+To reach the declared source, run them in a selection with no `cores: "all"`
+workload in it:
+
+```bash
+python pantheon_neuron.py --test memory_read --duration 60
+```
+
+The run says which it did — the console names the workloads that are paying,
+and each row's `Score Method` records the method actually used.
+
 ## Running without hardware
 
 The full orchestrator, telemetry and reporting path runs on any machine via a
@@ -269,9 +326,13 @@ device, a workload with no NKI implementation raises rather than passing.
 
 ## Reports
 
-Runs write JSON to `database/`, which is gitignored. **This repository is
-public**, so reports must never contain host identifiers — no hostname, no IP,
-no EC2 instance ID, no availability zone.
+Runs write JSON to `database/`, which is gitignored — reports are not
+committed. The invariant does not rest on that. A report is the artifact that
+gets pasted into an issue, attached to a mail, or quoted in a write-up, and it
+is produced on a rented instance whose identifiers belong to somebody's
+account. One paste away from public is the same requirement as public, so
+reports must never contain host identifiers — no hostname, no IP, no EC2
+instance ID, no availability zone.
 
 `neuron-monitor` volunteers several of these in every sample, so telemetry is
 scrubbed at ingest rather than at write time. `tests/test_report_privacy.py`

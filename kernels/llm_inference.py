@@ -74,7 +74,7 @@ def run_prefill(problem: typing.Mapping[str, typing.Any], duration: int) -> dict
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(sink)
+    observed = transformer_ops.read_back(sink)
     tokens = prompts * prompt * batch
     flops = prompts * layers * transformer_ops.block_flops(hidden, prompt, batch)
 
@@ -87,7 +87,8 @@ def run_prefill(problem: typing.Mapping[str, typing.Any], duration: int) -> dict
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "prompt tokens / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "prefill output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            observed, "prefill output"),
     }
 
 
@@ -148,7 +149,7 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(sink)
+    observed = transformer_ops.read_back(sink)
     steps = tokens // batch if batch else 0
     flops = steps * layers * transformer_ops.decode_step_flops(hidden, context, batch)
 
@@ -161,7 +162,8 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "tokens generated / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "decode output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            observed, "decode output"),
     }
 
 
@@ -207,7 +209,7 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(cache_k)
+    observed = transformer_ops.read_back(cache_k)
     bytes_written = updates * 2 * hidden * tiling.DTYPE_BYTES[str(problem["dtype"])]
 
     return {
@@ -217,16 +219,5 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
         "bytes_written": bytes_written,
         "score_method": "workload",
         "analytic_basis": "cache updates / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "cache"),
+        "warning": transformer_ops.verify_output_is_a_number(observed, "cache"),
     }
-
-
-def _read_back(tensor) -> typing.Optional[float]:
-    """Materialise one element, proving the graph executed."""
-    if tensor is None:
-        return None
-    try:
-        flat = tensor.reshape(-1)
-        return float(flat[0])
-    except Exception:  # materialisation failed; leave unverified
-        return None

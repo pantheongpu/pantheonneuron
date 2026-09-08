@@ -109,6 +109,16 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
                 _, stderr = process.communicate(timeout=_WORKER_TIMEOUT)
             except subprocess.TimeoutExpired:
                 process.kill()
+                # Reap after killing. kill() only sends the signal; without
+                # a second communicate() the child stays a zombie and its
+                # stdout/stderr pipes stay open, and this loop still has
+                # every other worker to wait on -- on an 8-core part that
+                # is seven more processes holding descriptors for a run
+                # that has already lost its result.
+                try:
+                    process.communicate(timeout=30)
+                except subprocess.TimeoutExpired:  # pragma: no cover - refuses SIGKILL
+                    pass
                 failures.append(f"core {core} timed out")
                 continue
             if process.returncode != 0:

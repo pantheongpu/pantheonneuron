@@ -61,7 +61,7 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(sink)
+    observed = transformer_ops.read_back(sink)
     flops = passes * transformer_ops.block_flops(hidden, seq)
 
     return {
@@ -72,7 +72,7 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "block FLOPs issued / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "block output"),
+        "warning": transformer_ops.verify_output_is_a_number(observed, "block output"),
     }
 
 
@@ -145,7 +145,7 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(sink)
+    observed = transformer_ops.read_back(sink)
     # Backward costs roughly twice the forward: one pass for input
     # gradients and one for weight gradients.
     forward = steps * layers * transformer_ops.block_flops(hidden, seq, batch)
@@ -158,14 +158,5 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
         "implied_tflops": (forward * 3) / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "optimiser steps / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "loss"),
+        "warning": transformer_ops.verify_output_is_a_number(observed, "loss"),
     }
-
-
-def _read_back(tensor) -> typing.Optional[float]:
-    if tensor is None:
-        return None
-    try:
-        return float(tensor.reshape(-1)[0])
-    except Exception:  # materialisation failed; leave unverified
-        return None

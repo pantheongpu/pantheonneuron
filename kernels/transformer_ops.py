@@ -117,15 +117,47 @@ def decode_step_flops(hidden: int, context: int, batch: int = 1) -> int:
     return projections + attention_matmuls + mlp
 
 
-def verify_output_is_finite(observed: typing.Optional[float],
-                            what: str = "output") -> typing.Optional[str]:
-    """Check the model produced a number rather than a NaN or an inf.
+def read_back(tensor) -> typing.Optional[float]:
+    """Materialise one element, proving the graph executed.
 
-    These blocks run on all-ones weights with no normalisation, so values
-    grow with depth and bf16 saturates. That is acceptable -- throughput is
-    what is being measured -- but a NaN means the graph produced nothing
-    readable, which is indistinguishable from a graph that never ran, and
-    that is the failure worth catching.
+    Lives here because every workload that calls ``verify_output_is_a_number``
+    needs it first, and the two belong together: this produces the value,
+    that judges it. It was previously copied privately into four kernel
+    modules, and ``omni_virus`` called it without having a copy -- a
+    NameError that fired only after a full-duration run on real hardware,
+    turning a completed stress run into a FAIL row. Nothing caught it
+    because none of those modules had a test.
+
+    Returns None when the read fails, which the caller reports as
+    "unverified" rather than as a pass.
+    """
+    if tensor is None:
+        return None
+    try:
+        return float(tensor.reshape(-1)[0])
+    except Exception:  # materialisation failed; leave unverified
+        return None
+
+
+def verify_output_is_a_number(observed: typing.Optional[float],
+                              what: str = "output") -> typing.Optional[str]:
+    """Check the model produced a number: readable, and not a NaN.
+
+    **Infinity passes on purpose.** These blocks run on all-ones weights
+    with no normalisation, so values grow with depth and bf16 saturates to
+    inf long before the last layer. That is expected and it is fine --
+    throughput is what is being measured, not numerical accuracy, and an
+    inf still proves the graph ran.
+
+    A NaN does not. It is what a graph that produced nothing readable looks
+    like, which is indistinguishable from a graph that never ran, and that
+    is the failure worth catching. NaN is literally Not a Number, so the
+    name says exactly what is checked.
+
+    Named this way after an earlier ``verify_output_is_finite``, whose name
+    and summary line promised an inf check the body deliberately did not do.
+    A check whose name overstates it is the same defect this suite spends
+    its Score labelling on: the reader trusts the label, not the body.
     """
     if observed is None:
         return f"{what} could not be read back, so execution is unverified"

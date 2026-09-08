@@ -79,8 +79,8 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
         "flops_issued": flops,
         "score_method": "workload",
         "analytic_basis": "vectors embedded / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "embedding"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "embedding"),
     }
 
 
@@ -173,15 +173,6 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         "patches_per_image": plan["patches"],
         "score_method": "workload",
         "analytic_basis": "image tiles / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "encoder output"),
+        "warning": transformer_ops.verify_output_is_a_number(
+            transformer_ops.read_back(sink), "encoder output"),
     }
-
-
-def _read_back(tensor) -> typing.Optional[float]:
-    if tensor is None:
-        return None
-    try:
-        return float(tensor.reshape(-1)[0])
-    except Exception:  # materialisation failed; leave unverified
-        return None

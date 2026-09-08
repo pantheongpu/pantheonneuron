@@ -38,10 +38,17 @@ DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "databas
 def get_system_snapshot(devices) -> dict:
     """Aggregate run context for the report.
 
-    This repository is public and reports are committed to it, so the
-    snapshot must never contain host identifiers -- no hostname, no IP, no
-    EC2 instance ID, no availability zone.  ``tests/test_report_privacy.py``
-    enforces this; if you add a field here, assume it will be published.
+    Reports are written to ``database/``, which is gitignored -- they are
+    not committed. The invariant does not rest on that: a report is the
+    artifact that gets pasted into an issue, attached to a mail, or copied
+    into a public write-up, and it is produced on a rented instance whose
+    identifiers are somebody's account. Being one paste away from public is
+    the same requirement as being public.
+
+    So the snapshot must never contain host identifiers -- no hostname, no
+    IP, no EC2 instance ID, no availability zone.
+    ``tests/test_report_privacy.py`` enforces this; if you add a field here,
+    assume it will be published.
     """
     snapshot = {
         "pantheon_neuron_version": PANTHEON_NEURON_VERSION,
@@ -95,6 +102,31 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
 
 # --- Execution --------------------------------------------------------------
 
+def reservation_cost(workloads) -> typing.Tuple[typing.List[str], typing.List[str]]:
+    """What a selection costs the profiler: (aggregate names, workloads billed).
+
+    The first list is the workloads that force the reservation off by
+    declaring ``cores: "all"``. The second is the workloads that pay for it
+    -- the ones whose registry entry names ``neuron-profile``, which are
+    exactly the ones that will fall back to the analytic figure.
+
+    Split out from ``reserve_profiler_core`` so the cost can be named in the
+    message, asserted by a test, and rendered in the workload reference
+    without re-deriving the rule in three places.
+    """
+    aggregate = [w.name for w in workloads
+                 if (w.problem or {}).get("cores") == "all"]
+    if not aggregate:
+        return [], []
+    billed = [
+        w.name for w in workloads
+        if w.name not in aggregate
+        and w.score_source is not None
+        and w.score_source.source == registry.PROFILER
+    ]
+    return aggregate, billed
+
+
 def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     """Keep one NeuronCore free so the profiler can replay a NEFF.
 
@@ -115,19 +147,32 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     number would quietly be the aggregate of all-but-one core under a name
     that says otherwise. A missing profiler Score announces itself in the
     row; a Score over the wrong core count does not.
+
+    That rule has a consequence worth stating plainly, because it applies to
+    the invocation the README puts first: ``--test all`` and ``--test
+    memory`` both select an aggregate workload, so neither can reach the
+    profiler for ``memory_read`` or ``memory_write``. The declared source is
+    available only to a selection with no ``cores: "all"`` workload in it.
+    The message below names which workloads are paying, rather than saying
+    "these Scores" and leaving the reader to work out which.
     """
     if nki_backend.mock_mode():
         return None
     if os.environ.get(cores.VISIBLE_CORES):
         return None
 
-    aggregate = [w.name for w in workloads
-                 if (w.problem or {}).get("cores") == "all"]
+    aggregate, billed = reservation_cost(workloads)
     if aggregate:
         print(
             f"[PANTHEON-NEURON] no core reserved: {aggregate[0]} measures all "
-            "cores, so these Scores use the analytic fallback"
+            "cores"
         )
+        if billed:
+            print(
+                f"[PANTHEON-NEURON]   {', '.join(billed)} will report the "
+                f"analytic fallback, not {registry.PROFILER}; run them in a "
+                "selection with no cores:all workload to reach it"
+            )
         return None
 
     total = sum(device.neuroncores for device in devices)
@@ -201,7 +246,7 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         elif score is None and (_wants_monitor_score(workload)
                                 or _wants_execution_rate(workload)):
             counter = ("effective_flops" if _wants_monitor_score(workload)
-                       else "an execution rate")
+                       else "execution rate")
             detail = detail or (
                 f"neuron-monitor reported no {counter}, so this run has "
                 "no Score from its declared source"

@@ -154,3 +154,66 @@ def test_single_core_part_reserves_nothing(monkeypatch):
 
     assert pantheon_neuron.reserve_profiler_core(_devices(1, cores_each=1)) is None
     assert cores.VISIBLE_CORES not in os.environ
+
+
+def test_the_default_selection_cannot_reach_the_profiler(monkeypatch, capsys):
+    """`--test all` is the README's first example and it pays this cost.
+
+    The reservation is all-or-nothing for a run, and `all` selects
+    memory_read_agg, so memory_read and memory_write cannot reach the
+    neuron-profile Score they declare. That is a deliberate trade -- an
+    aggregate over the wrong core count is worse than a labelled fallback
+    -- but it is the documented invocation, so it is pinned here rather
+    than rediscovered on an instance that bills by the hour.
+    """
+    from kernels import registry
+
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+    monkeypatch.delenv(cores.VISIBLE_CORES, raising=False)
+    monkeypatch.delenv(cores.RESERVED_CORE, raising=False)
+
+    everything = registry.resolve("all")
+    assert pantheon_neuron.reserve_profiler_core(_devices(1), everything) is None
+    assert cores.VISIBLE_CORES not in os.environ
+
+    # The cost is named, not left as "these Scores".
+    printed = capsys.readouterr().out
+    assert "memory_read" in printed and "memory_write" in printed
+    assert registry.PROFILER in printed
+
+
+def test_the_memory_suite_pays_the_same_cost(monkeypatch):
+    """`--test memory` selects the aggregates too, so it is no way round it."""
+    from kernels import registry
+
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+    monkeypatch.delenv(cores.VISIBLE_CORES, raising=False)
+    monkeypatch.delenv(cores.RESERVED_CORE, raising=False)
+
+    memory = registry.resolve("memory")
+    assert pantheon_neuron.reserve_profiler_core(_devices(1), memory) is None
+    assert cores.VISIBLE_CORES not in os.environ
+
+
+def test_reservation_cost_names_who_pays():
+    """The billed list is the profiler-sourced workloads, not the aggregates."""
+    from kernels import registry
+
+    aggregate, billed = pantheon_neuron.reservation_cost(registry.resolve("all"))
+    assert set(aggregate) == {"memory_read_agg", "memory_write_agg"}
+    assert set(billed) == {"memory_read", "memory_write"}
+
+    # Every billed workload really does declare the profiler, and no
+    # aggregate is billed for a reservation it refused.
+    by_name = {w.name: w for w in registry.WORKLOADS}
+    assert all(by_name[n].score_source.source == registry.PROFILER
+               for n in billed)
+    assert not set(aggregate) & set(billed)
+
+
+def test_a_selection_without_aggregates_is_charged_nothing():
+    from kernels import registry
+
+    single = [w for w in registry.WORKLOADS
+              if w.name in ("memory_read", "memory_write")]
+    assert pantheon_neuron.reservation_cost(single) == ([], [])
