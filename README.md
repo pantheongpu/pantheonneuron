@@ -464,6 +464,37 @@ Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
 workload), `--device` (indices or `all`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
+### A KV cache cannot be updated in place on this stack
+
+The most useful thing `kv_cache_churn` has produced is not a Score. XLA is
+functional: `cache[:, a:b, :] = entry` lowers to a dynamic-update-slice,
+which produces a **new tensor**. There is no in-place write. Appending 512
+tokens to a 2 GiB cache does not move 256 MiB — it reads 2 GiB and writes
+2 GiB.
+
+It took three measurements on trn1.2xlarge to see that, and each one first
+looked like a different problem:
+
+| attempt | measured | what it looked like |
+|---|---|---|
+| 1 layer, 1 token | 115 µs for 16 KiB — 1,794× what HBM needs | dispatch overhead |
+| 32 layers, 64 tokens | 455 ms for 32 MiB — 54× more than rewriting every layer's whole slice | a slow scatter |
+| 8 static ring slots | **~7 minutes to compile each slot's graph** | — |
+
+A graph that compiles for seven minutes to write a slice is a graph handling
+the whole 2 GiB tensor. Once that is true the other two follow, and the first
+two diagnoses were both wrong.
+
+The consequence for anyone serving on Neuron is larger than this workload:
+**the cost of appending to a KV cache is proportional to the size of the
+cache, not to the number of tokens appended.** The pinned problem is now
+sized so a whole-cache copy is tractable — 8 layers, 2048 context, 2048
+hidden, a 128 MiB cache and a 256 MiB step — and `bytes_per_step` reports the
+copy rather than the slice, because counting the slice would report a
+sixteenth of what the hardware moves.
+
+**Unverified at this size.** The 2 GiB version never finished compiling.
+
 ### Repeats
 
 Most Scores in this README are from a single run, and the one quantity that

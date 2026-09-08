@@ -594,38 +594,55 @@ def test_the_gathered_weight_table_stays_small():
 
 def test_the_pinned_cache_fits_on_a_neuroncore():
     plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
-    per_core = 16 * 1024**3
-    assert plan["resident_bytes"] == 2 * 1024**3
-    assert plan["resident_bytes"] < per_core / 2, "leave room for everything else"
+    assert plan["resident_bytes"] == 128 * 1024**2
+    assert plan["resident_bytes"] < 16 * 1024**3 / 2
+
+
+def test_a_step_costs_a_whole_cache_copy_not_a_slice():
+    """The finding: XLA has no in-place update.
+
+    cache[:, a:b, :] = entry lowers to dynamic-update-slice, which produces
+    a new tensor. So an append reads the cache and writes a new one, and
+    the traffic is twice the resident size regardless of how few tokens
+    were appended. Counting the slice would report a sixteenth of what the
+    hardware moves at the pinned size.
+    """
+    plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
+
+    assert plan["bytes_per_step"] == 2 * plan["resident_bytes"]
+    assert plan["bytes_per_step"] > plan["slice_bytes"]
+    # The gap is the size of the mistake, and it grows with the cache.
+    assert plan["bytes_per_step"] / plan["slice_bytes"] == plan["ring_slots"] * 2
 
 
 def test_a_step_writes_every_layer_not_one():
-    """A KV cache is per layer; a decode step appends K and V to all of them."""
+    """A KV cache is per layer; an append touches all of them."""
     problem = PROBLEMS["kv_cache_churn"]
     plan = llm_inference.cache_plan(problem)
-
     one_layer_one_token = 2 * problem["hidden"] * 2
-    assert plan["bytes_per_step"] == (
+    assert plan["slice_bytes"] == (
         plan["tokens_per_step"] * plan["layers"] * one_layer_one_token)
-    assert plan["bytes_per_step"] == 256 * 1024**2
 
 
 def test_the_pinned_step_is_large_enough_to_time_the_write():
-    """About 1 ms of bandwidth per step, against a per-step overhead
-    measured in hundreds of microseconds.
+    """About 1 ms of bandwidth per step.
 
-    Below that ratio the wall clock is dominated by everything except the
-    write, and the rate stops being a cache measurement -- which is what
-    it was for both earlier shapes.
+    Large enough that the copy dominates, small enough that its graphs
+    compile in something like a minute. The 2 GiB cache tried before this
+    took roughly seven minutes per ring slot, eight slots, and never
+    produced a number at all.
     """
     plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
-    at_hbm_us = plan["bytes_per_step"] / (llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6
-    assert at_hbm_us > 500.0
+    at_hbm_ms = plan["bytes_per_step"] / (
+        llm_inference.MEASURED_HBM_GBPS * 1e9) * 1000
+    assert 0.5 < at_hbm_ms < 5.0
 
-    # The first pin -- one layer, one token -- was three orders below it.
-    one_layer_one_token = 2 * 4096 * 2
-    assert one_layer_one_token / (
-        llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6 < 1.0
+    # The cache that could not finish, for contrast.
+    huge = llm_inference.cache_plan(
+        {"hidden": 4096, "context": 4096, "layers": 32,
+         "ring_slots": 8, "dtype": "bf16"})
+    assert huge["bytes_per_step"] / (
+        llm_inference.MEASURED_HBM_GBPS * 1e9) * 1000 > 15.0
 
 
 def test_the_ring_compiles_one_graph_per_slot_and_no_more():

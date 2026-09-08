@@ -302,29 +302,25 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'elapsed_s',
                  ),
                  formula='prompt_tokens / elapsed_s')),
-    # layers and ring_slots are pinned because without them this workload
-    # measured everything except the cache. Two failures, in order:
+    # Sized so that a whole-cache copy per append is tractable, because on
+    # this stack that is what an append costs. XLA is functional, so
+    # cache[:, a:b, :] = entry produces a new tensor rather than writing in
+    # place: appending to a 2 GiB cache reads 2 GiB and writes 2 GiB, and
+    # its graph takes about seven minutes to compile. See
+    # llm_inference.cache_plan for the three measurements that established
+    # it, each of which first looked like a different problem.
     #
-    #   A KV cache is per layer and the kernel wrote one, one token at a
-    #   time: 16 KiB per step in 115 us on trn1.2xlarge 2026-09-08, which
-    #   is 1,794x longer than HBM needs for 16 KiB and 0.056% of the part's
-    #   bandwidth. That looked like dispatch overhead.
-    #
-    #   It was not. Writing 32 MiB per step made it *worse* -- 455 ms a
-    #   step, 0.07 GB/s -- because the write used a runtime index, and a
-    #   scatter on this stack costs 54x more than rewriting every layer's
-    #   entire slice would. The primitive was the problem.
-    #
-    # So the ring is 8 fixed slots and each write is a static contiguous
-    # slice. 512 tokens x 32 layers puts 256 MiB in a step, about 1 ms of
-    # bandwidth, against a 2 GiB resident cache and a core's 16 GiB. The
-    # cost is one compiled graph per slot, which is why the ring is a few
-    # large slots rather than a position per token.
+    # 8 layers x 2048 context x 2048 hidden is a 128 MiB cache, so a step
+    # moves 256 MiB -- about 1 ms of bandwidth -- and its graphs compile in
+    # something like a minute rather than an hour. Smaller than a
+    # production cache on purpose: the alternative is a workload that
+    # cannot finish, and a number that does not exist is worse than a
+    # number from a small cache that says so.
     Workload("kv_cache_churn", "inference",
              "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM,
              unit="cache-updates/s",
-             problem={"hidden": 4096, "heads": 32, "context": 4096,
-                      "layers": 32, "ring_slots": 8, "dtype": "bf16"},
+             problem={"hidden": 2048, "heads": 16, "context": 2048,
+                      "layers": 8, "ring_slots": 8, "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'cache_updates',

@@ -176,26 +176,36 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
 
 def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int]:
-    """Cache geometry, and the traffic one ring slot of it moves.
+    """Cache geometry, and the traffic one append actually costs.
 
-    A KV cache is per layer, so a step appends K and V for *every* layer,
-    not one. And the append is a contiguous block: a server writes whatever
-    it has in flight, and it writes it as a slice.
+    **On this stack a KV cache cannot be updated in place, and that is the
+    finding this workload exists to report.** XLA is functional:
+    ``cache[:, a:b, :] = entry`` lowers to a dynamic-update-slice, which
+    produces a *new* tensor. So appending 512 tokens to a 2 GiB cache does
+    not move 256 MiB -- it reads 2 GiB and writes 2 GiB.
 
-    **The ring is a small number of fixed slots, and that is load-bearing.**
-    Writing at a runtime-valued index means a scatter, and scatter is
-    catastrophically slow here: measured on trn1.2xlarge 2026-09-08, 64
-    ``index_copy_`` calls moving 32 MiB took 455 ms -- 3,471x longer than
-    HBM needs for those bytes, and 54x longer than rewriting every layer's
-    entire slice would take. The cost was the scatter, not the traffic.
-    Fixed slots make each write a static contiguous slice instead, at the
-    price of one compiled graph per slot.
+    Three measurements on trn1.2xlarge 2026-09-08 say so, each of which
+    looked like a different problem:
+
+      one layer, one token   115 us for 16 KiB, 1,794x what HBM needs
+      32 layers, 64 tokens   455 ms for 32 MiB, 54x more than rewriting
+                             every layer's whole slice would cost
+      8 static ring slots    ~7 minutes to *compile* each slot's graph
+
+    The first two read as dispatch overhead and then as a slow scatter.
+    Neither was it. A graph that compiles for seven minutes to write a
+    slice is a graph handling the whole 2 GiB tensor, and once that is
+    true, everything else follows.
+
+    So ``bytes_per_step`` reports the copy, not the slice. A workload that
+    counted the slice would be reporting a twentieth of the traffic the
+    hardware moves, which is the mistake this kernel has now made twice.
 
     Pure, so the sizing can be checked without a device.
     """
     hidden = int(problem["hidden"])
     context = int(problem["context"])
-    layers = int(problem.get("layers", 32))
+    layers = int(problem.get("layers", 8))
     slots = int(problem.get("ring_slots", 8))
     width = tiling.DTYPE_BYTES[str(problem["dtype"])]
 
@@ -209,14 +219,19 @@ def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int
         )
 
     tokens = context // slots
+    # Two caches, K and V, each [layers, context, hidden].
     resident = 2 * layers * context * hidden * width
-    per_step = tokens * layers * 2 * hidden * width
+    # What the slice appears to write, and what the copy really costs.
+    slice_bytes = tokens * layers * 2 * hidden * width
+    per_step = 2 * resident        # read the cache, write a new one
 
     return {
         "hidden": hidden, "context": context, "layers": layers,
         "ring_slots": slots, "tokens_per_step": tokens,
         "element_bytes": width,
-        "resident_bytes": resident, "bytes_per_step": per_step,
+        "resident_bytes": resident,
+        "slice_bytes": slice_bytes,
+        "bytes_per_step": per_step,
     }
 
 
