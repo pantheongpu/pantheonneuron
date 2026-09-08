@@ -25,7 +25,7 @@ import os
 import pytest
 
 import pantheon_neuron
-from kernels import registry
+from kernels import registry, tiling
 from neuron_device import NeuronDevice
 
 
@@ -137,8 +137,27 @@ def test_compute_workloads_pin_a_dtype():
 
 
 def test_int_workloads_use_an_integer_dtype():
+    """Asked of the dtype table, not of the name.
+
+    `int_virus` pins uint8, because trn1's Tensor Engine rejects signed
+    int8 outright. A prefix check on the string said uint8 was not an
+    integer type, which is wrong and would have blocked the only dtype the
+    part actually runs -- so the question goes to `tiling.is_integer`,
+    which is the same predicate the kernel branches on for the accumulator
+    and the unit.
+    """
     for name in ("int_virus", "quantized_gemm"):
-        assert _get(name).problem["dtype"].startswith("int")
+        dtype = _get(name).problem["dtype"]
+        assert tiling.is_integer(dtype), f"{name} pins {dtype}"
+
+
+def test_an_integer_dtype_is_reported_as_operations_not_flops():
+    """TOPS and TFLOPS are different quantities; the dtype decides which."""
+    for workload in registry.WORKLOADS:
+        problem = workload.problem or {}
+        if workload.unit in ("TFLOPS", "TOPS") and "dtype" in problem:
+            integer = tiling.is_integer(problem["dtype"])
+            assert (workload.unit == "TOPS") == integer, workload.name
 
 
 # -- report row --------------------------------------------------------------

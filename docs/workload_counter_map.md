@@ -86,14 +86,14 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | Workload | Problem |
 |---|---|
 | `tensor_virus` | op=matmul, shape=[8192, 8192, 8192], dtype=bf16 |
-| `int_virus` | op=matmul, shape=[8192, 8192, 8192], dtype=int8 |
+| `int_virus` | op=matmul, shape=[8192, 8192, 8192], dtype=uint8 |
 | `pulse_virus` | op=matmul, shape=[8192, 8192, 8192], dtype=bf16, duty_cycle=0.5, period_s=2 |
 | `transformer_virus` | hidden=4096, heads=32, seq=2048, dtype=bf16 |
 | `omni_virus` | op=mixed, shape=[8192, 8192, 8192], dtype=bf16, engines=all |
 | `memory_read` | bytes=8589934592, dtype=bf16, cores=1 |
-| `memory_write` | bytes=8589934592, dtype=bf16, cores=1 |
+| `memory_write` | bytes=4294967296, dtype=bf16, cores=1 |
 | `memory_read_agg` | bytes=8589934592, dtype=bf16, cores=all |
-| `memory_write_agg` | bytes=8589934592, dtype=bf16, cores=all |
+| `memory_write_agg` | bytes=4294967296, dtype=bf16, cores=all |
 | `all_reduce` | op=all_reduce, bytes_min=1048576, bytes_max=8388608, dtype=fp32 |
 | `p2p_thrasher` | op=sendrecv, bytes=67108864, dtype=fp32 |
 | `pcie_bandwidth` | bytes=1073741824, direction=bidirectional |

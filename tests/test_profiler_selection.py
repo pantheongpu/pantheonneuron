@@ -97,3 +97,207 @@ def test_guard_is_inert_without_a_plan():
     """Nothing to compare against is not evidence of a wrong graph."""
     counters = {"hbm_read_bytes": 2, "total_time": 1.0}
     assert profiler.verify_profile_covers_plan(counters, "read", 0) is None
+
+
+# -- searching instead of guessing -------------------------------------------
+#
+# mtime ranking picked wrong on both parts this suite has run on: inf2
+# captured a graph that moved 2 bytes against an 8 GiB plan, trn1 one that
+# moved 4. Both times the kernel's own graph was in the candidate list and
+# was not first, and both times the declared Score was lost to the analytic
+# fallback. The plan check is now the selector, not only the rejector.
+
+def test_find_neffs_ranks_newest_first(tmp_path):
+    middle = _neff(str(tmp_path / "b" / "model.neff"), 5000)
+    newest = _neff(str(tmp_path / "c" / "model.neff"), 9000)
+    oldest = _neff(str(tmp_path / "a" / "model.neff"), 1000)
+
+    assert profiler.find_neffs(str(tmp_path)) == [newest, middle, oldest]
+
+
+def test_find_neffs_honours_the_candidate_limit(tmp_path):
+    for index in range(10):
+        _neff(str(tmp_path / f"d{index}" / "model.neff"), 1000 + index)
+
+    assert len(profiler.find_neffs(str(tmp_path))) == profiler.MAX_CANDIDATES
+    assert len(profiler.find_neffs(str(tmp_path), limit=2)) == 2
+
+
+def test_the_candidate_limit_is_raisable(tmp_path, monkeypatch):
+    """A run that exhausts the search says so; this is how you answer it."""
+    for index in range(10):
+        _neff(str(tmp_path / f"d{index}" / "model.neff"), 1000 + index)
+
+    monkeypatch.setenv(profiler.CANDIDATES_ENV, "9")
+    assert len(profiler.find_neffs(str(tmp_path))) == 9
+
+    monkeypatch.setenv(profiler.CANDIDATES_ENV, "not-a-number")
+    assert len(profiler.find_neffs(str(tmp_path))) == profiler.MAX_CANDIDATES
+
+
+def test_find_neff_is_still_the_head_of_the_ranking(tmp_path):
+    _neff(str(tmp_path / "a" / "model.neff"), 1000)
+    newest = _neff(str(tmp_path / "b" / "model.neff"), 9000)
+
+    assert profiler.find_neff(str(tmp_path)) == newest
+
+
+def test_find_neffs_does_not_list_the_same_file_twice(tmp_path, monkeypatch):
+    """The caller's workdir can sit inside a compiler default."""
+    inner = tmp_path / "cache" / "work"
+    path = _neff(str(inner / "model.neff"), 5000)
+    monkeypatch.setattr(profiler, "DEFAULT_WORKDIRS", (str(tmp_path / "cache"),))
+
+    assert profiler.find_neffs(str(inner)) == [path]
+
+
+class _FakeCaptures:
+    """Stands in for read_counters: maps a NEFF path to its counters."""
+
+    def __init__(self, by_path):
+        self.by_path = by_path
+        self.captured = []
+
+    def __call__(self, neff_path, session_path):
+        self.captured.append(neff_path)
+        result = self.by_path[neff_path]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def test_the_search_skips_the_epilogue_and_finds_the_real_graph(monkeypatch):
+    """The trn1 2026-09-08 failure, replayed: 4 bytes against an 8 GiB plan."""
+    planned = 8 << 30
+    fake = _FakeCaptures({
+        "/tmp/newest.neff": {"hbm_read_bytes": 4, "total_time": 1e-4},
+        "/tmp/real.neff": {"hbm_read_bytes": planned, "total_time": 0.03},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/newest.neff", "/tmp/real.neff"], "/tmp/s.ntff", "read", planned)
+
+    assert found["neff"] == "/tmp/real.neff"
+    assert found["plan_coverage"] == 1.0
+    assert found["candidates_tried"] == 2
+    assert found["candidates_available"] == 2
+    # It really did try the wrong one first, rather than being handed the answer.
+    assert fake.captured == ["/tmp/newest.neff", "/tmp/real.neff"]
+
+
+def test_the_first_candidate_wins_when_it_covers_the_plan(monkeypatch):
+    """A correct first guess must not pay for extra captures."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/a.neff": {"hbm_read_bytes": planned, "total_time": 0.01},
+        "/tmp/b.neff": {"hbm_read_bytes": planned, "total_time": 0.01},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/a.neff", "/tmp/b.neff"], "/tmp/s.ntff", "read", planned)
+
+    assert found["candidates_tried"] == 1
+    assert fake.captured == ["/tmp/a.neff"]
+
+
+def test_a_candidate_that_fails_to_capture_does_not_end_the_search(monkeypatch):
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/broken.neff": profiler.ProfilerUnavailable("capture exited 1"),
+        "/tmp/real.neff": {"hbm_write_bytes": planned, "total_time": 0.02},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/broken.neff", "/tmp/real.neff"], "/tmp/s.ntff", "write", planned)
+
+    assert found["neff"] == "/tmp/real.neff"
+
+
+def test_a_candidate_missing_the_counter_does_not_end_the_search(monkeypatch):
+    """trn1 reports 90 counters where inf2 reports 108."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/nocounter.neff": {"total_time": 0.01},
+        "/tmp/real.neff": {"hbm_read_bytes": planned, "total_time": 0.02},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/nocounter.neff", "/tmp/real.neff"], "/tmp/s.ntff", "read", planned)
+
+    assert found["neff"] == "/tmp/real.neff"
+
+
+def test_exhausting_the_search_says_what_every_candidate_reported(monkeypatch):
+    """The diagnosis the single-guess version could never give.
+
+    It could say one graph was wrong. It could not say none was right, nor
+    how close any of them came, which is the difference between "retry" and
+    "the kernel's NEFF is not on this machine".
+    """
+    planned = 8 << 30
+    fake = _FakeCaptures({
+        "/tmp/a.neff": {"hbm_read_bytes": 4, "total_time": 1e-4},
+        "/tmp/b.neff": {"hbm_read_bytes": 2, "total_time": 1e-4},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    with pytest.raises(profiler.ProfilerUnavailable) as raised:
+        profiler.select_by_plan(
+            ["/tmp/a.neff", "/tmp/b.neff"], "/tmp/s.ntff", "read", planned)
+
+    message = str(raised.value)
+    assert "none of 2 candidate" in message
+    assert "a.neff" in message and "b.neff" in message
+    assert fake.captured == ["/tmp/a.neff", "/tmp/b.neff"]
+
+
+def test_exhausting_a_capped_search_says_how_to_look_further(monkeypatch):
+    planned = 8 << 30
+    paths = [f"/tmp/{index}.neff" for index in range(profiler.MAX_CANDIDATES)]
+    fake = _FakeCaptures({p: {"hbm_read_bytes": 4, "total_time": 1e-4}
+                          for p in paths})
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    with pytest.raises(profiler.ProfilerUnavailable) as raised:
+        profiler.select_by_plan(paths, "/tmp/s.ntff", "read", planned)
+
+    assert profiler.CANDIDATES_ENV in str(raised.value)
+
+
+def test_an_empty_candidate_list_is_refused():
+    with pytest.raises(profiler.ProfilerUnavailable, match="no NEFF candidates"):
+        profiler.select_by_plan([], "/tmp/s.ntff", "read", 1 << 30)
+
+
+def test_a_partial_but_sufficient_profile_is_accepted(monkeypatch):
+    """The floor is 0.5, not 1.0: the compiler may legitimately coalesce."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/a.neff": {"hbm_read_bytes": int(planned * 0.75), "total_time": 0.01},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(
+        ["/tmp/a.neff"], "/tmp/s.ntff", "read", planned)
+    assert found["plan_coverage"] == 0.75
+
+
+# -- coverage, as its own judgement ------------------------------------------
+
+def test_plan_coverage_is_the_ratio_it_claims():
+    counters = {"hbm_read_bytes": 512, "total_time": 1.0}
+    assert profiler.plan_coverage(counters, "read", 1024) == 0.5
+
+
+def test_plan_coverage_is_none_without_a_plan():
+    counters = {"hbm_read_bytes": 512, "total_time": 1.0}
+    assert profiler.plan_coverage(counters, "read", 0) is None
+
+
+def test_plan_coverage_raises_when_the_counter_is_absent():
+    with pytest.raises(profiler.ProfilerUnavailable, match="hbm_read_bytes"):
+        profiler.plan_coverage({"total_time": 1.0}, "read", 1 << 30)

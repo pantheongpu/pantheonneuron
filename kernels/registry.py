@@ -119,15 +119,33 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'neuroncore_counters.*.effective_flops',
                  ),
                  formula='mean(effective_flops) / 1e12')),
+    # dtype is uint8, not int8, and the difference is measured rather than
+    # stylistic. trn1's Tensor Engine rejects signed int8 outright --
+    # `nc_matmul does not support stationary.dtype=int8`, 2026-09-08 -- and
+    # the supported operand set is fp8_e4m3, fp8_e5m2, bf16, fp16, tf32,
+    # fp32 and uint8. Pinning int8 made this workload unreachable on the
+    # only Trainium part we can run.
+    #
+    # uint8 rather than fp8, of the reachable options: the unit is TOPS,
+    # which means integer operations, and fp8 would keep the label while
+    # changing the quantity underneath it to floating-point. uint8 is the
+    # same 8-bit integer datapath the name claims, and an all-ones GEMM
+    # reaches exactly K either way, so the correctness check is unchanged.
+    #
+    # What this costs: a signed-int8 path exists on other accelerators and
+    # is not measured here. A cross-platform reader must not read this row
+    # as a signed-int8 figure, which is why the dtype travels with the
+    # Score in ``problem`` rather than living only in this comment.
     Workload("int_virus", "core",
-             "Sustained INT8 throughput on the Tensor Engine.", _COMPUTE,
+             "Sustained UINT8 throughput on the Tensor Engine.", _COMPUTE,
              unit="TOPS",
-             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "int8"},
+             problem={"op": "matmul", "shape": [8192, 8192, 8192],
+                      "dtype": "uint8"},
              score_source=ScoreSource(MONITOR,
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12   # int8 ops, reported as TOPS')),
+                 formula='mean(effective_flops) / 1e12   # uint8 ops, reported as TOPS')),
     Workload("pulse_virus", "core",
              "Duty-cycled load to provoke power/clock transients.", _COMPUTE,
              unit="TFLOPS",
@@ -174,10 +192,29 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'total_time',
                  ),
                  formula='hbm_read_bytes / total_time / 1e9')),
+    # 4 GiB, not the 8 GiB memory_read uses, and the asymmetry is measured.
+    # A write's destination is the whole plan and the runtime still holds
+    # the previous one while the next is allocated, so the pin costs twice
+    # its size in residency. Both parts this suite targets have 32 GB
+    # across two cores. Measured on inf2.xlarge 2026-09-07: 4 GiB runs at
+    # 255.1 GB/s with the destination check at exactly 1.0, 6 GiB at 162.5
+    # GB/s, and 8 GiB fails outright with 8.59 GB requested against 8.099
+    # GB resident. trn1.2xlarge 2026-09-08 failed at 8 GiB identically.
+    #
+    # 4 GiB rather than 6: both fit, but the 36% drop at 6 GiB is the part
+    # running out of room, not the memory system going slower. A number
+    # measured under allocation pressure is not the write bandwidth this
+    # workload claims to report.
+    #
+    # memory_read keeps 8 GiB because a read allocates only a source and
+    # was verified there (236.9 GB/s on inf2). The two are joined against
+    # their own name on another platform, not against each other, so they
+    # do not need the same size -- but ``problem`` carries the size into
+    # the report precisely so nobody compares them as though they did.
     Workload("memory_write", "memory",
              "Streaming HBM writes on one NeuronCore.", _HBM,
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1},
+             problem={"bytes": 4 << 30, "dtype": "bf16", "cores": 1},
              score_source=ScoreSource(PROFILER,
                  counters=(
                      'hbm_write_bytes',
@@ -195,11 +232,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'total_time',
                  ),
                  formula='sum(hbm_read_bytes over cores) / total_time / 1e9')),
+    # 4 GiB per core, for the same residency reason as memory_write: each
+    # worker allocates its own destination on its own core, so the pin is
+    # per-core and the arithmetic is identical.
     Workload("memory_write_agg", "memory",
              "Aggregate HBM write bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"},
+             problem={"bytes": 4 << 30, "dtype": "bf16", "cores": "all"},
              score_source=ScoreSource(PROFILER,
                  counters=(
                      'hbm_write_bytes',

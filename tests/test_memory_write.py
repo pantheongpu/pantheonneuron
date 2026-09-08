@@ -31,10 +31,36 @@ def test_shares_tile_geometry_with_memory_read():
 
 
 def test_pinned_problem_divides_into_whole_tiles():
+    """No rounding down: the Score would be divided by bytes never moved.
+
+    The tile count is derived rather than written out, because the pin is a
+    registry decision that has already moved once -- 8 GiB to 4 GiB, when
+    the 8 GiB destination turned out not to fit on either target part. What
+    must hold is that whatever it is divides evenly.
+    """
     problem = _workload().problem
     plan = memory_write.tile_plan(problem["bytes"], problem["dtype"])
     assert plan["actual_bytes"] == problem["bytes"]
-    assert plan["tiles"] == 16384
+    assert plan["tiles"] == problem["bytes"] // plan["tile_bytes"]
+    assert plan["tiles"] > 0
+
+
+def test_the_write_pin_fits_on_the_parts_this_suite_targets():
+    """4 GiB, not 8: a write needs twice its size resident, and 8 did not fit.
+
+    The destination is the whole plan and the runtime still holds the
+    previous one while the next is allocated. Both target parts have 32 GB
+    across two cores, so 16 GB a core. 8 GiB failed on inf2.xlarge
+    2026-09-07 and again on trn1.2xlarge 2026-09-08, with 8.59 GB requested
+    against 8.099 GB resident.
+    """
+    per_core_bytes = 32 * 1024**3 // 2
+    pinned = _workload().problem["bytes"]
+
+    assert pinned * 2 < per_core_bytes, "the pin must leave room for a rebuild"
+    # The read side has no such constraint and is deliberately larger.
+    read = [w for w in registry.WORKLOADS if w.name == "memory_read"][0]
+    assert read.problem["bytes"] > pinned
 
 
 def test_partition_matches_hardware_reported_pmax():

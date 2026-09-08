@@ -86,20 +86,20 @@ def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
 def accumulator_dtype(dtype: str, nl):
     """The type the Tensor Engine accumulates a product of ``dtype`` into.
 
-    Note that int8 operands do not reach here on trn1 at all: the engine
+    Signed int8 operands do not reach here on trn1 at all: the engine
     rejects them before accumulation, with `nc_matmul does not support
     stationary.dtype=int8`. Measured 2026-09-08. The supported operand set
-    is fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and uint8 -- uint8 is
-    accepted where int8 is not, which is why int_virus is a registry
-    decision rather than a kernel fix.
+    is fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and **uint8**, so
+    int_virus now pins uint8 -- see kernels/registry.py for why that was a
+    registry decision and not a kernel fix.
 
     Integer operands accumulate into int32, floating-point ones into fp32.
-    Accumulating int8 into a float would round partial sums and break the
-    exactness the all-ones check relies on -- and an int8 GEMM of size K
-    reaches K in the accumulator, which overflows int8 long before the last
-    tile.
+    Accumulating an integer product into a float would round partial sums
+    and break the exactness the all-ones check relies on -- and a GEMM of
+    size K reaches K in the accumulator, which overflows an 8-bit type long
+    before the last tile.
     """
-    return nl.int32 if dtype == "int8" else nl.float32
+    return nl.int32 if tiling.is_integer(dtype) else nl.float32
 
 
 def _build_kernel(dtype: str = "bf16"):
@@ -236,13 +236,13 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "elapsed_s": elapsed,
         "flops_issued": flops_issued,
         "analytic_tflops": analytic_tflops,
-        # int8 operands make these integer ops, not floating-point ones. The
-        # arithmetic is identical and the name is not, so the row says which
-        # rather than letting a TOPS figure read as TFLOPS.
-        "analytic_unit": "TOPS" if dtype == "int8" else "TFLOPS",
+        # Integer operands make these integer ops, not floating-point ones.
+        # The arithmetic is identical and the name is not, so the row says
+        # which rather than letting a TOPS figure read as TFLOPS.
+        "analytic_unit": "TOPS" if tiling.is_integer(dtype) else "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": (
-            "integer ops issued / wall time" if dtype == "int8"
+            "integer ops issued / wall time" if tiling.is_integer(dtype)
             else "FLOPs issued / wall time"
         ),
         "warning": None,

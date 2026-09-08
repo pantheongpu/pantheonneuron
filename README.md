@@ -46,15 +46,15 @@ differs is how much of each has met hardware.
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
 | `memory_read` | ✅ **verified** on trn1.2xlarge and inf2.xlarge | `neuron-profile`, analytic fallback |
-| `memory_write` | ✅ **verified** on inf2.xlarge, not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
+| `memory_write` | ✅ **verified** on inf2.xlarge; pin lowered 8 GiB → 4 GiB | `neuron-profile`, analytic fallback |
 | `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
-| `int_virus` | ❌ **int8 is unsupported by trn1's Tensor Engine** | `neuron-monitor` |
+| `int_virus` | ⚠️ repinned to **uint8**, which trn1 does support; untested | `neuron-monitor` |
 | `pulse_virus` | ✅ **verified on trn1.2xlarge** at 2048³ | `neuron-monitor` |
 | `omni_virus` | ⚠️ all four engines in one dependent chain, untested; a NameError that would have failed its first hardware run is now fixed | `neuron-monitor` |
 | `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
 | `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
 | `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
-| `pcie_bandwidth` | ✅ **verified on trn1.2xlarge**; its asymmetry guard fired | workload |
+| `pcie_bandwidth` | ⚠️ the guard fired on a harness artifact, now fixed; needs a rerun | workload |
 | `allocation_fragmentation` | ✅ **verified on trn1.2xlarge** | workload |
 | `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
 | `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |
@@ -69,6 +69,52 @@ against a granted 64, so they are written against the documented
 `nccom-test` output rather than against observed output, and their tests are
 the only thing behind them until that quota lands.
 
+### What the 2026-09-08 findings were resolved into
+
+The four open items that run recorded are now closed in code. None of the
+fixes has met hardware; what changed is that each has a decided answer and a
+test, so the next window spends its time confirming rather than discovering.
+
+**The profiler now searches for its graph instead of guessing.** The capture
+worked and captured the wrong NEFF: *profiled graph moved 4 bytes against a
+plan of 8589934592*. `find_neff` ranked candidates by mtime and returned the
+top one, and `verify_profile_covers_plan` then rejected it — so the plan
+check was a rejector standing next to a guess. It is now the selector.
+`profiler.find_neffs` returns the ranking and `profiler.select_by_plan`
+captures candidates in turn until one accounts for the planned traffic. Both
+times this failed on hardware, the kernel's own graph was in the list and was
+not first, so a wrong first guess now costs another capture rather than the
+whole Score. The search is capped at 6 captures (each is a real NEFF replay);
+`PANTHEON_NEURON_NEFF_CANDIDATES` raises it, and exhausting it reports what
+every candidate moved rather than only that one was wrong.
+
+**`int_virus` is repinned to uint8.** trn1's Tensor Engine rejects signed
+int8 and accepts uint8, so the workload was unreachable as declared. uint8
+rather than fp8 of the reachable options: the unit is TOPS, which means
+integer operations, and fp8 would keep the label while changing the quantity
+underneath it. An all-ones GEMM still reaches exactly K, so the correctness
+check is unchanged. What this costs is that a signed-int8 path is not
+measured here — which is why the dtype travels with the Score in `problem`.
+
+**`memory_write` is repinned to 4 GiB.** A write's destination is the whole
+plan and the runtime still holds the previous one while the next is
+allocated, so the pin costs twice its size in residency against 16 GB a core.
+4 GiB rather than 6: both fit, but the drop from 255.1 to 162.5 GB/s at 6 GiB
+is the part running out of room, and a number measured under allocation
+pressure is not the write bandwidth this workload claims. `memory_read` keeps
+8 GiB — a read allocates only a source and was verified there.
+
+**`pcie_bandwidth`'s asymmetry was the harness.** d2h 1.0 GB/s against h2d
+6.0 was not a link property: the legs were not symmetric. h2d reused one host
+tensor while d2h called `.cpu()`, which allocates a fresh 1 GiB host
+destination on every pass. A 6x split between reusing a buffer and
+allocating, faulting in and freeing 1 GiB per pass is what an allocator
+costs. Both legs now `copy_` into a destination allocated before the clock
+starts, and the result records `buffers: preallocated` so a row from before
+the fix is identifiable. **The 1.0 GB/s figure should not be cited.** This
+does not show the link is healthy — it shows the old number could not have
+told us either way, and the workload needs a rerun.
+
 ### What the 2026-09-08 trn1.2xlarge validation found
 
 The first Trainium run of the harness, and the first time the reserved
@@ -76,10 +122,9 @@ profiler core was exercised.
 
 **int8 does not exist on this Tensor Engine.** `int_virus` failed with
 `nc_matmul does not support stationary.dtype=int8`; the supported set is
-fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and **uint8**. The registry pins
-int8, so the workload is unreachable on trn1 as declared. Moving it to uint8
-or fp8 is a registry decision and is left open -- silently switching the
-dtype would change what the number means without saying so.
+fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and **uint8**. The registry pinned
+int8, so the workload was unreachable on trn1 as declared. *Resolved: uint8,
+see above.*
 
 **The reserved core worked and the profiler still produced nothing.** The run
 logged `cores 0 to the workload, 1 reserved for neuron-profile`, so the
@@ -87,8 +132,8 @@ capture ran for the first time. It then captured the wrong graph, and
 `verify_profile_covers_plan` refused it: *profiled graph moved 4 bytes
 against a plan of 8589934592*. Scores from a declared hardware source: 0 of
 4. Narrowing NEFF selection by compile timestamp is not enough to identify
-the kernel's own graph, so that remains open -- but the failure is now loud
-rather than a plausible bandwidth computed from four bytes.
+the kernel's own graph. *Resolved: the plan check is now the selector rather
+than only the rejector, see above.*
 
 **pulse_virus behaves as designed.** Its loaded-only figure (23.74 TFLOPS)
 lands on `tensor_virus`'s sustained figure (23.25 TFLOPS) while its
@@ -100,9 +145,9 @@ if pulsing costs no throughput while loaded.
 the pin is unreachable on either -- now confirmed rather than inferred.
 
 **pcie_bandwidth's asymmetry guard fired on its first run**: d2h 1.0 GB/s
-against h2d 6.0 GB/s. Whether that is a real link property or an artifact of
-`.cpu()` being synchronous needs a second look before the number is read as
-a transfer rate.
+against h2d 6.0 GB/s. *Resolved: an artifact, though not the one suspected --
+`.cpu()` allocates a fresh host destination per pass while h2d reused one
+buffer. See above; the figure should not be cited.*
 
 ### What the transformer family's first tests found
 
@@ -171,9 +216,8 @@ whole plan and the runtime still holds the previous one when the next is
 allocated. Measured ceiling on this part: 4 GiB runs at 255.1 GB/s and 6 GiB
 at 162.5 GB/s, both with the destination check at exactly 1.0; 8 GiB fails
 with 8.59 GB requested against 8.099 GB resident. Both parts this suite
-targets have 32 GB across 2 cores, so the pin is unreachable on either.
-Lowering it or splitting the destination across cores is a registry
-decision and is left open.
+targets have 32 GB across 2 cores, so the pin was unreachable on either.
+*Resolved: lowered to 4 GiB, see above.*
 
 `tensor_virus` is the first kernel whose Score does not come from the kernel.
 `effective_flops` lives only in the neuron-monitor stream and does not exist

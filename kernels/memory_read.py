@@ -210,16 +210,21 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
 
 def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
-    """Capture a profile and read the declared counters out of it.
+    """Identify this kernel's graph among the compiler's NEFFs, and read it.
 
     ``since`` and ``planned_bytes`` both exist to make sure the counters
-    came from this kernel: the first narrows which graph is captured, the
-    second refuses the result if it plainly did not.
+    came from this kernel: the first ranks the candidates, the second
+    decides which one is actually ours.
+
+    The plan check used to run once, against a single guess, and reject it
+    -- which is how every scored run in this suite's history ended up on
+    the analytic fallback. It now selects: each candidate is captured until
+    one accounts for the planned traffic. See ``profiler.select_by_plan``.
     """
-    neff = profiler.find_neff(workdir, since=since)
+    candidates = profiler.find_neffs(workdir, since=since)
     session = os.path.join(workdir, "memory_read.ntff")
-    counters = profiler.read_counters(neff, session)
-    profiler.verify_profile_covers_plan(counters, "read", planned_bytes)
+    found = profiler.select_by_plan(candidates, session, "read", planned_bytes)
+    counters = found["counters"]
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "read"),
         # Matches registry.PROFILER exactly, so "declared source" and
@@ -227,6 +232,12 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         "score_method": registry.PROFILER,
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        # What the search had to do to find it. A run that needed the
+        # fourth candidate is telling us mtime ranking is worth revisiting.
+        "profiler_neff": os.path.basename(found["neff"]),
+        "profiler_plan_coverage": found["plan_coverage"],
+        "profiler_candidates_tried": found["candidates_tried"],
+        "profiler_candidates_available": found["candidates_available"],
     }
 
 

@@ -64,8 +64,11 @@ shape = [$GEMM_SHAPE, $GEMM_SHAPE, $GEMM_SHAPE]
 for name, module, problem in (
     ("tensor_virus", tensor_virus,
      {"op": "matmul", "shape": shape, "dtype": "bf16"}),
+    # uint8, not int8: trn1's Tensor Engine rejects signed int8 outright
+    # ("nc_matmul does not support stationary.dtype=int8", 2026-09-08), and
+    # the registry now pins the dtype the part will actually run.
     ("int_virus", tensor_virus,
-     {"op": "matmul", "shape": shape, "dtype": "int8"}),
+     {"op": "matmul", "shape": shape, "dtype": "uint8"}),
     ("pulse_virus", pulse_virus,
      {"op": "matmul", "shape": shape, "dtype": "bf16",
       "duty_cycle": 0.5, "period_s": 2}),
@@ -83,6 +86,33 @@ for name, module, problem in (
         print(f"  warning           {r.get('warning')}")
     except Exception as exc:
         print(f"{name}: FAIL {type(exc).__name__}: {str(exc)[:200]}")
+PYEOF
+
+# ---------------------------------------------------------------------------
+# The NEFF search, which is the whole reason a profiler Score might land this
+# time. Ranking by mtime picked wrong on both parts: inf2 captured a graph
+# that moved 2 bytes against an 8 GiB plan, trn1 one that moved 4. The plan
+# check is now the selector, so a wrong first guess costs another capture
+# rather than the Score. This reports how hard it had to look.
+# ---------------------------------------------------------------------------
+hr "NEFF selection: how many candidates the search needed"
+$PY - <<'PYEOF'
+import glob, json, os
+
+reports = sorted(glob.glob("database/pantheon_neuron_report_*.json"),
+                 key=os.path.getmtime)[-6:]
+for path in reports:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    for row in payload.get("test_results", []):
+        if row["Test Name"] not in ("memory_read", "memory_write"):
+            continue
+        print(f"  {row['Test Name']:14} via {row.get('Score Method')}")
+        detail = (row.get("Detail") or "").strip()
+        if detail:
+            print(f"    {detail[:200]}")
+print("  (a run that needed a late candidate means mtime ranking is weak;")
+print("   raise PANTHEON_NEURON_NEFF_CANDIDATES if a search reports exhaustion)")
 PYEOF
 
 # ---------------------------------------------------------------------------

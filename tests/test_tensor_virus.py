@@ -221,3 +221,53 @@ def test_int_virus_reports_tops_not_tflops():
     """The arithmetic is identical; the unit is not, and the row must say so."""
     assert _int_virus().unit == "TOPS"
     assert _workload().unit == "TFLOPS"
+
+
+# -- uint8, the dtype trn1 will actually run ---------------------------------
+#
+# int_virus pinned int8 and was unreachable: `nc_matmul does not support
+# stationary.dtype=int8`, trn1.2xlarge 2026-09-08. The supported set is
+# fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and uint8, so the registry pins
+# uint8 and everything that branched on the string "int8" now asks the dtype
+# table instead.
+
+def test_uint8_is_an_integer_dtype():
+    assert tiling.is_integer("uint8")
+    assert tiling.is_integer("int8")
+    assert not tiling.is_integer("bf16")
+    assert not tiling.is_integer("fp32")
+
+
+def test_uint8_is_one_byte_wide():
+    assert tiling.DTYPE_BYTES["uint8"] == 1
+
+
+def test_uint8_has_a_torch_dtype():
+    assert tiling.TORCH_DTYPES["uint8"] == "uint8"
+
+
+def test_uint8_accumulates_into_int32_like_int8():
+    """The accumulator follows integer-ness, not the specific width.
+
+    An all-ones GEMM of size K reaches K, which overflows any 8-bit type
+    long before the last tile, and accumulating into a float would round
+    partial sums and break the exactness verify_product_is_correct needs.
+    """
+    assert tensor_virus.accumulator_dtype("uint8", _FakeNL) == "int32"
+    assert tensor_virus.accumulator_dtype("bf16", _FakeNL) == "float32"
+
+
+def test_the_pinned_int_virus_problem_plans():
+    """It could not, while it pinned a dtype the tile table did not carry."""
+    workload = {w.name: w for w in registry.WORKLOADS}["int_virus"]
+    plan = tensor_virus.gemm_plan(workload.problem["shape"],
+                                  workload.problem["dtype"])
+    assert plan["element_bytes"] == 1
+    assert plan["m"] == plan["n"] == plan["k"] == 8192
+
+
+def test_an_integer_run_is_labelled_tops_not_tflops():
+    """The unit follows the dtype, so uint8 keeps the TOPS the registry declares."""
+    workload = {w.name: w for w in registry.WORKLOADS}["int_virus"]
+    assert workload.unit == "TOPS"
+    assert tiling.is_integer(workload.problem["dtype"])
