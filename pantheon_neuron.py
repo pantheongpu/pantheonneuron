@@ -522,6 +522,9 @@ _PROVENANCE_KEYS = (
     "analytic_gbps",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
+    # kv_cache_churn: the bandwidth its update rate actually achieved,
+    # which is what says whether the rate measured memory or dispatch.
+    "cache_gbps",
     # MoE dispatch: slots per expert, which is what the arithmetic scales
     # with once routing is balanced.
     "capacity",

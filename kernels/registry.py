@@ -302,10 +302,24 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'elapsed_s',
                  ),
                  formula='prompt_tokens / elapsed_s')),
+    # layers and tokens_per_step are pinned because without them this
+    # workload measured the runtime rather than the cache. A KV cache is
+    # per layer, so a step appends K and V for every layer; and a server
+    # writes whatever it has in flight, not one token. At one layer and one
+    # token the step moved 16 KiB and took 115 microseconds on trn1.2xlarge
+    # 2026-09-08 -- 1,794x longer than HBM needs for 16 KiB, and 0.056% of
+    # the part's bandwidth. The Score was dispatch latency wearing a memory
+    # name.
+    #
+    # 32 layers x 64 tokens puts 32 MiB in each step, which needs about 131
+    # microseconds of bandwidth against roughly 115 of dispatch, so the
+    # write is what is being timed. The resident cache is 2 GiB against the
+    # 16 GiB a NeuronCore has.
     Workload("kv_cache_churn", "inference",
              "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM,
              unit="cache-updates/s",
-             problem={"hidden": 4096, "heads": 32, "context": 4096, "dtype": "bf16"},
+             problem={"hidden": 4096, "heads": 32, "context": 4096,
+                      "layers": 32, "tokens_per_step": 64, "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'cache_updates',

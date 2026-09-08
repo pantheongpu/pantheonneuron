@@ -583,3 +583,82 @@ def test_the_gathered_weight_table_stays_small():
     assert per_token_gather > 100e9
     assert whole_table < 1e9
     assert per_token_gather > 400 * whole_table
+
+
+# -- kv_cache_churn measured the runtime, not the cache ----------------------
+#
+# trn1.2xlarge 2026-09-08: 16 KiB per step in 115 microseconds, which is
+# 1,794x longer than HBM needs for 16 KiB and 0.056% of the part's
+# bandwidth. cache-updates/s looks identical whether each update moved a
+# cache or a register, which is why the row now carries the bandwidth too.
+
+def test_the_pinned_cache_fits_on_a_neuroncore():
+    plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
+    per_core = 16 * 1024**3
+    assert plan["resident_bytes"] == 2 * 1024**3
+    assert plan["resident_bytes"] < per_core / 2, "leave room for everything else"
+
+
+def test_a_step_writes_every_layer_not_one():
+    """A KV cache is per layer; a decode step appends K and V to all of them."""
+    problem = PROBLEMS["kv_cache_churn"]
+    plan = llm_inference.cache_plan(problem)
+
+    one_layer_one_token = 2 * problem["hidden"] * 2
+    assert plan["bytes_per_step"] == (
+        plan["tokens_per_step"] * plan["layers"] * one_layer_one_token)
+    assert plan["bytes_per_step"] == 32 * 1024**2
+
+
+def test_the_pinned_step_is_large_enough_to_time_the_write():
+    """131 us of bandwidth against roughly 115 us of dispatch.
+
+    Below that ratio the wall clock is dominated by the runtime and the
+    rate stops being a cache measurement, which is what it was.
+    """
+    plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
+    at_hbm_us = plan["bytes_per_step"] / (llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6
+    measured_dispatch_us = 115.0
+    assert at_hbm_us > measured_dispatch_us
+
+    # And the old pin was nowhere near it.
+    old_step = 2 * 4096 * 2
+    assert old_step / (llm_inference.MEASURED_HBM_GBPS * 1e9) * 1e6 < 1.0
+
+
+@pytest.mark.parametrize("bad", [
+    {"hidden": 0, "context": 4096, "dtype": "bf16"},
+    {"hidden": 4096, "context": 0, "dtype": "bf16"},
+    {"hidden": 4096, "context": 4096, "layers": 0, "dtype": "bf16"},
+    {"hidden": 4096, "context": 4096, "tokens_per_step": 0, "dtype": "bf16"},
+])
+def test_cache_plan_rejects_impossible_geometry(bad):
+    with pytest.raises(ValueError, match="must be positive"):
+        llm_inference.cache_plan(bad)
+
+
+def test_a_step_cannot_be_wider_than_the_cache():
+    with pytest.raises(ValueError, match="exceeds"):
+        llm_inference.cache_plan({"hidden": 4096, "context": 64,
+                                  "tokens_per_step": 128, "dtype": "bf16"})
+
+
+def test_the_old_measurement_would_now_be_flagged():
+    """0.143 GB/s against 256.2: the run that started this."""
+    message = llm_inference.verify_memory_bound(0.143e9)
+    assert message is not None
+    assert "timed dispatch, not memory" in message
+
+
+def test_a_memory_bound_run_is_not_flagged():
+    assert llm_inference.verify_memory_bound(134e9) is None
+
+
+def test_an_untouched_cache_is_flagged():
+    assert "never touched" in llm_inference.verify_memory_bound(0.0)
+
+
+def test_the_floor_is_where_it_is_documented():
+    hbm = llm_inference.MEASURED_HBM_GBPS * 1e9
+    assert llm_inference.verify_memory_bound(hbm * 0.04) is not None
+    assert llm_inference.verify_memory_bound(hbm * 0.06) is None

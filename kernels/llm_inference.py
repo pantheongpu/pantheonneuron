@@ -175,44 +175,122 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     }
 
 
+def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int]:
+    """Cache geometry and the traffic one step of it moves.
+
+    A KV cache is per layer, so a decode step appends K and V for *every*
+    layer, not one. And a step writes whatever the server has in flight --
+    one token when decoding, a chunk of them when prefilling.
+
+    Pure, so the sizing can be checked without a device: the cache has to
+    fit on a NeuronCore and the per-step traffic has to be large enough
+    that the write is what is being timed.
+    """
+    hidden = int(problem["hidden"])
+    context = int(problem["context"])
+    layers = int(problem.get("layers", 32))
+    tokens = int(problem.get("tokens_per_step", 64))
+    width = tiling.DTYPE_BYTES[str(problem["dtype"])]
+
+    for label, value in (("hidden", hidden), ("context", context),
+                         ("layers", layers), ("tokens_per_step", tokens)):
+        if value <= 0:
+            raise ValueError(f"{label} must be positive, got {value}")
+    if tokens > context:
+        raise ValueError(
+            f"tokens_per_step {tokens} exceeds the {context}-entry cache"
+        )
+
+    # Two caches, K and V, each [layers, context, hidden].
+    resident = 2 * layers * context * hidden * width
+    # One step appends `tokens` positions to both, in every layer.
+    per_step = tokens * layers * 2 * hidden * width
+
+    return {
+        "hidden": hidden, "context": context, "layers": layers,
+        "tokens_per_step": tokens, "element_bytes": width,
+        "resident_bytes": resident, "bytes_per_step": per_step,
+    }
+
+
+# Single-core HBM read bandwidth measured by memory_read on trn1.2xlarge,
+# 2026-09-08. Used only to judge whether this workload is timing memory or
+# timing the runtime -- not to score anything.
+MEASURED_HBM_GBPS = 256.2
+
+
+def verify_memory_bound(bytes_per_s: float,
+                        hbm_gbps: float = MEASURED_HBM_GBPS,
+                        floor: float = 0.05) -> typing.Optional[str]:
+    """Say so when the Score is dispatch latency wearing a memory name.
+
+    This workload claims to measure the memory traffic a long-running
+    server pays. Before 2026-09-08 it did not: it wrote 16 KiB per step --
+    K and V for a single layer -- and took 115 microseconds to do it, which
+    is 1,794 times longer than HBM needs to move 16 KiB. The Score was the
+    runtime's dispatch rate, and 0.056% of the part's bandwidth.
+
+    Rate alone cannot show that. cache-updates/s looks the same whether
+    each update moved a cache or a register, so the row has to carry the
+    bandwidth it actually achieved and say when that is implausible.
+    """
+    if bytes_per_s <= 0:
+        return "no bytes written -- the cache was never touched"
+    achieved = bytes_per_s / 1e9
+    if achieved < hbm_gbps * floor:
+        return (
+            f"wrote {achieved:.2f} GB/s, {achieved / hbm_gbps:.1%} of the "
+            f"{hbm_gbps:.0f} GB/s this part measures -- this run timed "
+            "dispatch, not memory, so the rate is not a cache measurement"
+        )
+    return None
+
+
 def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
-    """Write and evict cache entries; count the updates, not the arithmetic."""
+    """Append K and V across every layer; count the entries, not the arithmetic."""
     nki_backend.require_toolchain()
 
     import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
-    hidden = int(problem["hidden"])
-    context = int(problem["context"])
+    plan = cache_plan(problem)
+    hidden, context = plan["hidden"], plan["context"]
+    layers, tokens = plan["layers"], plan["tokens_per_step"]
     dtype = tiling.torch_dtype(str(problem["dtype"]))
 
     device = xm.xla_device()
-    cache_k = torch.ones((context, hidden), dtype=dtype, device=device)
-    cache_v = torch.ones((context, hidden), dtype=dtype, device=device)
-    entry = torch.ones((1, hidden), dtype=dtype, device=device)
+    # Per layer, as a real cache is. Writing one layer's worth per step was
+    # what made this workload measure the runtime instead of the memory.
+    cache_k = torch.ones((layers, context, hidden), dtype=dtype, device=device)
+    cache_v = torch.ones((layers, context, hidden), dtype=dtype, device=device)
+    entry = torch.ones((tokens, hidden), dtype=dtype, device=device)
     xm.mark_step()
     xm.wait_device_ops()
 
     # A ring buffer, which is how a server actually evicts: the write index
-    # wraps and overwrites the oldest entry. Writing always to position zero
-    # would let the compiler keep one row in SBUF and never touch HBM,
+    # wraps and overwrites the oldest entries. Writing always to position
+    # zero would let the compiler keep one row in SBUF and never touch HBM,
     # measuring a register file instead of a cache.
     #
-    # The index has to reach the device as a *value*, not as a Python int.
+    # The indices have to reach the device as *values*, not Python ints.
     # `cache_k[position] = ...` bakes the position into the graph, so every
     # distinct position is a different graph and every iteration pays a
     # compile. Measured on trn1.2xlarge 2026-09-08: 0.85 cache-updates/s,
-    # which is a compiler's throughput, not a cache's. Copying a host
-    # scalar into a device tensor of fixed shape keeps one graph and makes
-    # the position an input to it.
-    host_index = torch.zeros(1, dtype=torch.int64)
-    index = torch.zeros(1, dtype=torch.int64, device=device)
+    # which is a compiler's throughput. Copying a host tensor into a device
+    # tensor of fixed shape keeps one graph and makes the positions inputs.
+    offsets = torch.arange(tokens, dtype=torch.int64)
+    host_index = torch.zeros(tokens, dtype=torch.int64)
+    index = torch.zeros(tokens, dtype=torch.int64, device=device)
 
-    def churn(position):
-        host_index[0] = position
+    def churn(start):
+        torch.remainder(offsets + start, context, out=host_index)
         index.copy_(host_index)
-        cache_k.index_copy_(0, index, entry)
-        cache_v.index_copy_(0, index, entry)
+        # Unrolled over layers on purpose: the layer index is a constant at
+        # trace time, so this is one graph with 2 x layers scatters in it
+        # rather than a graph per layer.
+        for layer in range(layers):
+            cache_k[layer].index_copy_(0, index, entry)
+            cache_v[layer].index_copy_(0, index, entry)
 
     churn(0)
     xm.mark_step()
@@ -225,20 +303,33 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
     while time.perf_counter() < deadline:
         churn(position)
         xm.mark_step()
-        position = (position + 1) % context
-        updates += 1
+        position = (position + tokens) % context
+        updates += tokens
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
     observed = transformer_ops.read_back(cache_k)
-    bytes_written = updates * 2 * hidden * tiling.DTYPE_BYTES[str(problem["dtype"])]
+    steps = updates // tokens if tokens else 0
+    bytes_written = steps * plan["bytes_per_step"]
+    bytes_per_s = bytes_written / elapsed if elapsed else 0.0
 
-    return {
+    result = {
         "cache_updates": updates,
+        "steps": steps,
         "elapsed_s": elapsed,
         "cache_updates_per_s": updates / elapsed if elapsed else 0.0,
         "bytes_written": bytes_written,
+        # The number that says whether the rate above means anything.
+        "cache_gbps": bytes_per_s / 1e9,
         "score_method": "workload",
-        "analytic_basis": "cache updates / wall time",
+        "analytic_basis": "cache entries written / wall time",
+        "plan": plan,
         **transformer_ops.output_check(observed, "cache"),
     }
+
+    # An unreadable or NaN cache still fails the row; a dispatch-bound run
+    # is a warning, because the number is real, it just is not the number
+    # the workload's name promises.
+    if not result.get("warning"):
+        result["warning"] = verify_memory_bound(bytes_per_s)
+    return result
