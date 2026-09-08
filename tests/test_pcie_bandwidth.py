@@ -9,6 +9,7 @@ without hardware.
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import pcie_bandwidth, registry
 
 
@@ -86,39 +87,11 @@ def test_it_is_dispatched():
 # called .cpu(), which allocates a fresh 1 GiB host destination every pass.
 # Both legs now copy into a buffer allocated before the clock starts.
 
-def _code_only(source: str) -> str:
-    """Strip comments and docstrings, leaving what actually executes.
-
-    A textual check that reads comments is not checking the code: the
-    comment explaining why `resident = host.to(device)` must not be in the
-    loop contains that exact string, and matched.
-    """
-    import io
-    import tokenize
-
-    kept = []
-    previous = None
-    for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type == tokenize.COMMENT:
-            continue
-        # A STRING alone on a logical line is a docstring, not an operand.
-        if (token.type == tokenize.STRING
-                and previous in (None, tokenize.NEWLINE, tokenize.NL,
-                                 tokenize.INDENT, tokenize.DEDENT)):
-            continue
-        kept.append(token.string)
-        if token.type not in (tokenize.NL, tokenize.NEWLINE):
-            previous = token.type
-        else:
-            previous = token.type
-    return " ".join(kept)
-
-
 def test_the_code_only_filter_ignores_comments():
     """Otherwise the checks below pass on prose and prove nothing."""
-    assert "forbidden" not in _code_only("x = 1  # forbidden\n")
-    assert "forbidden" not in _code_only('def f():\n    """forbidden"""\n')
-    assert "forbidden" in _code_only("forbidden = 1\n")
+    assert "forbidden" not in sourcecheck.code_only("x = 1  # forbidden\n")
+    assert "forbidden" not in sourcecheck.code_only('def f():\n    """forbidden"""\n')
+    assert "forbidden" in sourcecheck.code_only("forbidden = 1\n")
 
 
 def test_both_legs_copy_into_a_preallocated_destination():
@@ -132,7 +105,7 @@ def test_both_legs_copy_into_a_preallocated_destination():
 
     # Tokenise the whole function, then slice the result: slicing the raw
     # source first leaves a fragment tokenize cannot indent-parse.
-    code = _code_only(inspect.getsource(pcie_bandwidth.run))
+    code = sourcecheck.code_only(inspect.getsource(pcie_bandwidth.run))
     cut = code.index("while time . perf_counter")
     setup, loop = code[:cut], code[cut:]
 
@@ -159,7 +132,7 @@ def test_the_symmetry_check_fails_the_code_it_was_written_for():
         else:
             _ = resident.cpu()
 '''
-    code = _code_only(before_the_fix)
+    code = sourcecheck.code_only(before_the_fix)
     loop = code[code.index("while time . perf_counter"):]
 
     assert ". cpu ( )" in loop
@@ -206,7 +179,7 @@ def test_the_h2d_leg_does_not_send_identical_bytes_every_pass():
     """
     import inspect
 
-    code = _code_only(inspect.getsource(pcie_bandwidth.run))
+    code = sourcecheck.code_only(inspect.getsource(pcie_bandwidth.run))
     loop = code[code.index("while time . perf_counter"):]
     assert "host_alt" in loop, "h2d must alternate its source buffer"
 

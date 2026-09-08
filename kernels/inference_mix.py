@@ -142,6 +142,43 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
     }
 
 
+def expert_capacity(tokens: int, top_k: int, experts: int) -> int:
+    """Token slots each expert is given.
+
+    Real MoE serving calls this a capacity factor. It exists because the
+    number of tokens choosing a given expert is data-dependent, and a
+    data-dependent shape cannot be compiled once.
+    """
+    return max(1, (tokens * top_k) // experts)
+
+
+def routing_balance(tokens: int, experts: int,
+                    top_k: int = 2) -> typing.Dict[int, int]:
+    """How many tokens each expert receives under the pinned input pattern.
+
+    The inputs are built so token ``t`` prefers expert ``t % experts`` and
+    then ``(t + 1) % experts``. That is deterministic, needs no seed, and
+    lands every expert on exactly ``tokens * top_k / experts`` -- which is
+    the capacity, so nothing is dropped and no expert idles.
+
+    **Why it is not uniform.** The workload previously fed all-ones
+    activations through an all-ones gate. Every token's logits were then
+    identical across experts, so top-k picked experts 0 and 1 for *every*
+    token: six of eight experts received nothing, and three quarters of the
+    routed slots were dropped at the capacity limit. The Score still
+    counted every token as routed. A dispatch benchmark that dispatches
+    everything to the same two experts is not measuring dispatch.
+
+    Pure arithmetic so the balance can be asserted without a device.
+    """
+    counts = {expert: 0 for expert in range(experts)}
+    for token in range(tokens):
+        counts[token % experts] += 1
+        if top_k > 1:
+            counts[(token + 1) % experts] += 1
+    return counts
+
+
 def run_moe_router(problem: typing.Mapping[str, typing.Any],
                    duration: int) -> dict:
     """Route tokens to experts and dispatch them. Count routed tokens."""
@@ -157,16 +194,30 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
 
     device = xm.xla_device()
     dtype = torch.bfloat16
-    hidden_states = torch.ones((tokens, hidden), dtype=dtype, device=device)
-    gate = torch.ones((hidden, experts), dtype=dtype, device=device)
+
+    # Built on the host and moved once: these are setup, not the workload,
+    # and scattered index writes on the device would compile a graph each.
+    #
+    # The pattern gives token t a peak at expert t % experts and a second
+    # peak at (t + 1) % experts, so top-2 routing lands every expert on
+    # exactly `capacity` tokens. See routing_balance for why uniform inputs
+    # -- what this used to have -- made six of eight experts idle.
+    positions = torch.arange(tokens)
+    host_states = torch.full((tokens, hidden), 0.1, dtype=torch.float32)
+    host_states[positions, positions % experts] = 1.0
+    host_states[positions, (positions + 1) % experts] = 0.5
+    hidden_states = host_states.to(dtype).to(device)
+
+    # Expert e reads dimension e, so logits[t, e] is hidden_states[t, e]
+    # and the routing follows the pattern above rather than the gate.
+    host_gate = torch.zeros((hidden, experts), dtype=torch.float32)
+    host_gate[torch.arange(experts), torch.arange(experts)] = 1.0
+    gate = host_gate.to(dtype).to(device)
+
     expert_weights = torch.ones((experts, hidden, hidden), dtype=dtype, device=device)
     xm.mark_step()
 
-    # Each expert takes a fixed number of token slots. Real MoE serving
-    # calls this a capacity factor and it exists for exactly this reason:
-    # the number of tokens choosing a given expert is data-dependent, and a
-    # data-dependent shape cannot be compiled once.
-    capacity = max(1, (tokens * top_k) // experts)
+    capacity = expert_capacity(tokens, top_k, experts)
 
     def route():
         # The routing decision itself: a gate projection and a top-k over

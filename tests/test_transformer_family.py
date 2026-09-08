@@ -21,6 +21,7 @@ import math
 
 import pytest
 
+import sourcecheck
 from kernels import (encoders, inference_mix, llm_inference, omni_virus,
                      registry, transformer_compute, transformer_ops)
 
@@ -463,3 +464,94 @@ def test_weights_are_scaled_so_a_deep_model_stays_in_range():
 
     # Scaled, a layer is magnitude-neutral at any depth.
     assert (1.0 / hidden) * hidden == 1.0
+
+
+# -- MoE dispatch ------------------------------------------------------------
+#
+# The 2026-09-08 full-coverage run refused to compile this workload at all:
+# `expert_weights[chosen]` gathered a [hidden, hidden] weight matrix per
+# token, materialising 137 GB against a 0.3 GB weight table. Fixing that
+# exposed a second defect underneath -- the routing itself was degenerate.
+
+def test_expert_capacity_divides_the_routed_slots():
+    problem = PROBLEMS["moe_router"]
+    capacity = inference_mix.expert_capacity(
+        problem["tokens"], problem["top_k"], problem["experts"])
+    assert capacity * problem["experts"] == problem["tokens"] * problem["top_k"]
+
+
+def test_capacity_is_never_zero():
+    """A degenerate problem must still compile to something runnable."""
+    assert inference_mix.expert_capacity(1, 1, 64) == 1
+
+
+def test_the_pinned_routing_uses_every_expert_exactly_once_over():
+    """Balanced by construction, so no expert idles and nothing is dropped."""
+    problem = PROBLEMS["moe_router"]
+    capacity = inference_mix.expert_capacity(
+        problem["tokens"], problem["top_k"], problem["experts"])
+    balance = inference_mix.routing_balance(
+        problem["tokens"], problem["experts"], problem["top_k"])
+
+    assert len(balance) == problem["experts"]
+    assert set(balance.values()) == {capacity}, balance
+    assert sum(balance.values()) == problem["tokens"] * problem["top_k"]
+
+
+def test_uniform_inputs_would_have_idled_six_of_eight_experts():
+    """What the previous version measured, as arithmetic.
+
+    All-ones activations through an all-ones gate give every token
+    identical logits, so top-k picks the same two experts for all of them.
+    Six experts receive nothing and three quarters of the routed slots hit
+    the capacity limit and are dropped -- while the Score counts every
+    token as routed.
+    """
+    problem = PROBLEMS["moe_router"]
+    experts, tokens, top_k = (problem["experts"], problem["tokens"],
+                              problem["top_k"])
+    capacity = inference_mix.expert_capacity(tokens, top_k, experts)
+
+    # Ties in topk resolve to the lowest indices, so every token picks 0..top_k-1.
+    degenerate = {e: (tokens if e < top_k else 0) for e in range(experts)}
+    idle = [e for e, n in degenerate.items() if n == 0]
+    served = sum(min(n, capacity) for n in degenerate.values())
+
+    assert len(idle) == experts - top_k == 6
+    assert served == capacity * top_k
+    assert served < tokens * top_k / 2, "most routed slots were dropped"
+
+    # The pattern actually used has neither property.
+    balanced = inference_mix.routing_balance(tokens, experts, top_k)
+    assert not [e for e, n in balanced.items() if n == 0]
+    assert sum(min(n, capacity) for n in balanced.values()) == tokens * top_k
+
+
+def test_the_dispatch_gathers_activations_not_weight_matrices():
+    """The compile failure, guarded against return.
+
+    `expert_weights[chosen]` with one index per token materialises
+    [tokens, hidden, hidden]. At the pinned problem that is 137 GB, and the
+    compiler refused it: 4,194,304 instructions against a limit of 150,000.
+
+    Read as code, not as text: the comment explaining this defect quotes
+    it, and a naive substring check passes on the explanation.
+    """
+    code = sourcecheck.function_code(inference_mix.run_moe_router)
+
+    assert "expert_weights [ chosen ]" not in code
+    assert "index_select" in code, "the gather must be over token vectors"
+    assert "expert_weights [ expert ]" in code, "one weight matrix per expert"
+
+
+def test_the_gathered_weight_table_stays_small():
+    """Arithmetic for why the old dispatch could not work."""
+    problem = PROBLEMS["moe_router"]
+    tokens, hidden, experts = (problem["tokens"], problem["hidden"],
+                               problem["experts"])
+
+    per_token_gather = tokens * hidden * hidden * 2      # bf16
+    whole_table = experts * hidden * hidden * 2
+    assert per_token_gather > 100e9
+    assert whole_table < 1e9
+    assert per_token_gather > 400 * whole_table
