@@ -77,6 +77,9 @@ class NeuronMonitor:
         self.period_seconds = period_seconds
         self.mock = mock or os.environ.get("PANTHEON_NEURON_MOCK") == "1"
         self._samples: typing.List[dict] = []
+        # Arrival times, parallel to _samples. The monitor's own
+        # stream carries no wall clock, and a rate needs one.
+        self._sample_times: typing.List[float] = []
         self._process: typing.Optional[subprocess.Popen] = None
         self._thread: typing.Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -92,6 +95,10 @@ class NeuronMonitor:
     def start(self, device_indices: typing.Sequence[int]) -> bool:
         """Begin sampling. Returns False when telemetry is unavailable."""
         self._samples = []
+        # Cleared with the samples it indexes: a monitor reused across
+        # workloads would otherwise carry the previous run's timestamps and
+        # date this run's executions against them.
+        self._sample_times = []
         self._stop.clear()
         self._device_indices = list(device_indices)
 
@@ -216,6 +223,7 @@ class NeuronMonitor:
                 self._warn_once("parse", "skipped malformed neuron-monitor sample")
                 continue
             self._samples.append(_scrub(sample))
+            self._sample_times.append(time.monotonic())
 
     def _mock_loop(self) -> None:
         """Synthesise plausible samples so CI exercises the same code path."""
@@ -252,6 +260,7 @@ class NeuronMonitor:
                     }
                 )
             )
+            self._sample_times.append(time.monotonic())
 
     def _warn_once(self, key: str, message: str) -> None:
         if key not in self._warned:
@@ -279,7 +288,9 @@ class NeuronMonitor:
             "sram_ecc_uncorrected": 0,
         }
 
-        for sample in self._samples:
+        completed_series: typing.List[typing.Tuple[int, int]] = []
+
+        for index, sample in enumerate(self._samples):
             for runtime in (sample.get("neuron_runtime_data") or []):
                 report = runtime.get("report") or {}
                 cores = (report.get("neuroncore_counters") or {}).get(
@@ -315,6 +326,10 @@ class NeuronMonitor:
                 completed = summary.get("completed")
                 if isinstance(completed, (int, float)):
                     executions = max(executions, int(completed))
+                    # Kept per sample as well as as a maximum: graph_replay
+                    # is scored from delta(completed) / period, and a
+                    # maximum alone cannot say how fast the count moved.
+                    completed_series.append((index, int(completed)))
                 for key in (
                     "completed_with_err",
                     "completed_with_num_err",
@@ -369,6 +384,24 @@ class NeuronMonitor:
                 "p50_mean": round(statistics.fmean(latency_p50), 6),
                 "p99_peak": round(max(latency_p99), 6) if latency_p99 else None,
             }
+        # graph_replay's declared formula is delta(completed) / period, which
+        # a maximum cannot answer: it says how many executions the run
+        # reached, not how fast it got there. The first and last samples that
+        # carried the counter bound both the count and the clock, so the rate
+        # is measured over the span actually observed rather than over the
+        # requested duration -- the monitor starts and stops around the
+        # workload, not with it.
+        if len(completed_series) >= 2:
+            first_index, first_count = completed_series[0]
+            last_index, last_count = completed_series[-1]
+            span = 0.0
+            if len(self._sample_times) > max(first_index, last_index):
+                span = self._sample_times[last_index] - self._sample_times[first_index]
+            summary["executions_delta"] = last_count - first_count
+            summary["execution_span_s"] = round(span, 4)
+            if span > 0:
+                summary["executions_per_s"] = (last_count - first_count) / span
+
         summary["ecc_events"] = ecc
         summary["ecc_events_total"] = sum(ecc.values())
         return summary

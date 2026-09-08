@@ -17,9 +17,9 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import (allocation_fragmentation, cores, memory_read,
-                     memory_write, nki_backend, pcie_bandwidth, pulse_virus,
-                     registry, tensor_virus)
+from kernels import (allocation_fragmentation, cores, graph_replay,
+                     memory_read, memory_write, nki_backend, pcie_bandwidth,
+                     pulse_virus, registry, tensor_virus)
 
 try:
     import psutil
@@ -196,9 +196,12 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
             )
-        elif _wants_monitor_score(workload) and score is None:
+        elif score is None and (_wants_monitor_score(workload)
+                                or _wants_execution_rate(workload)):
+            counter = ("effective_flops" if _wants_monitor_score(workload)
+                       else "an execution rate")
             detail = detail or (
-                "neuron-monitor reported no effective_flops, so this run has "
+                f"neuron-monitor reported no {counter}, so this run has "
                 "no Score from its declared source"
             )
 
@@ -238,6 +241,22 @@ _LAST_RUN: typing.Dict[str, dict] = {}
 # NOT_COMPARABLE_WITH_GPU exists to prevent.
 FLOPS_COUNTER = "neuroncore_counters.*.effective_flops"
 
+# The other monitor-sourced formula. graph_replay declares
+# delta(completed) / period in graph-steps/s, which is a rate over the
+# execution counter rather than an average of a throughput counter -- the
+# reason the flops gate matches on its counter and not on the source.
+EXECUTIONS_COUNTER = "execution_stats.execution_summary.completed"
+
+
+def _wants_execution_rate(workload) -> bool:
+    """Is this workload scored from the monitor's execution counter?"""
+    source = workload.score_source
+    return bool(
+        source
+        and source.source == registry.MONITOR
+        and EXECUTIONS_COUNTER in source.counters
+    )
+
 
 def _wants_monitor_score(workload) -> bool:
     """Is this workload scored from the monitor's effective_flops counter?"""
@@ -269,6 +288,14 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     reached the Tensor Engine. A fabricated Score would flow into a report
     and be compared against real GPU results.
     """
+    if _wants_execution_rate(workload):
+        # delta(completed) / period, computed by the monitor over the span it
+        # actually observed. Absent when fewer than two samples carried the
+        # counter, which is the honest answer for a run too short to measure
+        # a rate over.
+        rate = metrics.get("executions_per_s")
+        return rate if isinstance(rate, (int, float)) else None
+
     if not _wants_monitor_score(workload):
         return None
 
@@ -384,6 +411,15 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         _LAST_RUN[workload.name] = result
         return result["analytic_gbps"]
 
+    if workload.name == "graph_replay":
+        # Its declared Score is the monitor's execution rate; this figure
+        # counts submissions instead, and run_workload prefers the counter.
+        # The two disagreeing means the runtime accepted more replays than
+        # the device finished, which is worth seeing rather than smoothing.
+        result = graph_replay.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["graph_steps_per_s"]
+
     nki_backend.require_toolchain()
     raise NotImplementedError(
         f"Workload '{workload.name}' has no NKI implementation yet."
@@ -397,7 +433,8 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
 # workload got a kernel.
 IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
                          "tensor_virus", "int_virus", "pulse_virus",
-                         "allocation_fragmentation", "pcie_bandwidth"})
+                         "allocation_fragmentation", "pcie_bandwidth",
+                         "graph_replay"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:

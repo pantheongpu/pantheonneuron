@@ -49,7 +49,16 @@ Still unverified:
 | `pulse_virus` | ⚠️ written; tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor`, analytic fallback |
 | `pcie_bandwidth` | ⚠️ written; no NKI, host transfers, untested | workload |
 | `allocation_fragmentation` | ⚠️ written; no NKI, allocator churn, untested | workload |
-| the other 18 | ❌ none | — |
+| `graph_replay` | ⚠️ written; no NKI, dispatch rate, untested | `neuron-monitor` execution counter |
+| the other 17 | ❌ none | — |
+
+`graph_replay` is the only workload scored from the monitor's *other*
+formula, `delta(completed) / period`, and implementing it is what the flops
+gate was built to keep separate: it asks how fast the runtime dispatches,
+not how fast the engines compute, and handing it the FLOPS arithmetic would
+have published a TFLOPS magnitude under a graph-steps/s label. The monitor
+now records the execution delta and the span it was measured over, since a
+maximum says how far a run got but not how fast it got there.
 
 The three written after the bring-up deliberately avoid unverified NKI
 primitives. `pulse_virus` reuses `tensor_virus`'s kernel and adds only
