@@ -165,6 +165,11 @@ for path in reports:
         if row["Test Name"] not in ("memory_read", "memory_write"):
             continue
         print(f"  {row['Test Name']:14} via {row.get('Score Method')}")
+        telemetry = row.get("Telemetry") or {}
+        idle = telemetry.get("execution_idle_fraction")
+        if idle is not None and idle > 0.1:
+            print(f"    {idle:.0%} of the observed window was not executing "
+                  f"(compile), span {telemetry.get('execution_span_s')}s")
         measured = row.get("Measurement") or {}
         tried = measured.get("profiler_candidates_tried")
         if tried is not None:
