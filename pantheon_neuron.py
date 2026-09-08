@@ -18,8 +18,9 @@ import typing
 import neuron_device
 import neuron_monitor
 from kernels import (allocation_fragmentation, cores, graph_replay,
-                     memory_read, memory_write, nki_backend, pcie_bandwidth,
-                     pulse_virus, registry, tensor_virus)
+                     inference_mix, llm_inference, memory_read, memory_write,
+                     nki_backend, pcie_bandwidth, pulse_virus, registry,
+                     tensor_virus, transformer_compute)
 
 try:
     import psutil
@@ -411,6 +412,59 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         _LAST_RUN[workload.name] = result
         return result["analytic_gbps"]
 
+    # The transformer family. Same building blocks, deliberately different
+    # computations: prefill runs a whole prompt through every layer, decode
+    # runs one token against a cache, and churn never runs the model at all.
+    if workload.name == "llm_prefill":
+        result = llm_inference.run_prefill(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["prompt_tokens_per_s"]
+
+    if workload.name == "llm_decode":
+        result = llm_inference.run_decode(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["tokens_per_s"]
+
+    if workload.name == "kv_cache_churn":
+        result = llm_inference.run_cache_churn(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["cache_updates_per_s"]
+
+    if workload.name == "transformer_virus":
+        result = transformer_compute.run_virus(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_tflops"]
+
+    if workload.name == "transformer_train_step":
+        result = transformer_compute.run_train_step(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["train_steps_per_s"]
+
+    if workload.name == "fused_attention":
+        result = inference_mix.run_fused_attention(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["attention_tiles_per_s"]
+
+    if workload.name == "quantized_gemm":
+        result = inference_mix.run_quantized_gemm(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["quantized_ops_per_s"]
+
+    if workload.name == "moe_router":
+        result = inference_mix.run_moe_router(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["routed_tokens_per_s"]
+
+    if workload.name == "speculative_decode":
+        result = inference_mix.run_speculative_decode(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["verified_tokens_per_s"]
+
+    if workload.name == "serving_mix":
+        result = inference_mix.run_serving_mix(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["requests_per_s"]
+
     if workload.name == "graph_replay":
         # Its declared Score is the monitor's execution rate; this figure
         # counts submissions instead, and run_workload prefers the counter.
@@ -434,7 +488,11 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
 IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
                          "tensor_virus", "int_virus", "pulse_virus",
                          "allocation_fragmentation", "pcie_bandwidth",
-                         "graph_replay"})
+                         "graph_replay", "llm_prefill", "llm_decode",
+                         "kv_cache_churn", "transformer_virus",
+                         "transformer_train_step", "fused_attention",
+                         "quantized_gemm", "moe_router",
+                         "speculative_decode", "serving_mix"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:
