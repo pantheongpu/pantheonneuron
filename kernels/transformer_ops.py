@@ -29,30 +29,26 @@ def weights(hidden: int, dtype, device, heads: int = 1):
     deterministic tensor makes a run reproducible without carrying a seed
     whose meaning depends on the torch version.
 
-    **The constant is 1/hidden, not 1.** A hidden x hidden matmul of ones
-    against ones produces `hidden` in every element, so activations grow by
-    a factor of `hidden` per layer: at hidden 4096 and 32 layers they leave
-    bf16's range within a handful of blocks, saturate to inf, and the first
-    inf - inf or inf * 0 turns the output into a NaN. Measured on
-    trn1.2xlarge 2026-09-08: llm_prefill, llm_decode and
-    speculative_decode all returned NaN.
+    **Each tensor is scaled by 1/fan_in, where fan_in is the dimension the
+    matmul contracts.** Ones would grow activations by a factor of `hidden`
+    per layer, leaving bf16's range after 11 layers of a 32-layer model.
+    Scaling by a single 1/hidden is not enough either: `w2` contracts over
+    4*hidden, so it still multiplies by four, and trn1.2xlarge measured
+    llm_prefill as NaN with exactly that scaling on 2026-09-08.
 
-    That mattered for more than tidiness. A NaN output is indistinguishable
-    from a graph that never ran, so it makes the throughput beside it
-    unverifiable -- and until the same run, the suite published those
-    numbers as PASS anyway. Scaling by 1/hidden makes each matmul roughly
-    norm-preserving, so a network of any depth stays in range and the
-    output check means something.
+    fan_in scaling makes every matmul norm-preserving on its own, which is
+    necessary and -- on its own -- still not sufficient. See ``block`` for
+    the normalisation that finishes the job.
 
     The arithmetic is untouched: same shapes, same graph, same FLOP count.
     Only the values differ.
     """
     import torch  # type: ignore
 
-    scale = 1.0 / hidden
-
-    def tensor(*shape):
-        return torch.full(shape, scale, dtype=dtype, device=device)
+    def tensor(rows, columns):
+        # rows is the contracted dimension for `x @ W`.
+        return torch.full((rows, columns), 1.0 / rows,
+                          dtype=dtype, device=device)
 
     return {
         "q": tensor(hidden, hidden),
@@ -91,19 +87,53 @@ def attention(query, key, value, heads: int):
     return context.transpose(1, 2).reshape(batch, seq, hidden)
 
 
+def rms_norm(hidden_states, eps: float = 1e-6):
+    """Root-mean-square normalisation, as modern decoder stacks use.
+
+    Not decoration. Without it the residual stream grows multiplicatively
+    with depth, and attention scores are *quadratic* in that magnitude --
+    a dot product over head_dim of values that are themselves growing. On
+    trn1.2xlarge 2026-09-08 the scores left fp32's range around layer 19 of
+    32, softmax turned the inf into a NaN, and llm_prefill reported a
+    throughput number for a model that had computed nothing.
+
+    Scaling the weights delays that; it does not prevent it. Normalising
+    the branch input does, because the input to every matmul is then unit
+    scale no matter how deep the stack, and the residual stream grows
+    additively rather than multiplicatively -- about 2 per block instead of
+    a factor of 4.
+
+    It is also what a real transformer does, which is the whole premise of
+    these workloads, and it puts real work on the vector and scalar engines
+    that a pure matmul chain never exercises.
+    """
+    import torch  # type: ignore
+
+    squared = hidden_states.float().pow(2).mean(-1, keepdim=True)
+    return (hidden_states.float() * torch.rsqrt(squared + eps)).to(
+        hidden_states.dtype)
+
+
 def block(hidden_states, params):
-    """One transformer block: attention, then the MLP, with residuals."""
+    """One transformer block: attention, then the MLP, with residuals.
+
+    Pre-norm, like Llama and GPT-NeoX: the normalisation is on the branch
+    input, and the residual path stays clean. That ordering is what keeps a
+    deep stack numerically alive; see ``rms_norm``.
+    """
     import torch  # type: ignore
 
     residual = hidden_states
-    q = torch.matmul(hidden_states, params["q"])
-    k = torch.matmul(hidden_states, params["k"])
-    v = torch.matmul(hidden_states, params["v"])
+    normed = rms_norm(hidden_states)
+    q = torch.matmul(normed, params["q"])
+    k = torch.matmul(normed, params["k"])
+    v = torch.matmul(normed, params["v"])
     attended = attention(q, k, v, params["heads"])
     hidden_states = residual + torch.matmul(attended, params["o"])
 
     residual = hidden_states
-    expanded = torch.matmul(hidden_states, params["w1"])
+    normed = rms_norm(hidden_states)
+    expanded = torch.matmul(normed, params["w1"])
     # GELU rather than ReLU: it exercises the scalar engine's transcendental
     # path, which a max() against zero does not.
     activated = torch.nn.functional.gelu(expanded)

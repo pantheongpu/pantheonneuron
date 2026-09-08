@@ -432,38 +432,66 @@ def test_output_check_pairs_the_message_with_the_verdict():
     assert transformer_ops.output_check(math.inf)["score_invalid"] is False
 
 
-def test_weights_are_scaled_so_a_deep_model_stays_in_range():
-    """1/hidden, not 1: ones overflow bf16 within a few layers.
+def test_weights_are_scaled_by_fan_in():
+    """1/fan_in, not 1 and not a single 1/hidden.
 
-    A hidden x hidden matmul of ones against ones puts `hidden` in every
-    element, so activations grow by that factor per layer. At hidden 4096
-    over 32 layers they leave bf16's range, saturate to inf, and the first
-    inf - inf produces the NaN that trn1.2xlarge measured on 2026-09-08.
+    Ones grow activations by `hidden` per layer. A single 1/hidden fixes
+    the square projections but leaves `w2` -- which contracts over 4*hidden
+    -- four times too large, and trn1.2xlarge measured llm_prefill as NaN
+    with exactly that scaling.
     """
-    import inspect
+    code = sourcecheck.function_code(transformer_ops.weights)
+    assert "1.0 / rows" in code
+    assert "torch . ones (" not in code
 
-    source = inspect.getsource(transformer_ops.weights)
-    assert "scale = 1.0 / hidden" in source
-    assert "torch.ones(" not in source
+    hidden = PROBLEMS["llm_prefill"]["hidden"]
+    # w1 contracts over hidden, w2 over 4*hidden. Under one shared 1/hidden
+    # the MLP would multiply by four every block.
+    assert (4 * hidden) * (1.0 / hidden) == 4.0
+    assert (4 * hidden) * (1.0 / (4 * hidden)) == 1.0
 
-    # The growth this avoids, as arithmetic rather than prose. With
-    # unscaled ones each layer multiplies magnitude by `hidden`, and bf16
-    # tops out near 3.39e38, so the pinned model overflows a third of the
-    # way through its own depth.
+
+def test_the_block_normalises_its_branch_inputs():
+    """Scaling alone cannot keep a deep stack alive; normalisation can.
+
+    Attention scores are quadratic in activation magnitude -- a dot product
+    over head_dim of values that are themselves growing -- so a residual
+    stream that grows multiplicatively overflows fp32 inside softmax long
+    before bf16 runs out. Pre-norm makes every matmul input unit scale, so
+    the stream grows additively instead.
+    """
+    code = sourcecheck.function_code(transformer_ops.block)
+    assert code.count("rms_norm (") == 2, "pre-norm on both branches"
+
+    # Pre-norm, not post-norm: the residual is taken before normalising.
+    assert code.index("residual = hidden_states") < code.index("rms_norm (")
+
+
+def test_normalisation_is_what_keeps_the_pinned_depth_in_range():
+    """The arithmetic, so the claim is checkable rather than asserted."""
     hidden = PROBLEMS["llm_prefill"]["hidden"]
     layers = PROBLEMS["llm_prefill"]["layers"]
-    bf16_max = 3.3895e38
+    head_dim = PROBLEMS["fused_attention"]["head_dim"]
+    fp32_max = 3.4e38
 
-    overflow_at = math.ceil(math.log(bf16_max) / math.log(hidden))
-    assert hidden ** overflow_at > bf16_max
-    assert hidden ** (overflow_at - 1) < bf16_max
-    assert overflow_at < layers, (
-        f"ones overflow after {overflow_at} layers, and the pinned model "
-        f"has {layers}"
-    )
+    def overflows_at(per_block_gain):
+        magnitude = 1.0
+        for layer in range(1, layers + 1):
+            magnitude *= per_block_gain
+            if head_dim ** 0.5 * magnitude ** 2 > fp32_max:
+                return layer
+        return None
 
-    # Scaled, a layer is magnitude-neutral at any depth.
-    assert (1.0 / hidden) * hidden == 1.0
+    # Unscaled ones, then one shared 1/hidden, then fan_in scaling.
+    assert overflows_at(hidden) is not None
+    assert overflows_at(10.0) == 19, "what shipped, and what NaN'd"
+    # Even correct fan_in scaling only just survives, which is why the fix
+    # is normalisation rather than a better constant.
+    assert overflows_at(4.0) in (layers, None)
+
+    # Pre-norm: the stream grows additively, roughly 2 per block.
+    additive = 2 * layers
+    assert head_dim ** 0.5 * additive ** 2 < fp32_max / 1e30
 
 
 # -- MoE dispatch ------------------------------------------------------------

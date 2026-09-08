@@ -99,10 +99,12 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     # a few blocks. Backward makes it worse -- a NaN loss produces NaN
     # gradients, so the optimiser step then corrupts every parameter and
     # every later step measures a model of NaNs.
-    scale = 1.0 / hidden
-
-    def parameter(*shape):
-        tensor = torch.full(shape, scale, dtype=dtype, device=device)
+    def parameter(rows, columns):
+        # 1/fan_in, where fan_in is the contracted dimension -- see
+        # transformer_ops.weights. A single 1/hidden leaves w2 four times
+        # too large, which is what made llm_prefill NaN at depth.
+        tensor = torch.full((rows, columns), 1.0 / rows,
+                            dtype=dtype, device=device)
         tensor.requires_grad_(True)
         return tensor
 

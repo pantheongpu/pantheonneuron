@@ -244,7 +244,12 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
             # fixed-size selection, so every expert compiles to one graph
             # regardless of how the routing actually fell.
             picked = (indices == expert).any(dim=-1).to(dtype)
-            order = torch.topk(picked, capacity, dim=0).indices
+            # Unpacked, not `.indices`: torch-xla returned a plain list here
+            # and the attribute access raised "'list' object has no
+            # attribute 'indices'" on trn1.2xlarge 2026-09-08, after the
+            # graph had already compiled. Tuple unpacking works whichever
+            # container the backend hands back.
+            _, order = torch.topk(picked, capacity, dim=0)
 
             # The gather that dominates this workload: indirect reads of
             # token vectors, which defeat the prefetching a dense matmul

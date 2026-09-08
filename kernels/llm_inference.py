@@ -119,7 +119,14 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
     def step(state):
         for layer in range(layers):
-            q = torch.matmul(state, params["q"])
+            # Normalised like transformer_ops.block, and for the same
+            # reason. Decode survived unnormalised only because its
+            # attention is against a constant cache rather than against the
+            # growing state, so its scores stayed linear in magnitude where
+            # prefill's were quadratic. That is luck, not a property worth
+            # relying on.
+            normed = transformer_ops.rms_norm(state)
+            q = torch.matmul(normed, params["q"])
             # Attention against the cached context rather than against the
             # single token: linear in context, which is the shape decode
             # actually has and prefill does not.
@@ -127,7 +134,8 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
             probs = torch.softmax(scores.float(), dim=-1).to(state.dtype)
             attended = torch.matmul(probs, cache_v[layer])
             state = state + torch.matmul(attended, params["o"])
-            expanded = torch.matmul(state, params["w1"])
+            expanded = torch.matmul(transformer_ops.rms_norm(state),
+                                    params["w1"])
             state = state + torch.matmul(
                 torch.nn.functional.gelu(expanded), params["w2"]
             )
