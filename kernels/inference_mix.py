@@ -406,26 +406,61 @@ def interleave_period(ratio: float) -> int:
         return 0
     return max(int(round(1 / ratio)), 1)
 
+def serving_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, typing.Any]:
+    """What one scheduler step costs, and when a request is actually done.
+
+    A continuous-batching server schedules *steps*, not requests: each
+    iteration is either a prefill (a whole prompt through every layer) or a
+    decode step (one token for each sequence in flight, through every
+    layer). A request is finished when its tokens have been produced.
+
+    This exists because the workload counted neither. It ran **one
+    transformer block** per "request", while a real prefill runs `layers`
+    blocks and a real 256-token decode request runs `decode * layers` --
+    overstating by 32x and 8,192x at the pinned problem. It also reported
+    ``requested_decode_length: 256`` beside a loop that never generated a
+    second token.
+
+    Pure, so the accounting can be checked without a device.
+    """
+    ratio = float(problem["prefill_ratio"])
+    batch = int(problem["batch"])
+    prompt = int(problem["prompt"])
+    decode = int(problem["decode"])
+    layers = int(problem.get("layers", 32))
+    hidden = int(problem.get("hidden", 4096))
+
+    for label, value in (("batch", batch), ("prompt", prompt),
+                         ("decode", decode), ("layers", layers)):
+        if value <= 0:
+            raise ValueError(f"{label} must be positive, got {value}")
+
+    return {
+        "period": interleave_period(ratio),
+        "batch": batch, "prompt": prompt, "decode": decode,
+        "layers": layers, "hidden": hidden,
+        "blocks_per_step": layers,
+        # A decode request is done when it has produced `decode` tokens,
+        # and every decode step produces one per sequence in flight.
+        "decode_steps_per_request": -(-decode // batch),
+        "prefill_flops": layers * transformer_ops.block_flops(hidden, prompt),
+        "decode_flops": layers * transformer_ops.block_flops(hidden, 1, batch),
+    }
+
 
 def run_serving_mix(problem: typing.Mapping[str, typing.Any],
                     duration: int) -> dict:
-    """Interleave prefill and decode at a serving ratio. Count requests."""
+    """Interleave prefill and decode steps at a serving ratio."""
     nki_backend.require_toolchain()
 
     import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
-    ratio = float(problem["prefill_ratio"])
-    batch = int(problem["batch"])
-    prompt = int(problem["prompt"])
-    decode = int(problem["decode"])
+    plan = serving_plan(problem)
+    batch, prompt = plan["batch"], plan["prompt"]
+    layers, hidden = plan["layers"], plan["hidden"]
+    period = plan["period"]
 
-    # Resolved before anything is allocated, so a bad ratio is rejected
-    # rather than discovered after the weights are on the device. It also
-    # validates: interleave_period raises on a ratio outside [0, 1].
-    period = interleave_period(ratio)
-
-    hidden = 4096
     dtype = torch.bfloat16
     device = xm.xla_device()
     params = transformer_ops.weights(hidden, dtype, device, heads=32)
@@ -433,40 +468,69 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
     decode_batch = torch.ones((batch, 1, hidden), dtype=dtype, device=device)
     xm.mark_step()
 
-    warm = transformer_ops.block(decode_batch, params)
+    def step(state):
+        """One scheduler step: the whole stack, not one block.
+
+        Running a single block and calling it a request was the defect
+        here. A prefill runs every layer, and so does a decode step.
+        """
+        for _ in range(layers):
+            state = transformer_ops.block(state, params)
+        return state
+
+    warm = step(decode_batch)
     xm.mark_step()
     xm.wait_device_ops()
     del warm
 
     sink = None
-    requests = 0
-    prefills = 0
-    decodes = 0
+    steps = prefills = decode_steps = 0
     started = time.perf_counter()
     deadline = started + duration
 
+    # A deterministic interleave rather than a sampled one: sampling would
+    # make two runs of the same workload measure different mixes, and the
+    # mix is the workload.
     while time.perf_counter() < deadline:
-        is_prefill = period and (requests % period == 0)
-        if is_prefill:
-            sink = transformer_ops.block(prompt_batch, params)
+        if period and steps % period == 0:
+            sink = step(prompt_batch)
             prefills += 1
         else:
-            sink = transformer_ops.block(decode_batch, params)
-            decodes += 1
+            sink = step(decode_batch)
+            decode_steps += 1
         xm.mark_step()
-        requests += 1
+        steps += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+
+    # A decode request finishes when its tokens exist. Every decode step
+    # produces one token per sequence in flight, so completed requests are
+    # tokens over the requested length -- not, as before, one per step
+    # regardless of how many tokens the request asked for.
+    decode_tokens = decode_steps * batch
+    decode_requests = decode_tokens // plan["decode"]
+    requests = prefills + decode_requests
+    flops = prefills * plan["prefill_flops"] + decode_steps * plan["decode_flops"]
 
     return {
         "requests_completed": requests,
         "prefills": prefills,
-        "decodes": decodes,
-        "observed_prefill_ratio": prefills / requests if requests else 0.0,
+        "decode_requests": decode_requests,
+        "decode_steps": decode_steps,
+        "scheduler_steps": steps,
+        "observed_prefill_ratio": prefills / steps if steps else 0.0,
         "elapsed_s": elapsed,
         "requests_per_s": requests / elapsed if elapsed else 0.0,
-        "decode_tokens": decodes * batch,
-        "requested_decode_length": decode,
+        # The rate the scheduler actually sustained. A request is many
+        # steps, so these differ by a large factor and both are wanted.
+        "scheduler_steps_per_s": steps / elapsed if elapsed else 0.0,
+        "decode_tokens": decode_tokens,
+        "decode_length": plan["decode"],
+        "blocks_executed": steps * layers,
+        # The cross-check: arithmetic issued, which a request count alone
+        # cannot contradict.
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
+        "plan": plan,
         "score_method": "workload",
         "analytic_basis": "requests completed / wall time",
         **transformer_ops.output_check(

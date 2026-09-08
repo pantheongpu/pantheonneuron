@@ -706,3 +706,73 @@ def test_the_floor_is_where_it_is_documented():
     hbm = llm_inference.MEASURED_HBM_GBPS * 1e9
     assert llm_inference.verify_memory_bound(hbm * 0.04) is not None
     assert llm_inference.verify_memory_bound(hbm * 0.06) is None
+
+
+# -- serving_mix counted blocks and called them requests ---------------------
+#
+# It ran one transformer block per "request". A real prefill runs `layers`
+# blocks and a real 256-token decode request runs decode * layers of them --
+# 32x and 8,192x at the pinned problem. It also reported
+# requested_decode_length: 256 beside a loop that never produced a second
+# token.
+
+def test_a_scheduler_step_runs_every_layer():
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    assert plan["blocks_per_step"] == plan["layers"] == 32
+    assert plan["blocks_per_step"] > 1, "one block is not a model pass"
+
+
+def test_a_decode_request_takes_many_steps_to_finish():
+    """256 tokens at batch 8 is 32 steps, not one."""
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    assert plan["decode_steps_per_request"] == 32
+    assert plan["decode_steps_per_request"] * plan["batch"] >= plan["decode"]
+
+
+def test_the_old_accounting_overstated_by_these_factors():
+    """The size of the defect, as arithmetic."""
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    layers, decode = plan["layers"], plan["decode"]
+
+    assert layers == 32                       # a prefill was 1/32 of itself
+    assert decode * layers == 8192            # a decode request 1/8192
+
+
+def test_a_prefill_step_costs_far_more_than_a_decode_step():
+    """They were counted as the same unit; they are not the same work."""
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    assert plan["prefill_flops"] > 100 * plan["decode_flops"]
+
+
+def test_completed_requests_come_from_tokens_not_steps():
+    """The accounting that replaced one-request-per-block, in the open."""
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    batch, decode = plan["batch"], plan["decode"]
+
+    for decode_steps in (0, 16, 32, 64, 100):
+        tokens = decode_steps * batch
+        assert tokens // decode == max(0, decode_steps // 32)
+
+
+def test_the_step_runs_the_stack_not_a_block():
+    """Asserted against the source, since running it needs a device."""
+    code = sourcecheck.function_code(inference_mix.run_serving_mix)
+    assert "for _ in range ( layers )" in code
+    assert "state = transformer_ops . block ( state , params )" in code
+
+
+@pytest.mark.parametrize("bad", [
+    {"prefill_ratio": 0.2, "batch": 0, "prompt": 8, "decode": 8},
+    {"prefill_ratio": 0.2, "batch": 8, "prompt": 0, "decode": 8},
+    {"prefill_ratio": 0.2, "batch": 8, "prompt": 8, "decode": 0},
+    {"prefill_ratio": 0.2, "batch": 8, "prompt": 8, "decode": 8, "layers": 0},
+])
+def test_serving_plan_rejects_impossible_problems(bad):
+    with pytest.raises(ValueError, match="must be positive"):
+        inference_mix.serving_plan(bad)
+
+
+def test_serving_plan_still_rejects_a_bad_ratio():
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        inference_mix.serving_plan(
+            {"prefill_ratio": 1.5, "batch": 8, "prompt": 8, "decode": 8})

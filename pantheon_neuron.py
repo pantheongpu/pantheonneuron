@@ -528,6 +528,11 @@ _PROVENANCE_KEYS = (
     # MoE dispatch: slots per expert, which is what the arithmetic scales
     # with once routing is balanced.
     "capacity",
+    # serving_mix: a request is many scheduler steps, so both rates are
+    # wanted, and implied_tflops is what a request count cannot contradict.
+    "scheduler_steps_per_s",
+    "blocks_executed",
+    "implied_tflops",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",
