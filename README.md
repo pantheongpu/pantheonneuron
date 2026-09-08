@@ -45,16 +45,16 @@ differs is how much of each has met hardware.
 | Workload | Kernel | Score source |
 |---|---|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ✅ **verified** on trn1.2xlarge and inf2.xlarge | `neuron-profile`, analytic fallback |
-| `memory_write` | ✅ **verified** on inf2.xlarge; pin lowered 8 GiB → 4 GiB | `neuron-profile`, analytic fallback |
+| `memory_read` | ✅ **verified**, and **scored from `neuron-profile`** on both parts | `neuron-profile` |
+| `memory_write` | ✅ **verified** on both parts at the 4 GiB pin; **scored from `neuron-profile`** | `neuron-profile` |
 | `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
-| `int_virus` | ⚠️ repinned to **uint8**, which trn1 does support; untested | `neuron-monitor` |
+| `int_virus` | ✅ **verified** at uint8 on both parts at 2048³ | `neuron-monitor` |
 | `pulse_virus` | ✅ **verified on trn1.2xlarge** at 2048³ | `neuron-monitor` |
 | `omni_virus` | ⚠️ all four engines in one dependent chain, untested; a NameError that would have failed its first hardware run is now fixed | `neuron-monitor` |
 | `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
 | `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
 | `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
-| `pcie_bandwidth` | ⚠️ the guard fired on a harness artifact, now fixed; needs a rerun | workload |
+| `pcie_bandwidth` | ⚠️ **verified**; d2h asymmetry reproduces on trn1, absent on inf2, unexplained | workload |
 | `allocation_fragmentation` | ✅ **verified on trn1.2xlarge** | workload |
 | `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
 | `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |
@@ -104,16 +104,80 @@ is the part running out of room, and a number measured under allocation
 pressure is not the write bandwidth this workload claims. `memory_read` keeps
 8 GiB — a read allocates only a source and was verified there.
 
-**`pcie_bandwidth`'s asymmetry was the harness.** d2h 1.0 GB/s against h2d
-6.0 was not a link property: the legs were not symmetric. h2d reused one host
-tensor while d2h called `.cpu()`, which allocates a fresh 1 GiB host
-destination on every pass. A 6x split between reusing a buffer and
-allocating, faulting in and freeing 1 GiB per pass is what an allocator
-costs. Both legs now `copy_` into a destination allocated before the clock
-starts, and the result records `buffers: preallocated` so a row from before
-the fix is identifiable. **The 1.0 GB/s figure should not be cited.** This
-does not show the link is healthy — it shows the old number could not have
-told us either way, and the workload needs a rerun.
+**`pcie_bandwidth`: the fix was right and the diagnosis was wrong.** The legs
+genuinely were not symmetric — h2d reused one host tensor while d2h called
+`.cpu()`, which allocates a fresh 1 GiB host destination every pass — so both
+now `copy_` into a destination allocated before the clock starts, and the row
+records `buffers: preallocated`.
+
+But that was not the cause. **The rerun measured d2h at 1.1 GB/s against h2d
+6.0, essentially unchanged from the 1.0 that started this.** The allocation
+was a real defect in the harness and removing it moved nothing. See the
+2026-09-08 rerun below for what the two parts then said, which is the useful
+part.
+
+### What the 2026-09-08 rerun found, on both parts
+
+trn1.2xlarge (us-east-1f) and inf2.xlarge (us-east-1d), same commit, run in
+parallel. Raw logs in [`data/validation-2026-09-08/`](data/validation-2026-09-08/).
+
+**The declared profiler Score fired, for the first time in this suite's
+history: 2 of 4, on both parts.**
+
+| Workload | trn1.2xlarge | inf2.xlarge | Source |
+|---|--:|--:|---|
+| `memory_read` | 256.17 GB/s | 256.19 GB/s | **`neuron-profile`** |
+| `memory_write` | 226.50 GB/s | 226.77 GB/s | **`neuron-profile`** |
+| `allocation_fragmentation` | 544.42 | 492.93 | workload |
+| `pcie_bandwidth` | 3.56 GB/s | 2.12 GB/s | workload |
+
+`memory_read`'s 256.17 GB/s cross-checks against the 264 GB/s wall-clock
+figure measured on this part in August, which is what
+`verify_against_analytic` exists to confirm. **`memory_write` ran at the new
+4 GiB pin with no `NRT_RESOURCE` failure on either part**, which is the
+repin doing its job.
+
+**The two parts agree to four significant figures, and that is expected
+rather than suspicious.** Both are NeuronCore-v2 against the same 32 GB HBM
+config, and the profiler figure is one NEFF replay with no cache and no
+contention — a deterministic per-execution measurement, which is exactly why
+it makes a better regression signal than wall-clock timing.
+
+**`int_virus` ran for the first time**: 23.05 TOPS on trn1 and 20.71 on inf2
+at 2048³ uint8, `product verified 1.0` on both. It sits just under
+`tensor_virus` on the same shape (23.31 / 20.41 TFLOPS), which is what an
+engine treating uint8 and bf16 at the same rate looks like. The workload was
+unreachable before the repin.
+
+**The NEFF search returned the right graph and never had to search.** Both
+parts reported `plan_coverage 1.0` from `candidates_tried 1` of
+`candidates_available 1`: a fresh instance with `PANTHEON_NEURON_WORKDIR`
+set has exactly one NEFF, so the ranking had nothing to rank. What is
+confirmed is that the coverage check identifies the right graph and does not
+reject a correct one. **The multi-candidate search — the actual fix — is
+still unexercised on hardware**, because the failure it addresses needs an
+accumulated compile cache to reproduce.
+
+**The PCIe asymmetry is a trn1 property, not a harness artifact.** The same
+commit, with both legs preallocated, produced d2h 1.1 GB/s against h2d 6.0
+on trn1 and **no asymmetry warning at all on inf2**. A defect in the harness
+would have shown on both. So the split is reproducible on trn1 across two
+different methodologies and is not explained by the allocation, which was
+the hypothesis.
+
+Before it is read as a link property, one thing is worth ruling out: the h2d
+leg copies the same `host` into `resident` every pass, and if XLA elides a
+copy whose result never changes, the inflated figure would be the 6.0 rather
+than the depressed one being the 1.1. That is a testable question and it has
+not been tested.
+
+**Profiler and wall-clock diverge by more than the summary shows.** A
+direct 1 GiB `memory_read` on inf2 gave 178.7 GB/s from the profiler against
+260.1 GB/s analytic — a ratio of 0.69, inside the 50% tolerance
+`verify_against_analytic` allows, so no warning fired. The profiler times a
+single cold NEFF replay while the analytic figure averages thousands of
+steady-state passes, so some gap is expected; whether 31% is the right
+amount of gap is not something this run answers.
 
 ### What the 2026-09-08 trn1.2xlarge validation found
 
@@ -145,9 +209,8 @@ if pulsing costs no throughput while loaded.
 the pin is unreachable on either -- now confirmed rather than inferred.
 
 **pcie_bandwidth's asymmetry guard fired on its first run**: d2h 1.0 GB/s
-against h2d 6.0 GB/s. *Resolved: an artifact, though not the one suspected --
-`.cpu()` allocates a fresh host destination per pass while h2d reused one
-buffer. See above; the figure should not be cited.*
+against h2d 6.0 GB/s. *Reproduced on trn1 after the harness was fixed, and
+absent on inf2. See the rerun below.*
 
 ### What the transformer family's first tests found
 

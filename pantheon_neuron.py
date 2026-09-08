@@ -206,6 +206,9 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
             "Score": None,
             "Unit": workload.unit,
             "Score Method": None,
+            # Declared and empty, like Score above: a cross-platform
+            # comparison reads an explicit gap, not a missing key.
+            "Measurement": None,
             "Problem": dict(workload.problem) if workload.problem else None,
             "Telemetry": {"samples": 0},
         }
@@ -266,6 +269,7 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         "Score": round(score, 4) if isinstance(score, (int, float)) else None,
         "Unit": workload.unit,
         "Score Method": _score_method(workload, score),
+        "Measurement": _provenance(workload),
         "Problem": dict(workload.problem) if workload.problem else None,
         "Telemetry": metrics,
     }
@@ -382,6 +386,53 @@ def _score_method(workload, score) -> typing.Optional[str]:
             return f"analytic ({basis}); declared source is {_declared(workload)}"
         return method
     return workload.score_source.source if workload.score_source else None
+
+
+# What a kernel measured, beyond the Score itself, that a reader needs in
+# order to judge the Score. A whitelist rather than "everything the kernel
+# returned": these rows are published, and a kernel result also carries
+# filesystem paths and plan dicts that have no business in a report.
+#
+# Added after the 2026-09-08 validation, where memory_read and memory_write
+# finally scored from neuron-profile and the report could not say how hard
+# the NEFF search had to look. `profiler_candidates_tried` is the number
+# that says whether mtime ranking is still weak, and it was invisible.
+_PROVENANCE_KEYS = (
+    # Which graph the profiler actually read, and how sure we are it was
+    # ours. A basename, never a path -- compiler workdirs carry usernames.
+    "profiler_neff",
+    "profiler_plan_coverage",
+    "profiler_candidates_tried",
+    "profiler_candidates_available",
+    # The counters the declared formula divides, so a Score can be
+    # recomputed from the report rather than trusted.
+    "hbm_read_bytes",
+    "hbm_write_bytes",
+    "profiler_total_time_s",
+    # The cross-check the profiler figure is meant to be compared against.
+    "analytic_gbps",
+    "read_verified_ratio",
+    "write_verified_ratio",
+    "product_verified_ratio",
+    # pcie_bandwidth: says whether the row predates the preallocated-buffer
+    # fix, which is the difference between two incomparable methodologies.
+    "buffers",
+    "per_direction",
+)
+
+
+def _provenance(workload) -> typing.Optional[dict]:
+    """The measured detail behind a Score, for the report row.
+
+    A Score that cannot be recomputed or attributed is a number the reader
+    has to take on faith, which is the thing this suite exists not to ask.
+    """
+    run = _LAST_RUN.get(workload.name)
+    if not run:
+        return None
+    found = {key: run[key] for key in _PROVENANCE_KEYS
+             if run.get(key) is not None}
+    return found or None
 
 
 def _declared(workload) -> str:

@@ -1,0 +1,80 @@
+
+========== part ==========
+instance-type: inf2.xlarge
+instance-id: <scrubbed>
++--------+--------+----------+--------+--------------+----------+------+
+| NEURON | NEURON |  NEURON  | NEURON |     PCI      |   CPU    | NUMA |
+| DEVICE | CORES  | CORE IDS | MEMORY |     BDF      | AFFINITY | NODE |
++--------+--------+----------+--------+--------------+----------+------+
+| 0      | 2      | 0-1      | 32 GB  | 0000:00:1f.0 | 0-3      | -1   |
++--------+--------+----------+--------+--------------+----------+------+
+NDv3
+Inferentia2
+neuronxcc 2.23.6484.0+3b612583 | torch 2.8.0+cu128
+
+========== orchestrated: memory_read (pinned problem) ==========
+2026-09-08 15:45:53.000216:  2207  [INFO]: Compilation Successfully Completed for model.MODULE_7092057769312097889+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 15:46:24.000609:  2207  [INFO]: Compilation Successfully Completed for model.MODULE_3281419714134748632+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260908_153811.json
+
+========== orchestrated: memory_write (pinned problem) ==========
+2026-09-08 15:48:07.000863:  3177  [INFO]: Compilation Successfully Completed for model.MODULE_3955677478664133699+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 15:48:09.000107:  3177  [INFO]: Compilation Successfully Completed for model.MODULE_153420479743731229+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260908_154724.json
+
+========== orchestrated: pcie_bandwidth (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260908_154849.json
+
+========== orchestrated: allocation_fragmentation (pinned problem) ==========
+2026-09-08 15:49:51.000572:  3584  [INFO]: Compilation Successfully Completed for model.MODULE_1515791813894254897+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 15:49:52.000870:  3584  [INFO]: Compilation Successfully Completed for model.MODULE_9332355670543101497+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260908_154931.json
+
+========== reduced shape: the GEMM family (2048^3) ==========
+tensor_virus: OK
+  analytic          20.41 TFLOPS
+  passes            35644
+  product verified  1.0
+  warning           None
+int_virus: OK
+  analytic          20.71 TOPS
+  passes            36172
+  product verified  1.0
+  warning           None
+pulse_virus: OK
+  analytic          10.47 TFLOPS
+  loaded-only       20.93 TFLOPS
+  pulses            15
+  passes            18288
+  product verified  1.0
+  warning           None
+
+========== NEFF selection: how many candidates the search needed ==========
+  memory_read    via neuron-profile
+  memory_write   via neuron-profile
+  (a run that needed a late candidate means mtime ranking is weak;
+   raise PANTHEON_NEURON_NEFF_CANDIDATES if a search reports exhaustion)
+
+========== summary: which Score sources fired ==========
+  allocation_fragmentation   PASS           492.9315 allocation-events/s via workload
+  memory_read                PASS           256.1878 GB/s           via neuron-profile
+  memory_write               PASS           226.7689 GB/s           via neuron-profile
+  pcie_bandwidth             PASS             2.1178 GB/s           via workload
+
+  Scores from a declared hardware source: 2 of 4
+
+========== done ==========
+EXIT=0
