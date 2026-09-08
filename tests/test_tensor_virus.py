@@ -394,20 +394,35 @@ def test_operand_traffic_scales_like_the_flops():
     assert max(intensity) / min(intensity) < 1.01, intensity
 
 
-def test_the_pinned_shape_sits_on_the_measured_bandwidth_ceiling():
-    """8192^3 implied traffic against memory_read's measured bandwidth.
+def test_cutting_operand_traffic_did_not_buy_the_speedup_it_implied():
+    """The refutation, kept as arithmetic so it cannot quietly lapse.
 
-    Measured on trn1.2xlarge 2026-09-08: 41.871 ms/pass at 8192^3, and
-    256.2 GB/s of single-core HBM read bandwidth from memory_read on the
-    same part. If the two agree, the compute workload is reporting the
-    memory system.
+    Implied traffic at 8192^3 does match memory_read's measured bandwidth
+    to within 1%, which is why it read as a bandwidth wall. But a tiling
+    that cuts that traffic 4.7x moved throughput 1.06x, so the agreement
+    was a coincidence and operand bandwidth is not the binding constraint.
+
+    Both halves are asserted: the match that misled, and the measurement
+    that settled it.
     """
     plan = tensor_virus.gemm_plan([8192, 8192, 8192], "bf16")
     tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
     per_tile = (tiling.PARTITION * tiling.PARTITION * 2
                 + tiling.PARTITION * tensor_virus.MOVING * 2)
 
-    implied_gbps = (tiles * per_tile) / (41.871 / 1000) / 1e9
-    measured_hbm_gbps = 256.2
+    implied_gbps = (tiles * per_tile) / (41.870 / 1000) / 1e9
+    assert abs(implied_gbps - 256.2) / 256.2 < 0.01, "the coincidence"
 
-    assert abs(implied_gbps - measured_hbm_gbps) / measured_hbm_gbps < 0.01
+    # Measured on trn1.2xlarge 2026-09-08 by tools/compare_tiling.py.
+    streaming, blocked = 26.26, 27.93
+    traffic_cut = 10.74 / 2.28
+    speedup = blocked / streaming
+    assert traffic_cut > 4.0
+    assert speedup < 1.10, "if bandwidth bound, this would track the cut"
+
+
+def test_streaming_is_the_default_tiling():
+    """The proven path stays default: blocked's justification did not hold."""
+    import importlib
+    reloaded = importlib.reload(tensor_virus)
+    assert reloaded.TILING == "streaming"

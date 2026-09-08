@@ -49,24 +49,40 @@ CONTRACTION = tiling.PARTITION      # K per matmul call
 STATIONARY = tiling.PARTITION       # M per matmul call
 MOVING = 512                        # N per matmul call
 
-# Which tiling the kernel uses. Both compute the same product; they differ
-# only in how often an operand tile is re-read from HBM.
+# Which tiling the kernel uses. Both compute the same product -- both
+# product-verify at exactly 1.0 on hardware -- and they differ only in how
+# often an operand tile is re-read from HBM.
 #
 #   "streaming"  both operands loaded inside the contraction loop. Every
-#                (row, col) pair re-reads every tile it touches, so operand
-#                traffic scales as n^3 -- the same order as the FLOPs, which
-#                leaves arithmetic intensity flat at ~102 FLOP/byte no
-#                matter how large the problem gets.
-#   "blocked"    one column's rhs tiles are held in SBUF across the whole
-#                row loop, so each is read once per column instead of once
-#                per (row, col). At 8192^3 that is 10.74 GB/pass -> 2.28,
-#                and intensity 102 -> 482 FLOP/byte, for 8 MiB of SBUF.
+#                (row, col) pair re-reads every tile it touches.
+#   "blocked"    one column's rhs tiles held in SBUF across the row loop,
+#                so each is read once per column. 4.7x less operand traffic
+#                at 8192^3, for 8 MiB of SBUF.
 #
-# This exists as a switch rather than a replacement because the streaming
-# path is the one with hardware behind it, and a kernel that computes the
-# wrong product quickly is worse than one that computes the right product
-# slowly. tools/compare_tiling.py measures both and checks they agree.
-TILING = os.environ.get("PANTHEON_NEURON_GEMM_TILING", "blocked")
+# **Streaming is the default, and the reason is a measurement that refuted
+# the argument for blocking.** The shape sweep found the kernel at 26.26
+# TFLOPS at 8192^3 with implied operand traffic of 256.4 GB/s against
+# memory_read's 256.2 GB/s on the same part, and that 0.1% agreement looked
+# like a bandwidth wall. It was a coincidence. Cutting operand traffic 4.7x
+# moved throughput by 1.06x:
+#
+#     shape   streaming   blocked   traffic cut   speedup
+#     2048^3      23.30     23.38          4.2x     1.00x
+#     4096^3      36.55     38.85          4.5x     1.06x
+#     8192^3      26.26     27.93          4.7x     1.06x
+#
+# So operand bandwidth was not the binding constraint, and what is remains
+# unknown. Both tilings sit at 25-41% of the ~95 TFLOPS one NeuronCore-v2
+# should reach in bf16, and 4096^3 still beats 8192^3 under both. The next
+# place to look is per-tile issue overhead and the 128x128x512 tile shape,
+# not the memory system.
+#
+# blocked stays available and correct. It is not the default because a 6%
+# gain does not pay for the extra SBUF block and a deprecated NKI layout
+# ("Block dimension is deprecated. The leading dimension of SBUF tensor
+# must be partition dimension"), and because the reason it was written
+# turned out not to be true.
+TILING = os.environ.get("PANTHEON_NEURON_GEMM_TILING", "streaming")
 
 
 def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
@@ -145,34 +161,11 @@ def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = N
 
     accumulate_into = accumulator_dtype(dtype, nl)
 
-    # MEASURED LIMIT: at the pinned 8192^3 this kernel is bound by HBM
-    # bandwidth, not by the Tensor Engine it is named for.
-    #
-    # Operand tiles are re-read for every (row, col) pair -- lhs once per
-    # column, rhs once per row -- so operand traffic scales as n^3, exactly
-    # like the FLOPs. Arithmetic intensity is therefore constant in the
-    # shape rather than growing with it, and the kernel runs out of
-    # bandwidth before it runs out of engine. Measured on trn1.2xlarge
-    # 2026-09-08:
-    #
-    #     shape    TFLOPS   ms/pass   implied operand traffic
-    #     2048^3    22.99     0.747   224.6 GB/s   (operands 16 MiB)
-    #     4096^3    36.63     3.753   357.6 GB/s   (operands 64 MiB)
-    #     8192^3    26.26    41.871   256.4 GB/s   (operands 256 MiB)
-    #
-    # The single-core HBM read bandwidth measured by memory_read on the
-    # same part is 256.2 GB/s. The 8192^3 figure lands on it to within 0.1%.
-    # 4096^3 exceeds it because its operands are small enough that some
-    # tiles are served from SBUF (~24 MB) rather than re-read; 2048^3 is
-    # slower again for the opposite reason -- too few tiles to keep the
-    # engine busy.
-    #
-    # So the peak is at 4096^3 and the pinned shape is on the wrong side of
-    # a bandwidth wall. Two ways out, neither taken here: repin to 4096^3,
-    # or block the loops so operands are reused across the output tile
-    # instead of re-read. The second is the real fix -- hoisting the rhs
-    # loads out of the row loop would cut the dominant term by m_tiles --
-    # and it is a kernel rewrite that needs its own hardware pass.
+    # MEASURED, and not explained: both tilings reach 25-41% of the ~95
+    # TFLOPS one NeuronCore-v2 should manage in bf16, and 4096^3 beats the
+    # pinned 8192^3 under both. Operand bandwidth was the obvious suspect
+    # and is ruled out -- see TILING above for the numbers that ruled it
+    # out. What binds this kernel is still open.
     @nki.jit
     def tensor_virus_kernel(lhs_t, rhs):
         """Compute ``lhs_t.T @ rhs`` tile by tile on the Tensor Engine.
@@ -234,24 +227,20 @@ def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = N
     def tensor_virus_blocked(lhs_t, rhs):
         """Same product, one column's rhs tiles held in SBUF.
 
-        The streaming kernel above re-reads every operand tile for every
-        (row, col) pair, so operand traffic scales as n^3 -- the same order
-        as the FLOPs. Arithmetic intensity is therefore flat at about 102
-        FLOP/byte at any shape, and at the pinned 8192^3 the kernel is
-        bound by HBM bandwidth rather than by the Tensor Engine it is named
-        for: measured operand traffic 256.4 GB/s against memory_read's
-        256.2 GB/s on the same part, a match to within 0.1%.
+        Each rhs tile is read once per column instead of once per (row,
+        col): 10.74 GB/pass becomes 2.28 at 8192^3, arithmetic intensity
+        102 becomes 482 FLOP/byte, for one SBUF block of
+        k_tiles x CONTRACTION x MOVING -- 8 MiB at the pinned shape.
 
-        Hoisting the rhs tiles out of the row loop is what breaks that.
-        Each is then read once per column instead of once per (row, col):
-        10.74 GB/pass becomes 2.28 at 8192^3, intensity 102 becomes 482,
-        and the cost is one SBUF block of k_tiles x CONTRACTION x MOVING --
-        8 MiB at the pinned shape, against roughly 24 MB of SBUF.
+        **That buys 6%, not the 4.7x the traffic figures suggest**, and
+        measuring it is how the bandwidth explanation for this kernel's
+        throughput was refuted. See TILING above. The kernel is kept
+        because it is correct and marginally faster, not because the
+        argument for it held.
 
         lhs is deliberately left streaming. Holding it too would need the
         whole 128 MiB left operand resident, and the rhs tile is four times
-        the size of the lhs tile, so hoisting rhs alone takes most of the
-        win for a fraction of the space.
+        the size of the lhs tile.
         """
         k, m = lhs_t.shape
         _, n = rhs.shape

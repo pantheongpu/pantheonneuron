@@ -156,32 +156,34 @@ And the counter reads **below** the kernel's analytic figure — 22.60 against
 26.24 at the same shape — which is the right direction: the analytic number
 counts arithmetic issued and the counter counts what the engine retired.
 
-**4096³ is faster than the pinned 8192³**, by a wide margin — and the
-reason is that at 8192³ `tensor_virus` is measuring HBM bandwidth rather
-than the Tensor Engine it is named for.
+**4096³ is faster than the pinned 8192³**, by a wide margin, and the reason
+is not what it looked like.
 
-| shape | TFLOPS | ms/pass | implied operand traffic | operands resident |
+| shape | streaming | blocked | operand traffic cut | speedup |
 |---|--:|--:|--:|--:|
-| 2048³ | 22.99 | 0.747 | 224.6 GB/s | 16 MiB |
-| 4096³ | **36.63** | 3.753 | 357.6 GB/s | 64 MiB |
-| 8192³ | 26.26 | 41.871 | **256.4 GB/s** | 256 MiB |
+| 2048³ | 23.30 | 23.38 | 4.2× | 1.00× |
+| 4096³ | **36.55** | **38.85** | 4.5× | 1.06× |
+| 8192³ | 26.26 | 27.93 | 4.7× | 1.06× |
 
-The kernel re-reads operand tiles for every (row, col) pair — lhs once per
-column, rhs once per row — so operand traffic scales as n³, exactly like the
-FLOPs. Arithmetic intensity is constant in the shape instead of growing with
-it, and the kernel runs out of bandwidth before it runs out of engine.
+The kernel re-reads operand tiles for every (row, col) pair, so operand
+traffic scales as n³ exactly like the FLOPs and arithmetic intensity stays
+flat at ~102 FLOP/byte. At 8192³ that implied 256.4 GB/s of traffic against
+`memory_read`'s measured 256.2 GB/s on the same part — a 0.1% agreement that
+looked exactly like a bandwidth wall.
 
-`memory_read` measures 256.2 GB/s of single-core HBM read bandwidth on the
-same part. **The 8192³ figure lands on it to within 0.1%.** 4096³ exceeds it
-because its operands are small enough that some tiles are served from SBUF
-(~24 MB) rather than re-read; 2048³ is slower again for the opposite reason,
-too few tiles to keep the engine busy.
+**It was a coincidence.** A blocked tiling that cuts operand traffic 4.7×
+moved throughput by 1.06×. Had bandwidth been the constraint, the speedup
+would have tracked the traffic. So operand bandwidth is ruled out, and what
+actually binds this kernel is still unknown: both tilings sit at 25–41% of
+the ~95 TFLOPS one NeuronCore-v2 should reach in bf16, and 4096³ beats 8192³
+under both. The next place to look is per-tile issue overhead and the
+128×512 tile shape, not the memory system.
 
-Two ways out, neither taken: repin to 4096³, or block the loops so operands
-are reused across the output tile. The second is the real fix — hoisting the
-rhs loads out of the row loop would cut the dominant traffic term by
-`m_tiles`, 64× at the pinned shape — and it is a kernel rewrite that needs
-its own hardware pass rather than a rushed one.
+Both tilings ship and both product-verify at exactly 1.0. `streaming` is the
+default: a 6% gain does not pay for an extra SBUF block and a deprecated NKI
+layout, and the argument that motivated `blocked` turned out to be wrong.
+Select it with `PANTHEON_NEURON_GEMM_TILING=blocked` or
+`problem["tiling"]`, and compare them with `tools/compare_tiling.py`.
 
 ### What the 2026-09-08 rerun found, on both parts
 
