@@ -309,3 +309,47 @@ def test_the_unroll_is_cubic_in_the_shape():
     assert bodies(8192) == 65536
     # 4x the shape is 64x the unrolled body count.
     assert bodies(8192) == 64 * bodies(2048)
+
+
+def test_operand_traffic_scales_like_the_flops():
+    """Why the pinned shape is bandwidth-bound, as arithmetic.
+
+    Operand tiles are re-read for every (row, col) pair, so traffic grows
+    as n^3 exactly like the FLOPs. Arithmetic intensity is therefore
+    constant in the shape rather than growing with it, which is what puts
+    the 8192^3 figure on the HBM bandwidth ceiling instead of the engine's.
+    """
+    def traffic_and_flops(n):
+        plan = tensor_virus.gemm_plan([n, n, n], "bf16")
+        tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+        per_tile = (tiling.PARTITION * tiling.PARTITION * 2
+                    + tiling.PARTITION * tensor_virus.MOVING * 2)
+        return tiles * per_tile, 2 * n ** 3
+
+    intensity = []
+    for n in (2048, 4096, 8192):
+        traffic, flops = traffic_and_flops(n)
+        intensity.append(flops / traffic)
+
+    # Constant to within rounding: the ratio does not improve with size,
+    # which is the defect. A blocked GEMM's would grow with the tile.
+    assert max(intensity) / min(intensity) < 1.01, intensity
+
+
+def test_the_pinned_shape_sits_on_the_measured_bandwidth_ceiling():
+    """8192^3 implied traffic against memory_read's measured bandwidth.
+
+    Measured on trn1.2xlarge 2026-09-08: 41.871 ms/pass at 8192^3, and
+    256.2 GB/s of single-core HBM read bandwidth from memory_read on the
+    same part. If the two agree, the compute workload is reporting the
+    memory system.
+    """
+    plan = tensor_virus.gemm_plan([8192, 8192, 8192], "bf16")
+    tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+    per_tile = (tiling.PARTITION * tiling.PARTITION * 2
+                + tiling.PARTITION * tensor_virus.MOVING * 2)
+
+    implied_gbps = (tiles * per_tile) / (41.871 / 1000) / 1e9
+    measured_hbm_gbps = 256.2
+
+    assert abs(implied_gbps - measured_hbm_gbps) / measured_hbm_gbps < 0.01

@@ -156,9 +156,32 @@ And the counter reads **below** the kernel's analytic figure — 22.60 against
 26.24 at the same shape — which is the right direction: the analytic number
 counts arithmetic issued and the counter counts what the engine retired.
 
-**4096³ is faster than the pinned 8192³**, by a wide margin. The pinned
-problem is not the peak, and why it is not is an open question rather than a
-result.
+**4096³ is faster than the pinned 8192³**, by a wide margin — and the
+reason is that at 8192³ `tensor_virus` is measuring HBM bandwidth rather
+than the Tensor Engine it is named for.
+
+| shape | TFLOPS | ms/pass | implied operand traffic | operands resident |
+|---|--:|--:|--:|--:|
+| 2048³ | 22.99 | 0.747 | 224.6 GB/s | 16 MiB |
+| 4096³ | **36.63** | 3.753 | 357.6 GB/s | 64 MiB |
+| 8192³ | 26.26 | 41.871 | **256.4 GB/s** | 256 MiB |
+
+The kernel re-reads operand tiles for every (row, col) pair — lhs once per
+column, rhs once per row — so operand traffic scales as n³, exactly like the
+FLOPs. Arithmetic intensity is constant in the shape instead of growing with
+it, and the kernel runs out of bandwidth before it runs out of engine.
+
+`memory_read` measures 256.2 GB/s of single-core HBM read bandwidth on the
+same part. **The 8192³ figure lands on it to within 0.1%.** 4096³ exceeds it
+because its operands are small enough that some tiles are served from SBUF
+(~24 MB) rather than re-read; 2048³ is slower again for the opposite reason,
+too few tiles to keep the engine busy.
+
+Two ways out, neither taken: repin to 4096³, or block the loops so operands
+are reused across the output tile. The second is the real fix — hoisting the
+rhs loads out of the row loop would cut the dominant traffic term by
+`m_tiles`, 64× at the pinned shape — and it is a kernel rewrite that needs
+its own hardware pass rather than a rushed one.
 
 ### What the 2026-09-08 rerun found, on both parts
 

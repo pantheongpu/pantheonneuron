@@ -117,6 +117,34 @@ def _build_kernel(dtype: str = "bf16"):
 
     accumulate_into = accumulator_dtype(dtype, nl)
 
+    # MEASURED LIMIT: at the pinned 8192^3 this kernel is bound by HBM
+    # bandwidth, not by the Tensor Engine it is named for.
+    #
+    # Operand tiles are re-read for every (row, col) pair -- lhs once per
+    # column, rhs once per row -- so operand traffic scales as n^3, exactly
+    # like the FLOPs. Arithmetic intensity is therefore constant in the
+    # shape rather than growing with it, and the kernel runs out of
+    # bandwidth before it runs out of engine. Measured on trn1.2xlarge
+    # 2026-09-08:
+    #
+    #     shape    TFLOPS   ms/pass   implied operand traffic
+    #     2048^3    22.99     0.747   224.6 GB/s   (operands 16 MiB)
+    #     4096^3    36.63     3.753   357.6 GB/s   (operands 64 MiB)
+    #     8192^3    26.26    41.871   256.4 GB/s   (operands 256 MiB)
+    #
+    # The single-core HBM read bandwidth measured by memory_read on the
+    # same part is 256.2 GB/s. The 8192^3 figure lands on it to within 0.1%.
+    # 4096^3 exceeds it because its operands are small enough that some
+    # tiles are served from SBUF (~24 MB) rather than re-read; 2048^3 is
+    # slower again for the opposite reason -- too few tiles to keep the
+    # engine busy.
+    #
+    # So the peak is at 4096^3 and the pinned shape is on the wrong side of
+    # a bandwidth wall. Two ways out, neither taken here: repin to 4096^3,
+    # or block the loops so operands are reused across the output tile
+    # instead of re-read. The second is the real fix -- hoisting the rhs
+    # loads out of the row loop would cut the dominant term by m_tiles --
+    # and it is a kernel rewrite that needs its own hardware pass.
     @nki.jit
     def tensor_virus_kernel(lhs_t, rhs):
         """Compute ``lhs_t.T @ rhs`` tile by tile on the Tensor Engine.
