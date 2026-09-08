@@ -17,7 +17,8 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import (cores, memory_read, memory_write, nki_backend,
+from kernels import (allocation_fragmentation, cores, memory_read,
+                     memory_write, nki_backend, pcie_bandwidth, pulse_virus,
                      registry, tensor_virus)
 
 try:
@@ -361,6 +362,28 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         _LAST_RUN[workload.name] = result
         return result["analytic_tflops"]
 
+    if workload.name == "pulse_virus":
+        # Same GEMM, switched on and off. Its analytic figure spans the idle
+        # halves too, so it lines up with the monitor's average rather than
+        # with tensor_virus's sustained number.
+        result = pulse_virus.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_tflops"]
+
+    # The workloads below report their own Score: no hardware counter
+    # measures allocator behaviour, and the device's DMA counters cannot see
+    # a host transfer. The registry declares both as INTERNAL, so what the
+    # kernel returns is the Score itself rather than a cross-check.
+    if workload.name == "allocation_fragmentation":
+        result = allocation_fragmentation.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["allocation_events_per_s"]
+
+    if workload.name == "pcie_bandwidth":
+        result = pcie_bandwidth.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_gbps"]
+
     nki_backend.require_toolchain()
     raise NotImplementedError(
         f"Workload '{workload.name}' has no NKI implementation yet."
@@ -373,7 +396,8 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
 # workload there instead would quietly stop testing anything the day that
 # workload got a kernel.
 IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
-                         "tensor_virus", "int_virus"})
+                         "tensor_virus", "int_virus", "pulse_virus",
+                         "allocation_fragmentation", "pcie_bandwidth"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:

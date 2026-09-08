@@ -46,7 +46,23 @@ Still unverified:
 | `memory_write` | ✅ **verified on inf2.xlarge**, but not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
 | `tensor_virus` | ✅ **verified on inf2.xlarge** at 1024³/2048³, not at the pinned 8192³ | `neuron-monitor`, analytic fallback |
 | `int_virus` | ⚠️ written; same GEMM over int8, untested | `neuron-monitor`, analytic fallback |
-| the other 21 | ❌ none | — |
+| `pulse_virus` | ⚠️ written; tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor`, analytic fallback |
+| `pcie_bandwidth` | ⚠️ written; no NKI, host transfers, untested | workload |
+| `allocation_fragmentation` | ⚠️ written; no NKI, allocator churn, untested | workload |
+| the other 18 | ❌ none | — |
+
+The three written after the bring-up deliberately avoid unverified NKI
+primitives. `pulse_virus` reuses `tensor_virus`'s kernel and adds only
+wall-clock duty cycling; `pcie_bandwidth` and `allocation_fragmentation`
+use no NKI at all, reaching the runtime through ordinary device tensors.
+That keeps the untested surface to the arrangement rather than the API,
+which is where the 2026-09-07 bugs actually lived.
+
+`pulse_virus`'s Score is **not** comparable with `tensor_virus`'s: the
+monitor averages `effective_flops` over a run that is half idle by
+construction, so a healthy part reports roughly the duty cycle times the
+sustained figure. The kernel records a loaded-only figure beside it for
+the comparison that does make sense.
 
 ### What the 2026-09-07 inf2.xlarge bring-up changed
 
