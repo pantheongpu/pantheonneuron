@@ -24,15 +24,35 @@ import typing
 def weights(hidden: int, dtype, device, heads: int = 1):
     """Allocate one transformer block's parameters.
 
-    Ones rather than random values. Nothing here checks numerical accuracy
+    Constant rather than random. Nothing here checks numerical accuracy
     against a reference -- these workloads measure throughput -- and a
     deterministic tensor makes a run reproducible without carrying a seed
     whose meaning depends on the torch version.
+
+    **The constant is 1/hidden, not 1.** A hidden x hidden matmul of ones
+    against ones produces `hidden` in every element, so activations grow by
+    a factor of `hidden` per layer: at hidden 4096 and 32 layers they leave
+    bf16's range within a handful of blocks, saturate to inf, and the first
+    inf - inf or inf * 0 turns the output into a NaN. Measured on
+    trn1.2xlarge 2026-09-08: llm_prefill, llm_decode and
+    speculative_decode all returned NaN.
+
+    That mattered for more than tidiness. A NaN output is indistinguishable
+    from a graph that never ran, so it makes the throughput beside it
+    unverifiable -- and until the same run, the suite published those
+    numbers as PASS anyway. Scaling by 1/hidden makes each matmul roughly
+    norm-preserving, so a network of any depth stays in range and the
+    output check means something.
+
+    The arithmetic is untouched: same shapes, same graph, same FLOP count.
+    Only the values differ.
     """
     import torch  # type: ignore
 
+    scale = 1.0 / hidden
+
     def tensor(*shape):
-        return torch.ones(shape, dtype=dtype, device=device)
+        return torch.full(shape, scale, dtype=dtype, device=device)
 
     return {
         "q": tensor(hidden, hidden),
@@ -137,6 +157,26 @@ def read_back(tensor) -> typing.Optional[float]:
         return float(tensor.reshape(-1)[0])
     except Exception:  # materialisation failed; leave unverified
         return None
+
+
+def output_check(observed: typing.Optional[float],
+                 what: str = "output") -> typing.Dict[str, typing.Any]:
+    """Judge an output, and say whether a Score computed beside it survives.
+
+    Both halves have to travel together. The 2026-09-08 full-coverage run
+    caught three workloads whose output was NaN -- llm_prefill, llm_decode
+    and speculative_decode -- and reported all three as PASS with a
+    published Score, because the message went into the row's Detail and
+    nothing read it. A number nobody can verify, wearing a PASS, is the
+    exact failure this suite is built to prevent, and it took writing the
+    check to notice the check was decorative.
+
+    So a kernel returns ``**output_check(...)`` rather than
+    ``"warning": verify_output_is_a_number(...)``, and the orchestrator
+    fails the row on ``score_invalid``.
+    """
+    message = verify_output_is_a_number(observed, what)
+    return {"warning": message, "score_invalid": message is not None}
 
 
 def verify_output_is_a_number(observed: typing.Optional[float],

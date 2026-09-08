@@ -55,6 +55,27 @@ def test_since_falls_back_when_nothing_is_newer(tmp_path):
     assert profiler.find_neff(str(tmp_path), since=8000) == stale
 
 
+def test_a_cache_hit_stays_reachable_behind_fresher_graphs(tmp_path):
+    """The trn1 2026-09-08 failure: `since` used to drop the right answer.
+
+    The run hit the compile cache, so its own NEFF kept an old mtime while
+    the workloads before it left dozens of fresher graphs. Filtering to
+    "newer than the compile" removed the one file that mattered, and the
+    search exhausted its budget on graphs that were never candidates.
+
+    Fresh still ranks first -- a cold compile is the common case -- but
+    stale must appear after it rather than not at all.
+    """
+    cached = _neff(str(tmp_path / "cached" / "model.neff"), 1000)
+    for index in range(3):
+        _neff(str(tmp_path / f"other{index}" / "model.neff"), 5000 + index)
+
+    found = profiler.find_neffs(str(tmp_path), since=4000)
+    assert cached in found, "a cache hit must stay reachable"
+    assert found[-1] == cached, "but fresher graphs still rank ahead of it"
+    assert len(found) == 4
+
+
 def test_missing_neff_still_raises(tmp_path):
     with pytest.raises(profiler.ProfilerUnavailable):
         profiler.find_neff(str(tmp_path), since=1)
@@ -116,7 +137,7 @@ def test_find_neffs_ranks_newest_first(tmp_path):
 
 
 def test_find_neffs_honours_the_candidate_limit(tmp_path):
-    for index in range(10):
+    for index in range(profiler.MAX_CANDIDATES + 4):
         _neff(str(tmp_path / f"d{index}" / "model.neff"), 1000 + index)
 
     assert len(profiler.find_neffs(str(tmp_path))) == profiler.MAX_CANDIDATES
@@ -125,11 +146,11 @@ def test_find_neffs_honours_the_candidate_limit(tmp_path):
 
 def test_the_candidate_limit_is_raisable(tmp_path, monkeypatch):
     """A run that exhausts the search says so; this is how you answer it."""
-    for index in range(10):
+    for index in range(profiler.MAX_CANDIDATES + 4):
         _neff(str(tmp_path / f"d{index}" / "model.neff"), 1000 + index)
 
-    monkeypatch.setenv(profiler.CANDIDATES_ENV, "9")
-    assert len(profiler.find_neffs(str(tmp_path))) == 9
+    monkeypatch.setenv(profiler.CANDIDATES_ENV, "3")
+    assert len(profiler.find_neffs(str(tmp_path))) == 3
 
     monkeypatch.setenv(profiler.CANDIDATES_ENV, "not-a-number")
     assert len(profiler.find_neffs(str(tmp_path))) == profiler.MAX_CANDIDATES

@@ -72,7 +72,7 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "block FLOPs issued / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(observed, "block output"),
+        **transformer_ops.output_check(observed, "block output"),
     }
 
 
@@ -94,8 +94,15 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     # Real parameters this time: backward needs gradients, which needs
     # leaves that require grad, so these cannot be the shared constant
     # tensors the forward-only workloads use.
+    # Scaled like transformer_ops.weights, and for the same reason: ones
+    # grow activations by `hidden` per layer and leave bf16's range within
+    # a few blocks. Backward makes it worse -- a NaN loss produces NaN
+    # gradients, so the optimiser step then corrupts every parameter and
+    # every later step measures a model of NaNs.
+    scale = 1.0 / hidden
+
     def parameter(*shape):
-        tensor = torch.ones(shape, dtype=dtype, device=device)
+        tensor = torch.full(shape, scale, dtype=dtype, device=device)
         tensor.requires_grad_(True)
         return tensor
 
@@ -158,5 +165,5 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
         "implied_tflops": (forward * 3) / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "optimiser steps / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(observed, "loss"),
+        **transformer_ops.output_check(observed, "loss"),
     }

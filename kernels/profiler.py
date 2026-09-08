@@ -133,7 +133,7 @@ DEFAULT_WORKDIRS = (
 # mtime, and a machine whose compile cache holds hundreds of unrelated
 # graphs should not be walked through all of them. Raise it with
 # PANTHEON_NEURON_NEFF_CANDIDATES if a run reports exhausting the search.
-MAX_CANDIDATES = 6
+MAX_CANDIDATES = 16
 CANDIDATES_ENV = "PANTHEON_NEURON_NEFF_CANDIDATES"
 
 
@@ -188,18 +188,29 @@ def find_neffs(workdir: str, since: typing.Optional[float] = None,
                     continue
                 seen.add(real)
 
-    if since is not None:
-        fresh = [entry for entry in candidates if entry[0] >= since]
-        if fresh:
-            candidates = fresh
-
     if not candidates:
         raise ProfilerUnavailable(
             f"no .neff under {workdir} -- trace with compiler_workdir set, "
             "otherwise torch_neuronx removes it"
         )
 
-    ordered = [path for _, path in sorted(candidates, reverse=True)]
+    # `since` ranks, it does not exclude. It used to filter, and on
+    # trn1.2xlarge 2026-09-08 that filter removed the right answer: the run
+    # hit the compile cache ("Using a cached neff at ..."), so the kernel's
+    # own NEFF kept its original mtime while the 24 workloads before it left
+    # 78 fresher graphs on the machine. Everything newer than `since` was
+    # kept, the one graph we wanted was dropped, and the search exhausted
+    # six candidates whose best coverage was 0.38 of the plan.
+    #
+    # Fresh-first is still the right order -- a cold compile is the common
+    # case and its NEFF really is the newest -- but a cache hit must leave
+    # the search able to reach the older file rather than never seeing it.
+    if since is not None:
+        fresh = sorted([e for e in candidates if e[0] >= since], reverse=True)
+        stale = sorted([e for e in candidates if e[0] < since], reverse=True)
+        ordered = [path for _, path in fresh + stale]
+    else:
+        ordered = [path for _, path in sorted(candidates, reverse=True)]
     return ordered[:(limit if limit is not None else _candidate_limit())]
 
 

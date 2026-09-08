@@ -396,10 +396,70 @@ def test_every_family_workload_is_declared_implemented(name):
 
 @pytest.mark.parametrize("name", sorted(FAMILY_ENTRY_POINTS))
 def test_every_family_workload_verifies_that_its_graph_ran(name):
-    """Each kernel must judge its own output, or a dead graph reads as a PASS."""
+    """Each kernel must judge its output *and* let the verdict reach the row.
+
+    The paired form is the point. Calling `verify_output_is_a_number` and
+    storing the message under "warning" is what these kernels used to do,
+    and it left three workloads reporting PASS with a published Score while
+    their output was NaN: the check fired and nothing acted on it.
+    `output_check` returns the message and `score_invalid` together, so the
+    orchestrator cannot fail to notice.
+    """
     import inspect
 
     module, function, _ = FAMILY_ENTRY_POINTS[name]
     source = inspect.getsource(getattr(module, function))
-    assert "verify_output_is_a_number" in source, name
+    assert "transformer_ops.output_check(" in source, name
     assert "read_back" in source, name
+    assert '"warning": transformer_ops.verify_output_is_a_number' not in source, (
+        f"{name} stores the message without the verdict"
+    )
+
+
+def test_output_check_pairs_the_message_with_the_verdict():
+    assert transformer_ops.output_check(1.0) == {
+        "warning": None, "score_invalid": False}
+
+    nan = transformer_ops.output_check(math.nan, "loss")
+    assert nan["score_invalid"] is True
+    assert "loss" in nan["warning"]
+
+    unread = transformer_ops.output_check(None, "block output")
+    assert unread["score_invalid"] is True
+
+    # inf is deliberately fine, so it must not invalidate a Score.
+    assert transformer_ops.output_check(math.inf)["score_invalid"] is False
+
+
+def test_weights_are_scaled_so_a_deep_model_stays_in_range():
+    """1/hidden, not 1: ones overflow bf16 within a few layers.
+
+    A hidden x hidden matmul of ones against ones puts `hidden` in every
+    element, so activations grow by that factor per layer. At hidden 4096
+    over 32 layers they leave bf16's range, saturate to inf, and the first
+    inf - inf produces the NaN that trn1.2xlarge measured on 2026-09-08.
+    """
+    import inspect
+
+    source = inspect.getsource(transformer_ops.weights)
+    assert "scale = 1.0 / hidden" in source
+    assert "torch.ones(" not in source
+
+    # The growth this avoids, as arithmetic rather than prose. With
+    # unscaled ones each layer multiplies magnitude by `hidden`, and bf16
+    # tops out near 3.39e38, so the pinned model overflows a third of the
+    # way through its own depth.
+    hidden = PROBLEMS["llm_prefill"]["hidden"]
+    layers = PROBLEMS["llm_prefill"]["layers"]
+    bf16_max = 3.3895e38
+
+    overflow_at = math.ceil(math.log(bf16_max) / math.log(hidden))
+    assert hidden ** overflow_at > bf16_max
+    assert hidden ** (overflow_at - 1) < bf16_max
+    assert overflow_at < layers, (
+        f"ones overflow after {overflow_at} layers, and the pinned model "
+        f"has {layers}"
+    )
+
+    # Scaled, a layer is magnitude-neutral at any depth.
+    assert (1.0 / hidden) * hidden == 1.0

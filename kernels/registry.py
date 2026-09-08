@@ -364,10 +364,26 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  formula='routed_tokens / elapsed_s')),
 
     # -- training (Trainium only) -----------------------------------------
+    # batch 1 and 4 layers, not batch 4 and 8. The original pin needed
+    # 38.18 GB of peak HBM against the 16 GB a NeuronCore has -- 6.12 GB of
+    # I/O tensors and 30.94 GB of intermediates -- and the compiler refused
+    # it outright on trn1.2xlarge 2026-09-08 with NCC_EOOM001. Backward is
+    # what makes training different here: it keeps every forward activation
+    # alive until its gradient is consumed, so the intermediates scale with
+    # batch x layers in a way no forward-only workload pays.
+    #
+    # This is the fourth pinned problem that turned out to be unreachable
+    # on the hardware it targets, after int_virus's int8, memory_write's
+    # 8 GiB and the 8192^3 unroll. A pin is a claim about what the part can
+    # do, and it needs measuring like any other.
+    #
+    # batch 1 / layers 4 lands near 6.5 GB, which leaves room for the
+    # optimiser state rather than only just fitting. hidden and seq are
+    # unchanged, so a step still exercises the shapes a real model uses.
     Workload("transformer_train_step", "training",
              "Forward, backward and optimiser step.", _TRAINING,
              unit="train-steps/s",
-             problem={"hidden": 4096, "layers": 8, "batch": 4, "seq": 2048,
+             problem={"hidden": 4096, "layers": 4, "batch": 1, "seq": 2048,
                       "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(

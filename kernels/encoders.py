@@ -79,7 +79,7 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
         "flops_issued": flops,
         "score_method": "workload",
         "analytic_basis": "vectors embedded / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(
+        **transformer_ops.output_check(
             transformer_ops.read_back(sink), "embedding"),
     }
 
@@ -173,6 +173,6 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         "patches_per_image": plan["patches"],
         "score_method": "workload",
         "analytic_basis": "image tiles / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(
+        **transformer_ops.output_check(
             transformer_ops.read_back(sink), "encoder output"),
     }

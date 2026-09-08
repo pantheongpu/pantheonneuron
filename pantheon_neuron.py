@@ -229,6 +229,18 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
     run = _LAST_RUN.get(workload.name)
     if run and run.get("warning") and status == "PASS":
         detail = run["warning"]
+        if run.get("score_invalid"):
+            # The kernel says its own output could not be verified, so the
+            # throughput beside it is not a measurement of anything. The
+            # 2026-09-08 full-coverage run reported llm_prefill, llm_decode
+            # and speculative_decode as PASS with published Scores while
+            # every one of them had produced a NaN: the check fired, the
+            # message reached the row's Detail, and nothing acted on it.
+            #
+            # An unverifiable output is indistinguishable from a graph that
+            # never ran, which is the definition of a failed workload.
+            status = "FAIL"
+            score = None
 
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":

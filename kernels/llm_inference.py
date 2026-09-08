@@ -87,7 +87,7 @@ def run_prefill(problem: typing.Mapping[str, typing.Any], duration: int) -> dict
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "prompt tokens / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(
+        **transformer_ops.output_check(
             observed, "prefill output"),
     }
 
@@ -162,7 +162,7 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "tokens generated / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(
+        **transformer_ops.output_check(
             observed, "decode output"),
     }
 
@@ -189,9 +189,22 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
     # wraps and overwrites the oldest entry. Writing always to position zero
     # would let the compiler keep one row in SBUF and never touch HBM,
     # measuring a register file instead of a cache.
+    #
+    # The index has to reach the device as a *value*, not as a Python int.
+    # `cache_k[position] = ...` bakes the position into the graph, so every
+    # distinct position is a different graph and every iteration pays a
+    # compile. Measured on trn1.2xlarge 2026-09-08: 0.85 cache-updates/s,
+    # which is a compiler's throughput, not a cache's. Copying a host
+    # scalar into a device tensor of fixed shape keeps one graph and makes
+    # the position an input to it.
+    host_index = torch.zeros(1, dtype=torch.int64)
+    index = torch.zeros(1, dtype=torch.int64, device=device)
+
     def churn(position):
-        cache_k[position] = entry[0]
-        cache_v[position] = entry[0]
+        host_index[0] = position
+        index.copy_(host_index)
+        cache_k.index_copy_(0, index, entry)
+        cache_v.index_copy_(0, index, entry)
 
     churn(0)
     xm.mark_step()
@@ -219,5 +232,5 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
         "bytes_written": bytes_written,
         "score_method": "workload",
         "analytic_basis": "cache updates / wall time",
-        "warning": transformer_ops.verify_output_is_a_number(observed, "cache"),
+        **transformer_ops.output_check(observed, "cache"),
     }

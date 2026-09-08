@@ -1,0 +1,275 @@
+
+========== part ==========
+instance-type: trn1.2xlarge
+instance-id: <scrubbed>
++--------+--------+----------+--------+--------------+----------+------+
+| NEURON | NEURON |  NEURON  | NEURON |     PCI      |   CPU    | NUMA |
+| DEVICE | CORES  | CORE IDS | MEMORY |     BDF      | AFFINITY | NODE |
++--------+--------+----------+--------+--------------+----------+------+
+| 0      | 2      | 0-1      | 32 GB  | 0000:00:1e.0 | 0-7      | -1   |
++--------+--------+----------+--------+--------------+----------+------+
+NDv2
+Trainium1
+neuronxcc 2.23.6484.0+3b612583 | torch 2.8.0+cu128
+
+========== orchestrated: memory_read (pinned problem) ==========
+2026-09-08 17:35:39.000801:  1587  [INFO]: Compilation Successfully Completed for model.MODULE_7092057769312097889+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:36:01.000236:  1587  [INFO]: Compilation Successfully Completed for model.MODULE_3281419714134748632+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_173051.json
+
+========== orchestrated: memory_write (pinned problem) ==========
+2026-09-08 17:37:26.000674:  3426  [INFO]: Compilation Successfully Completed for model.MODULE_3955677478664133699+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:37:27.000802:  3426  [INFO]: Compilation Successfully Completed for model.MODULE_153420479743731229+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_173655.json
+
+========== orchestrated: pcie_bandwidth (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.4 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-09-08 split was a per-pass host allocation, not the link), then the negotiated link width)
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_173803.json
+
+========== orchestrated: allocation_fragmentation (pinned problem) ==========
+2026-09-08 17:38:54.000735:  3934  [INFO]: Compilation Successfully Completed for model.MODULE_1515791813894254897+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:38:55.000928:  3934  [INFO]: Compilation Successfully Completed for model.MODULE_9332355670543101497+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_173836.json
+
+========== orchestrated: tensor_virus (pinned problem) ==========
+2026-09-08 17:40:36.000976:  4510  [INFO]: Compilation Successfully Completed for model.MODULE_9400800940813514016+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:40:38.000112:  4510  [INFO]: Compilation Successfully Completed for model.MODULE_1447239244895699192+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_173904.json
+
+========== orchestrated: int_virus (pinned problem) ==========
+2026-09-08 17:42:14.000144:  4820  [INFO]: Compilation Successfully Completed for model.MODULE_11892316595599065726+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:42:15.000269:  4820  [INFO]: Compilation Successfully Completed for model.MODULE_13790663919741022316+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174043.json
+
+========== orchestrated: pulse_virus (pinned problem) ==========
+Neuron NKI - Kernel call: tensor_virus_kernel(lhs_t = Tensor(shape: (8192, 8192), dtype: bfloat16), rhs = Tensor(shape: (8192, 8192), dtype: bfloat16))
+2026-09-08 17:42:27.000687:  5180  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_4575650840237719531+e30acd3a/model.neff
+2026-09-08 17:42:47.000859:  5180  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_9400800940813514016+e30acd3a/model.neff
+2026-09-08 17:42:47.000867:  5180  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_1447239244895699192+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174220.json
+
+========== orchestrated: transformer_virus (pinned problem) ==========
+2026-09-08 17:43:34.000982:  5386  [INFO]: Compilation Successfully Completed for model.MODULE_7083888443463142733+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:43:56.000424:  5386  [INFO]: Compilation Successfully Completed for model.MODULE_14727602382196641527+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174253.json
+
+========== orchestrated: omni_virus (pinned problem) ==========
+2026-09-08 17:44:10.000369:  5661  [INFO]: Compilation Successfully Completed for model.MODULE_7098222022655765781+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:44:31.000541:  5661  [INFO]: Compilation Successfully Completed for model.MODULE_17808974669084874505+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174401.json
+
+========== orchestrated: graph_replay (pinned problem) ==========
+2026-09-08 17:44:45.000711:  5873  [INFO]: Compilation Successfully Completed for model.MODULE_6853952270853402570+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:44:50.000484:  5873  [INFO]: Compilation Successfully Completed for model.MODULE_17225262999969746197+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174436.json
+
+========== orchestrated: llm_prefill (pinned problem) ==========
+...
+Compiler status PASS
+2026-09-08 17:45:46.000421:  6107  [INFO]: Compilation Successfully Completed for model.MODULE_11799064300522996038+e30acd3a.hlo_module.pb
+2026-09-08 17:46:09.000051:  6107  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_14727602382196641527+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS (prefill output is NaN, so this run computed nothing meaningful)
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174455.json
+
+========== orchestrated: llm_decode (pinned problem) ==========
+2026-09-08 17:48:31.000299:  6328  [INFO]: Compilation Successfully Completed for model.MODULE_12447462825966941282+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:48:53.000055:  6328  [INFO]: Compilation Successfully Completed for model.MODULE_9803261718099139573+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS (decode output is NaN, so this run computed nothing meaningful)
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174614.json
+
+========== orchestrated: kv_cache_churn (pinned problem) ==========
+2026-09-08 17:49:31.000260:  6719  [INFO]: Compilation Successfully Completed for model.MODULE_3838929508387280629+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:49:32.000392:  6719  [INFO]: Compilation Successfully Completed for model.MODULE_13010352718008439221+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174858.json
+
+========== orchestrated: fused_attention (pinned problem) ==========
+.
+Compiler status PASS
+2026-09-08 17:49:55.000863:  7457  [INFO]: Compilation Successfully Completed for model.MODULE_5165735320452511640+e30acd3a.hlo_module.pb
+2026-09-08 17:50:16.000011:  7457  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_14727602382196641527+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_174937.json
+
+========== orchestrated: quantized_gemm (pinned problem) ==========
+2026-09-08 17:50:31.000522:  7702  [INFO]: Compilation Successfully Completed for model.MODULE_6014206837142319809+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:50:52.000708:  7702  [INFO]: Compilation Successfully Completed for model.MODULE_938953601693790584+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175021.json
+
+========== orchestrated: moe_router (pinned problem) ==========
+[ERROR] [NCC_EXTP003] Instructions generated by compiler 4194304 exceeds the typical limit of 150000. Input computation graph is too big due to large operators - Consider using smaller batches or sequence length, or applying tensor parellelism. For further troubleshooting visit https://awsdocs-neuron.readthedocs-hosted.com/en/latest/libraries/nxd-training/app_notes/nxd-training-tp-appnote.html
+[libneuronxla 2.2.15515.0+50c26cbd]
+[PANTHEON-NEURON]    FAIL (ValueError: RunNeuronCCImpl: error condition error != 0: [ERROR] [NCC_EXTP003] Instructions generated by compiler 4194304 exceeds the typical limit of 150000. Input computation graph is too big due to large operators - Consider using smaller batches or sequence length, or applying tensor parellelism. For further troubleshooting visit https://awsdocs-neuron.readthedocs-hosted.com/en/latest/libraries/nxd-training/app_notes/nxd-training-tp-appnote.html
+[libneuronxla 2.2.15515.0+50c26cbd]
+[libneuronxla 2.2.15515.0+50c26cbd])
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175057.json
+[VALIDATE] moe_router exited 1
+
+========== orchestrated: speculative_decode (pinned problem) ==========
+2026-09-08 17:51:27.000466:  8141  [INFO]: Compilation Successfully Completed for model.MODULE_13623150261577651412+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:51:48.000618:  8141  [INFO]: Compilation Successfully Completed for model.MODULE_4595570322578984853+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS (verification output is NaN, so this run computed nothing meaningful)
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175114.json
+
+========== orchestrated: serving_mix (pinned problem) ==========
+2026-09-08 17:52:18.000718:  8422  [INFO]: Compilation Successfully Completed for model.MODULE_13505248456761444872+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:52:27.000954:  8422  [INFO]: Compilation Successfully Completed for model.MODULE_15863921314700077673+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175153.json
+
+========== orchestrated: rag_embedding (pinned problem) ==========
+2026-09-08 17:52:42.000240:  8667  [INFO]: Compilation Successfully Completed for model.MODULE_471336909024406015+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:53:03.000386:  8667  [INFO]: Compilation Successfully Completed for model.MODULE_9558247884243234964+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175233.json
+
+========== orchestrated: vision_encoder (pinned problem) ==========
+2026-09-08 17:53:30.000024:  8936  [INFO]: Compilation Successfully Completed for model.MODULE_12203573437220824935+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 17:53:51.000243:  8936  [INFO]: Compilation Successfully Completed for model.MODULE_4278466687835782297+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175308.json
+
+========== orchestrated: transformer_train_step (pinned problem) ==========
+[libneuronxla 2.2.15515.0+50c26cbd]
+[PANTHEON-NEURON]    FAIL (ValueError: RunNeuronCCImpl: error condition error != 0: [ERROR] [NCC_EOOM001] Maximum peak HBM usage of 38.18GB (at instruction I-1761-7696) exceeds HBM limit of 16.00GB for Trn1. This consists of 6.12GB I/O tensors, 30.94GB intermediate tensors, and 1.12GB internal (scratchpad) allocations (of which 247.28MB is anticipated spills from SBUF) - Check the target architecture flag to ensure you are compiling for correct target, or consider using smaller batches or applying model/tensor parallelism.
+2026-09-08T17:55:51Z Non-signal exit. Backend exited with code 1 and stderr: [ERROR] [NCC_EOOM001] Maximum peak HBM usage of 38.18GB (at instruction I-1761-7696) exceeds HBM limit of 16.00GB for Trn1. This consists of 6.12GB I/O tensors, 30.94GB intermediate tensors, and 1.12GB internal (scratchpad) allocations (of which 247.28MB is anticipated spills from SBUF) - Check the target architecture flag to ensure you are compiling for correct target, or consider using smaller batches or applying model/tensor parallelism.
+[libneuronxla 2.2.15515.0+50c26cbd]
+[libneuronxla 2.2.15515.0+50c26cbd])
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175356.json
+[VALIDATE] transformer_train_step exited 1
+
+========== orchestrated: memory_read_agg (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175556.json
+
+========== orchestrated: memory_write_agg (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] no core reserved: memory_write_agg measures all cores
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175635.json
+
+========== NEFF search against a warm compile cache ==========
+NEFFs now on this machine:
+80
+2026-09-08 17:57:27.000813:  10381  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_7092057769312097889+e30acd3a/model.neff
+2026-09-08 17:57:47.000972:  10381  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_3281419714134748632+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 6 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: covered 0.3828 of the plan; model.neff: covered 2.328e-10 of the plan; model.neff: covered 0.06397 of the plan; model.neff: covered 0.005313 of the plan (raise PANTHEON_NEURON_NEFF_CANDIDATES to search further))
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_175722.json
+
+========== reduced shape: the GEMM family (2048^3) ==========
+tensor_virus: OK
+  analytic          23.14 TFLOPS
+  passes            26943
+  product verified  1.0
+  warning           None
+int_virus: OK
+  analytic          23.00 TOPS
+  passes            26779
+  product verified  1.0
+  warning           None
+pulse_virus: OK
+  analytic          11.68 TFLOPS
+  loaded-only       23.35 TFLOPS
+  pulses            10
+  passes            13601
+  product verified  1.0
+  warning           None
+
+========== NEFF selection: how many candidates the search needed ==========
+  memory_read    via neuron-profile
+    candidate 2 of 2, coverage 1.0, graph model.neff
+  memory_write   via neuron-profile
+    candidate 3 of 3, coverage 1.0, graph model.neff
+  memory_read    via analytic (bytes moved / wall time); declared source is neuron-profile hbm_read_bytes
+    profiler unavailable, Score is analytic: none of 6 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: covered 0.3828 of the plan; model.neff: covered 2.328e-10 of the plan; model.neff
+  (a run that needed a late candidate means mtime ranking is weak;
+   raise PANTHEON_NEURON_NEFF_CANDIDATES if a search reports exhaustion)
+
+========== summary: which Score sources fired ==========
+  allocation_fragmentation   PASS           541.5652 allocation-events/s via workload
+  fused_attention            PASS          6039.7148 attention-tiles/s via workload
+  graph_replay               PASS           729.3231 graph-steps/s  via neuron-monitor
+  int_virus                  PASS            25.5389 TOPS           via neuron-monitor
+  kv_cache_churn             PASS             0.8509 cache-updates/s via workload
+  llm_decode                 PASS            20.6599 tokens/s       via workload
+    decode output is NaN, so this run computed nothing meaningful
+  llm_prefill                PASS          3812.3968 prompt-tokens/s via workload
+    prefill output is NaN, so this run computed nothing meaningful
+  memory_read                PASS           271.7479 GB/s           via analytic (bytes moved / wall time); declared source is neuron-profile hbm_read_bytes
+    profiler unavailable, Score is analytic: none of 6 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: covered 0.3828 of the plan; mod
+  memory_read_agg            PASS           543.7785 GB/s           via workload
+  memory_write               PASS            226.113 GB/s           via neuron-profile
+  memory_write_agg           PASS           507.5195 GB/s           via workload
+  moe_router                 FAIL                  - routed-tokens/s via None
+    ValueError: RunNeuronCCImpl: error condition error != 0: [ERROR] [NCC_EXTP003] Instructions generated by compiler 4194304 exceeds the typical limit of
+  omni_virus                 PASS            28.2493 TFLOPS         via neuron-monitor
+  pcie_bandwidth             PASS              3.748 GB/s           via workload
+    d2h ran at 1.1 GB/s against 6.4 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-0
+  pulse_virus                PASS            12.9222 TFLOPS         via neuron-monitor
+  quantized_gemm             PASS     18443432333813.082 quantized-ops/s via workload
+  rag_embedding              PASS       1507794.4631 embedding-vectors/s via workload
+  serving_mix                PASS           138.2758 requests/s     via workload
+  speculative_decode         PASS          2175.1658 verified-tokens/s via workload
+    verification output is NaN, so this run computed nothing meaningful
+  tensor_virus               PASS            25.7648 TFLOPS         via neuron-monitor
+  transformer_train_step     FAIL                  - train-steps/s  via None
+    ValueError: RunNeuronCCImpl: error condition error != 0: [ERROR] [NCC_EOOM001] Maximum peak HBM usage of 38.18GB (at instruction I-1761-7696) exceeds 
+  transformer_virus          PASS            48.4207 TFLOPS         via neuron-monitor
+  vision_encoder             PASS       1675903.7524 image-tiles/s  via workload
+
+  Workloads run: 23  PASS 21  FAIL 2  SKIP 0
+  Scores from a declared hardware source: 7 of 23
+
+  Failures:
+    moe_router                 ValueError: RunNeuronCCImpl: error condition error != 0: [ERROR] [NCC_EXTP003] Instructions generated by compi
+    transformer_train_step     ValueError: RunNeuronCCImpl: error condition error != 0: [ERROR] [NCC_EOOM001] Maximum peak HBM usage of 38.18
+
+========== done ==========
+EXIT=0
