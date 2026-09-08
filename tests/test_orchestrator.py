@@ -52,30 +52,45 @@ def test_workload_runs_in_mock_mode(mock_env):
 
 
 def test_unimplemented_workload_does_not_silently_pass_on_hardware(monkeypatch):
-    """A missing NKI kernel must never be reported as a successful run.
+    """A workload without a kernel must never be reported as a successful run.
 
-    Driven from pantheon_neuron.IMPLEMENTED rather than a named workload.
-    This test used to name tensor_virus, which stopped testing anything the
-    moment tensor_virus got a kernel -- it ran the real kernel instead and
-    failed for an unrelated reason. Deriving the list means a workload that
-    gains a kernel leaves the test, and one that never had a kernel cannot
-    quietly escape it.
+    Every registry workload now has one, so this uses a synthetic workload
+    instead of scanning for a gap. The invariant is about the next workload
+    someone adds, not about today's registry: declaring one and forgetting
+    the kernel must raise, not PASS with no Score.
+
+    The test has been rewritten twice for the same reason. It first named
+    tensor_virus and stopped testing anything the day tensor_virus got a
+    kernel; it then scanned for unimplemented workloads and had nothing left
+    to scan. A synthetic workload cannot be overtaken by coverage.
     """
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
     monkeypatch.setattr(
         nki_backend, "require_toolchain", lambda: {"neuronxcc": "2.x"}
     )
 
-    unimplemented = [
-        w for w in registry.WORKLOADS
-        if w.name not in pantheon_neuron.IMPLEMENTED
-        and w.skip_reason(TRN1) is None
-    ]
-    assert unimplemented, "every workload has a kernel; retire this test"
+    invented = registry.Workload(
+        "workload_with_no_kernel", "core", "Declared but never implemented.",
+        frozenset({"compute"}), unit="TFLOPS",
+    )
+    assert invented.name not in pantheon_neuron.IMPLEMENTED
 
-    for workload in unimplemented:
-        with pytest.raises(NotImplementedError):
-            pantheon_neuron._execute(workload, TRN1, duration=1)
+    with pytest.raises(NotImplementedError):
+        pantheon_neuron._execute(invented, TRN1, duration=1)
+
+
+def test_every_registry_workload_has_a_kernel():
+    """Coverage is complete; a new workload must arrive with an implementation.
+
+    This is the other half of the test above. That one says an unknown
+    workload raises; this one says no workload in the registry is unknown,
+    so the raise is unreachable in practice rather than merely unreached.
+    """
+    missing = sorted(
+        w.name for w in registry.WORKLOADS
+        if w.name not in pantheon_neuron.IMPLEMENTED
+    )
+    assert not missing, f"workloads declared without a kernel: {missing}"
 
 
 def test_implemented_set_matches_what_execute_dispatches():

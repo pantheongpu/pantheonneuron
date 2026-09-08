@@ -17,9 +17,10 @@ import typing
 
 import neuron_device
 import neuron_monitor
-from kernels import (allocation_fragmentation, cores, graph_replay,
-                     inference_mix, llm_inference, memory_read, memory_write,
-                     nki_backend, pcie_bandwidth, pulse_virus, registry,
+from kernels import (allocation_fragmentation, collectives, cores,
+                     encoders, graph_replay, inference_mix, llm_inference,
+                     memory_agg, memory_read, memory_write, nki_backend,
+                     omni_virus, pcie_bandwidth, pulse_virus, registry,
                      tensor_virus, transformer_compute)
 
 try:
@@ -465,6 +466,44 @@ def _execute(workload, devices, duration: int) -> typing.Optional[float]:
         _LAST_RUN[workload.name] = result
         return result["requests_per_s"]
 
+    if workload.name == "rag_embedding":
+        result = encoders.run_rag_embedding(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["embedding_vectors_per_s"]
+
+    if workload.name == "vision_encoder":
+        result = encoders.run_vision_encoder(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["image_tiles_per_s"]
+
+    if workload.name == "omni_virus":
+        result = omni_virus.run(workload.problem, duration)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_tflops"]
+
+    # Aggregate bandwidth: one process per core, because the runtime binds a
+    # process to its visible cores at initialisation and two threads would
+    # share one allocation and measure the same core twice.
+    if workload.name in ("memory_read_agg", "memory_write_agg"):
+        direction = "read" if workload.name.startswith("memory_read") else "write"
+        core_count = sum(device.neuroncores for device in devices)
+        result = memory_agg.run(workload.problem, duration, direction, core_count)
+        _LAST_RUN[workload.name] = result
+        return result["analytic_gbps"]
+
+    # Collectives come from AWS's own benchmark rather than a counter. Both
+    # need two or more devices, so skip_reason keeps them off single-device
+    # parts before execution reaches here.
+    if workload.name == "all_reduce":
+        result = collectives.run_all_reduce(workload.problem, devices)
+        _LAST_RUN[workload.name] = result
+        return result["busbw_gbps"]
+
+    if workload.name == "p2p_thrasher":
+        result = collectives.run_p2p(workload.problem, devices)
+        _LAST_RUN[workload.name] = result
+        return result["busbw_gbps"]
+
     if workload.name == "graph_replay":
         # Its declared Score is the monitor's execution rate; this figure
         # counts submissions instead, and run_workload prefers the counter.
@@ -492,7 +531,10 @@ IMPLEMENTED = frozenset({"baseline_metrics", "memory_read", "memory_write",
                          "kv_cache_churn", "transformer_virus",
                          "transformer_train_step", "fused_attention",
                          "quantized_gemm", "moe_router",
-                         "speculative_decode", "serving_mix"})
+                         "speculative_decode", "serving_mix",
+                         "rag_embedding", "vision_encoder", "omni_virus",
+                         "memory_read_agg", "memory_write_agg",
+                         "all_reduce", "p2p_thrasher"})
 
 
 def _execute_bandwidth(workload, duration: int, module) -> float:
