@@ -61,7 +61,7 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(sink)
+    observed = transformer_ops.read_back(sink)
     flops = passes * transformer_ops.block_flops(hidden, seq)
 
     return {
@@ -72,7 +72,7 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "block FLOPs issued / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "block output"),
+        **transformer_ops.output_check(observed, "block output"),
     }
 
 
@@ -94,8 +94,17 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     # Real parameters this time: backward needs gradients, which needs
     # leaves that require grad, so these cannot be the shared constant
     # tensors the forward-only workloads use.
-    def parameter(*shape):
-        tensor = torch.ones(shape, dtype=dtype, device=device)
+    # Scaled like transformer_ops.weights, and for the same reason: ones
+    # grow activations by `hidden` per layer and leave bf16's range within
+    # a few blocks. Backward makes it worse -- a NaN loss produces NaN
+    # gradients, so the optimiser step then corrupts every parameter and
+    # every later step measures a model of NaNs.
+    def parameter(rows, columns):
+        # 1/fan_in, where fan_in is the contracted dimension -- see
+        # transformer_ops.weights. A single 1/hidden leaves w2 four times
+        # too large, which is what made llm_prefill NaN at depth.
+        tensor = torch.full((rows, columns), 1.0 / rows,
+                            dtype=dtype, device=device)
         tensor.requires_grad_(True)
         return tensor
 
@@ -145,7 +154,7 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    observed = _read_back(sink)
+    observed = transformer_ops.read_back(sink)
     # Backward costs roughly twice the forward: one pass for input
     # gradients and one for weight gradients.
     forward = steps * layers * transformer_ops.block_flops(hidden, seq, batch)
@@ -158,14 +167,5 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
         "implied_tflops": (forward * 3) / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "optimiser steps / wall time",
-        "warning": transformer_ops.verify_output_is_finite(observed, "loss"),
+        **transformer_ops.output_check(observed, "loss"),
     }
-
-
-def _read_back(tensor) -> typing.Optional[float]:
-    if tensor is None:
-        return None
-    try:
-        return float(tensor.reshape(-1)[0])
-    except Exception:  # materialisation failed; leave unverified
-        return None

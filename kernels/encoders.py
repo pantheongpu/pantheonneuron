@@ -36,22 +36,33 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
 
     dim = int(problem["dim"])
     batch = int(problem["batch"])
+    seq = int(problem.get("seq", 128))
+    # A retrieval embedder is a transformer stack, not a projection. This
+    # ran two matmuls and an L2 normalise and reported 1,551,194 vectors/s
+    # on trn1.2xlarge 2026-09-08 -- about 2,000x what a 12-layer encoder
+    # over 128-token documents can reach on this part. The name promises a
+    # model; the arithmetic has to be one.
+    layers = int(problem.get("layers", 12))
     dtype = tiling.torch_dtype(str(problem["dtype"]))
 
     device = xm.xla_device()
-    inputs = torch.ones((batch, dim), dtype=dtype, device=device)
-    projection = torch.ones((dim, dim), dtype=dtype, device=device)
+    # Documents, not vectors: an embedder reads a token sequence and pools
+    # it. Starting from an already-pooled vector skips the encoder.
+    tokens = torch.ones((batch, seq, dim), dtype=dtype, device=device)
+    params = transformer_ops.weights(dim, dtype, device, heads=16)
     xm.mark_step()
 
     def embed():
-        hidden = torch.matmul(inputs, projection)
-        activated = torch.nn.functional.gelu(hidden)
-        # L2 normalisation in fp32. Every vector store expects unit vectors,
-        # and doing it in bf16 would both misreport the cost and lose enough
-        # precision that the norm is not one.
-        vectors = torch.matmul(activated, projection).float()
-        norm = torch.linalg.vector_norm(vectors, dim=-1, keepdim=True)
-        return vectors / norm.clamp_min(1e-6)
+        state = tokens
+        for _ in range(layers):
+            state = transformer_ops.block(state, params)
+        # Mean-pool over the sequence, then L2 normalise in fp32. Every
+        # vector store expects unit vectors, and doing it in bf16 would
+        # both misreport the cost and lose enough precision that the norm
+        # is not one.
+        pooled = state.mean(dim=1).float()
+        norm = torch.linalg.vector_norm(pooled, dim=-1, keepdim=True)
+        return pooled / norm.clamp_min(1e-6)
 
     warm = embed()
     xm.mark_step()
@@ -70,17 +81,19 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
     elapsed = time.perf_counter() - started
 
     passes = vectors // batch if batch else 0
-    flops = passes * 2 * (2 * batch * dim * dim)
+    flops = passes * layers * transformer_ops.block_flops(dim, seq, batch)
 
     return {
         "vectors_embedded": vectors,
+        "encoder_layers": layers,
+        "sequence_length": seq,
         "elapsed_s": elapsed,
         "embedding_vectors_per_s": vectors / elapsed if elapsed else 0.0,
         "flops_issued": flops,
         "score_method": "workload",
         "analytic_basis": "vectors embedded / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "embedding"),
+        **transformer_ops.output_check(
+            transformer_ops.read_back(sink), "embedding"),
     }
 
 
@@ -128,6 +141,9 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
     plan = patch_plan(problem)
     dtype = tiling.torch_dtype(str(problem["dtype"]))
     hidden = 1024
+    # A ViT-B is twelve blocks. Running one made this workload report
+    # eighteen times the throughput the model it names can reach.
+    layers = int(problem.get("layers", 12))
 
     device = xm.xla_device()
     # Images as flattened patches. Starting from patches rather than from a
@@ -145,7 +161,13 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
 
     def encode():
         embedded = torch.matmul(patches, patch_projection)
-        return transformer_ops.block(embedded, params)
+        # Every layer. A ViT-B is twelve of these; running one made this
+        # workload report 1,676,047 image-tiles/s on trn1.2xlarge
+        # 2026-09-08, about eighteen times what the model it names costs.
+        state = embedded
+        for _ in range(layers):
+            state = transformer_ops.block(state, params)
+        return state
 
     warm = encode()
     xm.mark_step()
@@ -170,18 +192,12 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         "images": images,
         "elapsed_s": elapsed,
         "image_tiles_per_s": tiles / elapsed if elapsed else 0.0,
+        "encoder_layers": layers,
+        "flops_issued": images * layers * transformer_ops.block_flops(
+            hidden, plan["patches"]),
         "patches_per_image": plan["patches"],
         "score_method": "workload",
         "analytic_basis": "image tiles / wall time",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "encoder output"),
+        **transformer_ops.output_check(
+            transformer_ops.read_back(sink), "encoder output"),
     }
-
-
-def _read_back(tensor) -> typing.Optional[float]:
-    if tensor is None:
-        return None
-    try:
-        return float(tensor.reshape(-1)[0])
-    except Exception:  # materialisation failed; leave unverified
-        return None

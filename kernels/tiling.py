@@ -10,7 +10,18 @@ import typing
 
 PARTITION = 128
 FREE_ELEMENTS = 2048
-DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp32": 4, "int8": 1}
+DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp32": 4, "int8": 1, "uint8": 1}
+
+# Operands the Tensor Engine treats as integers, so a workload can ask
+# "is this integer arithmetic?" without enumerating widths at every call
+# site. It matters for three separate decisions -- the accumulator type,
+# the unit (TOPS rather than TFLOPS), and the analytic basis -- and each
+# was written as `dtype == "int8"` until uint8 arrived.
+INTEGER_DTYPES = frozenset({"int8", "uint8"})
+
+
+def is_integer(dtype: str) -> bool:
+    return dtype in INTEGER_DTYPES
 
 
 def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
@@ -47,7 +58,7 @@ def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
 # expressed in elements, so a 1-byte dtype quarters the bytes moved per tile
 # and would make a GB/s figure incomparable with the bf16 runs beside it.
 TORCH_DTYPES = {"bf16": "bfloat16", "fp16": "float16", "fp32": "float32",
-                "int8": "int8"}
+                "int8": "int8", "uint8": "uint8"}
 
 
 def torch_dtype(dtype: str):

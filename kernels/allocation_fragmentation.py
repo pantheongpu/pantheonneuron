@@ -106,14 +106,22 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         events += 1
 
         if index % KEEP_EVERY == 0:
-            retained.append(block)
+            # The size travels with the block. Popping subtracts what was
+            # actually freed, and the sizes here span 4 KiB to 16 MiB, so
+            # subtracting the size of the block just allocated instead --
+            # which is what this did -- lets the tally drift from reality.
+            # The eviction loop hides most of it by running until the tally
+            # drops under budget, but the tally is what the failure message
+            # reports when an allocation fails, and at the pinned problem it
+            # was overstating by about 19 MiB against 2 GiB held.
+            retained.append((block, size))
             live_bytes += size
         # Everything else falls out of scope here, freeing a block from
         # between two retained ones.
 
         while live_bytes > LIVE_BUDGET_BYTES and retained:
-            retained.pop(0)
-            live_bytes -= size
+            _, freed = retained.pop(0)
+            live_bytes -= freed
             xm.mark_step()
 
     xm.wait_device_ops()

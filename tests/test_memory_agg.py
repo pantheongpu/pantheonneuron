@@ -124,3 +124,78 @@ def test_they_require_the_multicore_capability():
     """A single-core part cannot answer the question these ask."""
     for name in ("memory_read_agg", "memory_write_agg"):
         assert "multicore" in _workload(name).requires
+
+
+# -- an aggregate has to be concurrent to be an aggregate --------------------
+#
+# The Score is summed bytes over the longest worker's span, and that
+# arithmetic cannot tell two cores loading memory at once from two cores
+# doing it one after the other. Only the first answers the question this
+# workload asks -- whether the cores share a path to memory -- and nothing
+# in the result showed which had happened.
+
+def _timed_worker(finished_at, elapsed_s, bytes_moved=1 << 30):
+    return {"finished_at": finished_at, "elapsed_s": elapsed_s,
+            "bytes_requested": bytes_moved, "analytic_gbps": 100.0,
+            "read_verified_ratio": 1.0, "core": 0}
+
+
+def test_fully_overlapping_workers_report_the_whole_span():
+    results = [_timed_worker(100.0, 20.0), _timed_worker(100.0, 20.0)]
+    assert memory_agg.concurrent_window(results) == 20.0
+    assert memory_agg.verify_workers_overlapped(results, 20.0) is None
+
+
+def test_partly_overlapping_workers_report_the_intersection():
+    """One worker compiled longer, so its loop started later."""
+    results = [_timed_worker(100.0, 20.0),   # loop ran 80 -> 100
+               _timed_worker(110.0, 20.0)]   # loop ran 90 -> 110
+    assert memory_agg.concurrent_window(results) == 10.0
+
+
+def test_workers_that_never_overlapped_are_refused():
+    results = [_timed_worker(100.0, 20.0),   # 80 -> 100
+               _timed_worker(140.0, 20.0)]   # 120 -> 140
+    assert memory_agg.concurrent_window(results) == 0.0
+    message = memory_agg.verify_workers_overlapped(results, 20.0)
+    assert message is not None and "not an aggregate" in message
+
+
+def test_a_thin_overlap_is_flagged():
+    results = [_timed_worker(100.0, 20.0),   # 80 -> 100
+               _timed_worker(115.0, 20.0)]   # 95 -> 115, overlap 5s of 20
+    message = memory_agg.verify_workers_overlapped(results, 20.0)
+    assert message is not None and "25%" in message
+
+
+def test_a_single_worker_is_not_asked_to_overlap():
+    assert memory_agg.verify_workers_overlapped([_timed_worker(100.0, 20.0)], 20.0) is None
+
+
+def test_results_without_timestamps_report_unknown_not_zero():
+    """Absence is not evidence of sequential execution.
+
+    A result from before workers recorded timestamps says nothing about
+    whether they overlapped, and treating that as zero overlap would flag
+    every older aggregate as not an aggregate.
+    """
+    assert memory_agg.concurrent_window([{"elapsed_s": 20.0}]) is None
+    assert memory_agg.verify_workers_overlapped(
+        [{"elapsed_s": 20.0}, {"elapsed_s": 20.0}], 20.0) is None
+
+
+def test_the_summary_carries_the_window():
+    summary = memory_agg.summarise(
+        [_timed_worker(100.0, 20.0), _timed_worker(100.0, 20.0)],
+        failures=[], elapsed=25.0, core_count=2, direction="read")
+    assert summary["concurrent_window_s"] == 20.0
+    assert summary["analytic_gbps"] > 0
+
+
+def test_the_worker_records_when_it_finished():
+    import sourcecheck
+
+    code = sourcecheck.function_code(memory_agg._worker_main)
+    assert 'result [ "finished_at" ] = time . time ( )' in code
+    # Wall clock, not monotonic: these are compared across processes.
+    assert "time . monotonic" not in code

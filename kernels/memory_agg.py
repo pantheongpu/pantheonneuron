@@ -109,6 +109,16 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
                 _, stderr = process.communicate(timeout=_WORKER_TIMEOUT)
             except subprocess.TimeoutExpired:
                 process.kill()
+                # Reap after killing. kill() only sends the signal; without
+                # a second communicate() the child stays a zombie and its
+                # stdout/stderr pipes stay open, and this loop still has
+                # every other worker to wait on -- on an 8-core part that
+                # is seven more processes holding descriptors for a run
+                # that has already lost its result.
+                try:
+                    process.communicate(timeout=30)
+                except subprocess.TimeoutExpired:  # pragma: no cover - refuses SIGKILL
+                    pass
                 failures.append(f"core {core} timed out")
                 continue
             if process.returncode != 0:
@@ -129,6 +139,68 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
     return summarise(results, failures, elapsed, core_count, direction)
 
 
+def concurrent_window(results: typing.Sequence[dict]) -> typing.Optional[float]:
+    """Seconds during which every worker was inside its timed loop.
+
+    Each worker brackets its whole subprocess -- compile included -- so the
+    loop is the last ``elapsed_s`` of that window. The overlap is the
+    intersection of those loops: latest start to earliest finish.
+
+    Returns None when a worker did not report its timestamps, which is
+    unknown rather than zero -- a result from before workers recorded them
+    is not evidence that they ran sequentially, and treating it as such
+    would flag every older aggregate.
+    """
+    windows = []
+    for result in results:
+        finished = result.get("finished_at")
+        loop = result.get("elapsed_s")
+        if not isinstance(finished, (int, float)) or not isinstance(
+                loop, (int, float)):
+            return None
+        windows.append((finished - loop, finished))
+    if not windows:
+        return None
+    latest_start = max(start for start, _ in windows)
+    earliest_finish = min(finish for _, finish in windows)
+    return max(0.0, earliest_finish - latest_start)
+
+
+def verify_workers_overlapped(results: typing.Sequence[dict], span: float,
+                              floor: float = 0.5) -> typing.Optional[str]:
+    """Flag an "aggregate" whose workers were not running together.
+
+    The Score is summed bytes over the longest worker's span, and that
+    arithmetic cannot distinguish two cores loading memory simultaneously
+    from two cores doing it one after the other. Only the simultaneous case
+    answers anything -- the whole question this workload asks is whether the
+    cores *share* a path to memory, and cores that never overlap do not
+    contend for it.
+
+    The workers compile before they run and contend for host CPUs while
+    doing it, so their loops can start seconds apart without anything being
+    wrong. That is exactly why it needs measuring rather than assuming.
+    """
+    if len(results) < 2 or span <= 0:
+        return None
+    overlap = concurrent_window(results)
+    if overlap is None:
+        # The workers did not report when they ran. Unknown, not zero.
+        return None
+    if overlap <= 0:
+        return (
+            "workers reported no overlapping window, so this is not an "
+            "aggregate -- the cores may have run one after another"
+        )
+    if overlap < span * floor:
+        return (
+            f"workers overlapped for only {overlap:.1f}s of a {span:.1f}s "
+            f"span ({overlap / span:.0%}), so the summed bandwidth is not a "
+            "measurement of the cores contending"
+        )
+    return None
+
+
 def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
               elapsed: float, core_count: int, direction: str) -> dict:
     """Combine the workers' figures into the aggregate the registry declares.
@@ -143,6 +215,7 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
     total_bytes = sum(int(result.get(key, 0)) for result in results)
     spans = [float(result.get("elapsed_s", 0.0)) for result in results]
     span = max(spans) if spans else 0.0
+    overlap = concurrent_window(results)
 
     per_core = [
         {
@@ -164,7 +237,8 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
             "not an aggregate over the whole part"
         )
     else:
-        warning = verify_cores_scaled(per_core)
+        warning = (verify_workers_overlapped(results, span)
+                   or verify_cores_scaled(per_core))
 
     return {
         "cores": core_count,
@@ -172,6 +246,11 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         "bytes_moved": total_bytes,
         "elapsed_s": elapsed,
         "worker_span_s": span,
+        # The window in which every worker was inside its timed loop. An
+        # aggregate is a claim about cores loading memory *at the same
+        # time*, and summed bytes over the longest span cannot tell a
+        # concurrent run from a sequential one.
+        "concurrent_window_s": overlap,
         "analytic_gbps": total_bytes / span / 1e9 if span else 0.0,
         "per_core": per_core,
         "score_method": "workload",
@@ -225,8 +304,18 @@ def _worker_main(argv: typing.Optional[typing.Sequence[str]] = None) -> int:
 
     problem = json.loads(args.problem)
     module = memory_read if args.direction == "read" else memory_write
+
+    # Wall-clock, not monotonic: these have to be comparable across
+    # processes, and the whole question is whether the workers were moving
+    # bytes at the same time as each other.
+    started_at = time.time()
     result = module.run(problem, args.duration)
     result["core"] = args.core
+    # The kernel's own elapsed_s covers its timed loop; the window this
+    # brackets also covers the compile, so the overlap is computed from the
+    # loop's share of it rather than from the whole subprocess lifetime.
+    result["finished_at"] = time.time()
+    result["started_at"] = started_at
 
     # Only what is JSON-serialisable: the kernels return plans and warnings,
     # not tensors, but a future field that is not serialisable should fail

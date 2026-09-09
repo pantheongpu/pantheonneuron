@@ -9,6 +9,7 @@ real GEMM from one the compiler reshaped.
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import registry, tensor_virus, tiling
 from neuron_device import NeuronDevice
 
@@ -221,3 +222,207 @@ def test_int_virus_reports_tops_not_tflops():
     """The arithmetic is identical; the unit is not, and the row must say so."""
     assert _int_virus().unit == "TOPS"
     assert _workload().unit == "TFLOPS"
+
+
+# -- uint8, the dtype trn1 will actually run ---------------------------------
+#
+# int_virus pinned int8 and was unreachable: `nc_matmul does not support
+# stationary.dtype=int8`, trn1.2xlarge 2026-09-08. The supported set is
+# fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and uint8, so the registry pins
+# uint8 and everything that branched on the string "int8" now asks the dtype
+# table instead.
+
+def test_uint8_is_an_integer_dtype():
+    assert tiling.is_integer("uint8")
+    assert tiling.is_integer("int8")
+    assert not tiling.is_integer("bf16")
+    assert not tiling.is_integer("fp32")
+
+
+def test_uint8_is_one_byte_wide():
+    assert tiling.DTYPE_BYTES["uint8"] == 1
+
+
+def test_uint8_has_a_torch_dtype():
+    assert tiling.TORCH_DTYPES["uint8"] == "uint8"
+
+
+def test_uint8_accumulates_into_int32_like_int8():
+    """The accumulator follows integer-ness, not the specific width.
+
+    An all-ones GEMM of size K reaches K, which overflows any 8-bit type
+    long before the last tile, and accumulating into a float would round
+    partial sums and break the exactness verify_product_is_correct needs.
+    """
+    assert tensor_virus.accumulator_dtype("uint8", _FakeNL) == "int32"
+    assert tensor_virus.accumulator_dtype("bf16", _FakeNL) == "float32"
+
+
+def test_the_pinned_int_virus_problem_plans():
+    """It could not, while it pinned a dtype the tile table did not carry."""
+    workload = {w.name: w for w in registry.WORKLOADS}["int_virus"]
+    plan = tensor_virus.gemm_plan(workload.problem["shape"],
+                                  workload.problem["dtype"])
+    assert plan["element_bytes"] == 1
+    assert plan["m"] == plan["n"] == plan["k"] == 8192
+
+
+def test_an_integer_run_is_labelled_tops_not_tflops():
+    """The unit follows the dtype, so uint8 keeps the TOPS the registry declares."""
+    workload = {w.name: w for w in registry.WORKLOADS}["int_virus"]
+    assert workload.unit == "TOPS"
+    assert tiling.is_integer(workload.problem["dtype"])
+
+
+def test_the_accumulation_loop_is_not_unrolled():
+    """The pinned 8192^3 problem compiles only because this loop is rolled.
+
+    The `depth` loop that accumulates into `acc` carries a dependency; NKI
+    reserves `affine_range` for loops without one, and it fully unrolls.
+    The unroll is cubic in the shape -- 1,024 matmul calls at 2048^3
+    against 65,536 at 8192^3 -- which is why the pinned problem never
+    compiled and why no compute workload had ever produced the
+    neuron-monitor Score its registry entry declares.
+
+    Both kernels must obey it, so this counts accumulation loops rather
+    than trusting that a new one inherited the property.
+    """
+    source = sourcecheck.function_code(tensor_virus._build_kernel)
+
+    # Every loop that accumulates into `acc` is rolled...
+    assert source.count("for depth in nl . sequential_range (") == 2, (
+        "each kernel needs exactly one rolled accumulation loop"
+    )
+    # ...and none of them is the unrolling kind.
+    assert "for depth in nl . affine_range ( k // CONTRACTION )" not in source
+
+
+def test_the_blocked_kernel_preloads_and_reuses_the_moving_operand():
+    """The whole point of it: rhs read once per column, not per (row, col).
+
+    The load must sit outside the row loop, or nothing has changed.
+    """
+    source = sourcecheck.function_code(tensor_virus._build_kernel)
+    blocked = source[source.index("def tensor_virus_blocked"):]
+
+    assert "rhs_block = nl . ndarray" in blocked
+    assert "buffer = nl . sbuf" in blocked
+    # The preload precedes the row loop, and the matmul reads the block.
+    assert blocked.index("rhs_block [ depth ] = nl . load") < blocked.index(
+        "for row in nl . affine_range")
+    assert "nl . matmul ( lhs_tile , rhs_block [ depth ]" in blocked
+    # lhs is still streamed: holding it too would need the whole operand.
+    assert "lhs_tile = nl . load" in blocked
+
+
+@pytest.mark.parametrize("strategy", ["streaming", "blocked"])
+def test_both_tilings_are_selectable(strategy, monkeypatch):
+    monkeypatch.setenv("PANTHEON_NEURON_GEMM_TILING", strategy)
+    import importlib
+    reloaded = importlib.reload(tensor_virus)
+    assert reloaded.TILING == strategy
+    monkeypatch.delenv("PANTHEON_NEURON_GEMM_TILING", raising=False)
+    importlib.reload(tensor_virus)
+
+
+def test_an_unknown_tiling_is_refused():
+    with pytest.raises(ValueError, match="unknown tiling"):
+        tensor_virus._build_kernel("bf16", "sideways")
+
+
+def test_the_blocked_sbuf_block_fits_on_chip():
+    """8 MiB against roughly 24 MB of SBUF at the pinned shape."""
+    plan = tensor_virus.gemm_plan([8192, 8192, 8192], "bf16")
+    block_bytes = (plan["k_tiles"] * tensor_virus.CONTRACTION
+                   * tensor_virus.MOVING * 2)
+    assert block_bytes == 8 * 1024**2
+    assert block_bytes < 20 * 1024**2, "must leave room for lhs and psum"
+
+
+def test_blocking_raises_arithmetic_intensity_where_streaming_cannot():
+    """Streaming's intensity is flat in the shape; blocking's grows."""
+    def intensity(n, blocked):
+        plan = tensor_virus.gemm_plan([n, n, n], "bf16")
+        tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+        lhs = tiles * tensor_virus.CONTRACTION * tensor_virus.STATIONARY * 2
+        rhs_reads = (plan["n_tiles"] * plan["k_tiles"] if blocked else tiles)
+        rhs = rhs_reads * tensor_virus.CONTRACTION * tensor_virus.MOVING * 2
+        return (2 * n ** 3) / (lhs + rhs)
+
+    streaming = [intensity(n, False) for n in (2048, 4096, 8192)]
+    blocked = [intensity(n, True) for n in (2048, 4096, 8192)]
+
+    assert max(streaming) / min(streaming) < 1.01, "flat, which is the defect"
+    assert blocked[-1] > 4 * streaming[-1]
+    assert blocked[-1] > blocked[0], "and it improves with size"
+
+
+def test_the_unroll_is_cubic_in_the_shape():
+    """Why the pinned shape was unreachable, as arithmetic rather than prose."""
+    def bodies(n):
+        plan = tensor_virus.gemm_plan([n, n, n], "bf16")
+        return plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+
+    assert bodies(2048) == 1024
+    assert bodies(8192) == 65536
+    # 4x the shape is 64x the unrolled body count.
+    assert bodies(8192) == 64 * bodies(2048)
+
+
+def test_operand_traffic_scales_like_the_flops():
+    """Why the pinned shape is bandwidth-bound, as arithmetic.
+
+    Operand tiles are re-read for every (row, col) pair, so traffic grows
+    as n^3 exactly like the FLOPs. Arithmetic intensity is therefore
+    constant in the shape rather than growing with it, which is what puts
+    the 8192^3 figure on the HBM bandwidth ceiling instead of the engine's.
+    """
+    def traffic_and_flops(n):
+        plan = tensor_virus.gemm_plan([n, n, n], "bf16")
+        tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+        per_tile = (tiling.PARTITION * tiling.PARTITION * 2
+                    + tiling.PARTITION * tensor_virus.MOVING * 2)
+        return tiles * per_tile, 2 * n ** 3
+
+    intensity = []
+    for n in (2048, 4096, 8192):
+        traffic, flops = traffic_and_flops(n)
+        intensity.append(flops / traffic)
+
+    # Constant to within rounding: the ratio does not improve with size,
+    # which is the defect. A blocked GEMM's would grow with the tile.
+    assert max(intensity) / min(intensity) < 1.01, intensity
+
+
+def test_cutting_operand_traffic_did_not_buy_the_speedup_it_implied():
+    """The refutation, kept as arithmetic so it cannot quietly lapse.
+
+    Implied traffic at 8192^3 does match memory_read's measured bandwidth
+    to within 1%, which is why it read as a bandwidth wall. But a tiling
+    that cuts that traffic 4.7x moved throughput 1.06x, so the agreement
+    was a coincidence and operand bandwidth is not the binding constraint.
+
+    Both halves are asserted: the match that misled, and the measurement
+    that settled it.
+    """
+    plan = tensor_virus.gemm_plan([8192, 8192, 8192], "bf16")
+    tiles = plan["m_tiles"] * plan["n_tiles"] * plan["k_tiles"]
+    per_tile = (tiling.PARTITION * tiling.PARTITION * 2
+                + tiling.PARTITION * tensor_virus.MOVING * 2)
+
+    implied_gbps = (tiles * per_tile) / (41.870 / 1000) / 1e9
+    assert abs(implied_gbps - 256.2) / 256.2 < 0.01, "the coincidence"
+
+    # Measured on trn1.2xlarge 2026-09-08 by tools/compare_tiling.py.
+    streaming, blocked = 26.26, 27.93
+    traffic_cut = 10.74 / 2.28
+    speedup = blocked / streaming
+    assert traffic_cut > 4.0
+    assert speedup < 1.10, "if bandwidth bound, this would track the cut"
+
+
+def test_streaming_is_the_default_tiling():
+    """The proven path stays default: blocked's justification did not hold."""
+    import importlib
+    reloaded = importlib.reload(tensor_virus)
+    assert reloaded.TILING == "streaming"

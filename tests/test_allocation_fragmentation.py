@@ -77,3 +77,51 @@ def test_the_workload_reports_its_own_score():
 
 def test_it_is_dispatched():
     assert "allocation_fragmentation" in pantheon_neuron.IMPLEMENTED
+
+
+def test_eviction_subtracts_the_block_it_freed():
+    """The tally must follow what was actually released.
+
+    Sizes span 4 KiB to 16 MiB here, so subtracting the size of the block
+    just allocated -- rather than the one popped -- lets live_bytes drift
+    from what is held. The eviction loop hides most of it by running until
+    the tally drops under budget, but the tally is what the failure message
+    reports when an allocation fails, and a diagnosis built on it would be
+    wrong by whatever the drift is.
+    """
+    import sourcecheck
+    from kernels import allocation_fragmentation as af
+
+    code = sourcecheck.function_code(af.run)
+    assert "retained . append ( ( block , size ) )" in code
+    assert "_ , freed = retained . pop ( 0 )" in code
+    assert "live_bytes -= freed" in code
+    assert "live_bytes -= size" not in code
+
+
+def test_the_drift_the_old_accounting_produced():
+    """Replayed from the pinned sizes, so the size of the bug is recorded."""
+    from kernels import registry
+    from kernels.allocation_fragmentation import (
+        size_sequence, KEEP_EVERY, LIVE_BUDGET_BYTES)
+
+    problem = {w.name: w.problem for w in registry.WORKLOADS}[
+        "allocation_fragmentation"]
+    sizes = size_sequence(problem)
+
+    def replay(correct):
+        retained, tracked = [], 0
+        for index, size in enumerate(sizes):
+            if index % KEEP_EVERY == 0:
+                retained.append(size)
+                tracked += size
+            while tracked > LIVE_BUDGET_BYTES and retained:
+                popped = retained.pop(0)
+                tracked -= popped if correct else size
+        return sum(retained), tracked
+
+    held_old, tracked_old = replay(correct=False)
+    held_new, tracked_new = replay(correct=True)
+
+    assert tracked_new == held_new, "the fixed tally matches what is held"
+    assert abs(held_old - tracked_old) > 10 * 1024**2, "the old one drifts"

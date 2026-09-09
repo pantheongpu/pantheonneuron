@@ -24,15 +24,31 @@ import typing
 def weights(hidden: int, dtype, device, heads: int = 1):
     """Allocate one transformer block's parameters.
 
-    Ones rather than random values. Nothing here checks numerical accuracy
+    Constant rather than random. Nothing here checks numerical accuracy
     against a reference -- these workloads measure throughput -- and a
     deterministic tensor makes a run reproducible without carrying a seed
     whose meaning depends on the torch version.
+
+    **Each tensor is scaled by 1/fan_in, where fan_in is the dimension the
+    matmul contracts.** Ones would grow activations by a factor of `hidden`
+    per layer, leaving bf16's range after 11 layers of a 32-layer model.
+    Scaling by a single 1/hidden is not enough either: `w2` contracts over
+    4*hidden, so it still multiplies by four, and trn1.2xlarge measured
+    llm_prefill as NaN with exactly that scaling on 2026-09-08.
+
+    fan_in scaling makes every matmul norm-preserving on its own, which is
+    necessary and -- on its own -- still not sufficient. See ``block`` for
+    the normalisation that finishes the job.
+
+    The arithmetic is untouched: same shapes, same graph, same FLOP count.
+    Only the values differ.
     """
     import torch  # type: ignore
 
-    def tensor(*shape):
-        return torch.ones(shape, dtype=dtype, device=device)
+    def tensor(rows, columns):
+        # rows is the contracted dimension for `x @ W`.
+        return torch.full((rows, columns), 1.0 / rows,
+                          dtype=dtype, device=device)
 
     return {
         "q": tensor(hidden, hidden),
@@ -71,19 +87,53 @@ def attention(query, key, value, heads: int):
     return context.transpose(1, 2).reshape(batch, seq, hidden)
 
 
+def rms_norm(hidden_states, eps: float = 1e-6):
+    """Root-mean-square normalisation, as modern decoder stacks use.
+
+    Not decoration. Without it the residual stream grows multiplicatively
+    with depth, and attention scores are *quadratic* in that magnitude --
+    a dot product over head_dim of values that are themselves growing. On
+    trn1.2xlarge 2026-09-08 the scores left fp32's range around layer 19 of
+    32, softmax turned the inf into a NaN, and llm_prefill reported a
+    throughput number for a model that had computed nothing.
+
+    Scaling the weights delays that; it does not prevent it. Normalising
+    the branch input does, because the input to every matmul is then unit
+    scale no matter how deep the stack, and the residual stream grows
+    additively rather than multiplicatively -- about 2 per block instead of
+    a factor of 4.
+
+    It is also what a real transformer does, which is the whole premise of
+    these workloads, and it puts real work on the vector and scalar engines
+    that a pure matmul chain never exercises.
+    """
+    import torch  # type: ignore
+
+    squared = hidden_states.float().pow(2).mean(-1, keepdim=True)
+    return (hidden_states.float() * torch.rsqrt(squared + eps)).to(
+        hidden_states.dtype)
+
+
 def block(hidden_states, params):
-    """One transformer block: attention, then the MLP, with residuals."""
+    """One transformer block: attention, then the MLP, with residuals.
+
+    Pre-norm, like Llama and GPT-NeoX: the normalisation is on the branch
+    input, and the residual path stays clean. That ordering is what keeps a
+    deep stack numerically alive; see ``rms_norm``.
+    """
     import torch  # type: ignore
 
     residual = hidden_states
-    q = torch.matmul(hidden_states, params["q"])
-    k = torch.matmul(hidden_states, params["k"])
-    v = torch.matmul(hidden_states, params["v"])
+    normed = rms_norm(hidden_states)
+    q = torch.matmul(normed, params["q"])
+    k = torch.matmul(normed, params["k"])
+    v = torch.matmul(normed, params["v"])
     attended = attention(q, k, v, params["heads"])
     hidden_states = residual + torch.matmul(attended, params["o"])
 
     residual = hidden_states
-    expanded = torch.matmul(hidden_states, params["w1"])
+    normed = rms_norm(hidden_states)
+    expanded = torch.matmul(normed, params["w1"])
     # GELU rather than ReLU: it exercises the scalar engine's transcendental
     # path, which a max() against zero does not.
     activated = torch.nn.functional.gelu(expanded)
@@ -117,15 +167,67 @@ def decode_step_flops(hidden: int, context: int, batch: int = 1) -> int:
     return projections + attention_matmuls + mlp
 
 
-def verify_output_is_finite(observed: typing.Optional[float],
-                            what: str = "output") -> typing.Optional[str]:
-    """Check the model produced a number rather than a NaN or an inf.
+def read_back(tensor) -> typing.Optional[float]:
+    """Materialise one element, proving the graph executed.
 
-    These blocks run on all-ones weights with no normalisation, so values
-    grow with depth and bf16 saturates. That is acceptable -- throughput is
-    what is being measured -- but a NaN means the graph produced nothing
-    readable, which is indistinguishable from a graph that never ran, and
-    that is the failure worth catching.
+    Lives here because every workload that calls ``verify_output_is_a_number``
+    needs it first, and the two belong together: this produces the value,
+    that judges it. It was previously copied privately into four kernel
+    modules, and ``omni_virus`` called it without having a copy -- a
+    NameError that fired only after a full-duration run on real hardware,
+    turning a completed stress run into a FAIL row. Nothing caught it
+    because none of those modules had a test.
+
+    Returns None when the read fails, which the caller reports as
+    "unverified" rather than as a pass.
+    """
+    if tensor is None:
+        return None
+    try:
+        return float(tensor.reshape(-1)[0])
+    except Exception:  # materialisation failed; leave unverified
+        return None
+
+
+def output_check(observed: typing.Optional[float],
+                 what: str = "output") -> typing.Dict[str, typing.Any]:
+    """Judge an output, and say whether a Score computed beside it survives.
+
+    Both halves have to travel together. The 2026-09-08 full-coverage run
+    caught three workloads whose output was NaN -- llm_prefill, llm_decode
+    and speculative_decode -- and reported all three as PASS with a
+    published Score, because the message went into the row's Detail and
+    nothing read it. A number nobody can verify, wearing a PASS, is the
+    exact failure this suite is built to prevent, and it took writing the
+    check to notice the check was decorative.
+
+    So a kernel returns ``**output_check(...)`` rather than
+    ``"warning": verify_output_is_a_number(...)``, and the orchestrator
+    fails the row on ``score_invalid``.
+    """
+    message = verify_output_is_a_number(observed, what)
+    return {"warning": message, "score_invalid": message is not None}
+
+
+def verify_output_is_a_number(observed: typing.Optional[float],
+                              what: str = "output") -> typing.Optional[str]:
+    """Check the model produced a number: readable, and not a NaN.
+
+    **Infinity passes on purpose.** These blocks run on all-ones weights
+    with no normalisation, so values grow with depth and bf16 saturates to
+    inf long before the last layer. That is expected and it is fine --
+    throughput is what is being measured, not numerical accuracy, and an
+    inf still proves the graph ran.
+
+    A NaN does not. It is what a graph that produced nothing readable looks
+    like, which is indistinguishable from a graph that never ran, and that
+    is the failure worth catching. NaN is literally Not a Number, so the
+    name says exactly what is checked.
+
+    Named this way after an earlier ``verify_output_is_finite``, whose name
+    and summary line promised an inf check the body deliberately did not do.
+    A check whose name overstates it is the same defect this suite spends
+    its Score labelling on: the reader trusts the label, not the body.
     """
     if observed is None:
         return f"{what} could not be read back, so execution is unverified"

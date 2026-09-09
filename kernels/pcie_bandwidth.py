@@ -16,7 +16,36 @@ asymmetry, and the asymmetry is usually where the fault is -- reads back
 from the device commonly run slower than writes to it, so averaging them
 turns a one-sided regression into a smaller two-sided one.
 
-STATUS: UNTESTED ON HARDWARE. No NKI: this is torch tensor movement, so it
+**The d2h asymmetry is real, reproducible, and still unexplained** -- but
+the list of candidate explanations is now shorter by two.
+
+trn1.2xlarge measured d2h 1.0 GB/s against h2d 6.0 on 2026-09-08 and the
+guard fired. inf2.xlarge ran the same code in the same window and the
+guard did not fire at all, so it is a property of that part rather than of
+this code. Three explanations have been tested:
+
+- **Per-pass allocation.** The d2h leg called ``.cpu()``, which returns a
+  new host tensor every pass, while h2d reused one buffer. Real defect,
+  fixed, and the number did not move: 1.1 against 6.4.
+- **A cached identical copy.** If the runtime could serve a repeated
+  identical h2d copy without moving bytes, the 6.x would be inflated
+  rather than the 1.x depressed. The h2d leg now alternates between two
+  sources with different contents. Measured 2026-09-08 with the
+  alternation confirmed active: d2h 1.13 against h2d 6.52. Unchanged, so
+  this is not it either.
+- **Pageable host memory.** Untested, and not testable here:
+  ``pin_memory()`` is a CUDA-shaped API and returned unpinned buffers on
+  this stack. The row records ``host_source_pinned`` and
+  ``host_landing_pinned``, both False in every run so far, so the
+  bounce-buffer explanation remains open by default rather than by
+  choice.
+
+Until one of them lands, **the d2h figure should not be cited as a link
+property.** What is established: it reproduces on trn1 across three
+methodologies, it is absent on inf2, and it is not the harness.
+
+STATUS: verified on both parts 2026-09-08; the pinning and alternating-
+source controls are UNTESTED. No NKI: this is torch tensor movement, so it
 depends on the runtime rather than on a compiled kernel.
 """
 
@@ -56,7 +85,40 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     plan = transfer_plan(problem)
     device = xm.xla_device()
 
-    host = torch.ones(plan["elements"], dtype=torch.bfloat16)
+    # Every buffer is allocated before the clock starts, and both legs copy
+    # into an existing destination rather than producing a new one. The
+    # allocation is not the thing being measured, and on the d2h side it
+    # used to dominate: `.cpu()` returns a *new* host tensor, so each pass
+    # paid a 1 GiB allocation and its page faults while the h2d side reused
+    # one buffer.
+    #
+    # Removing that did not move the number -- trn1.2xlarge 2026-09-08
+    # measured d2h 1.1 GB/s against h2d 6.0 both before and after -- so two
+    # further differences are controlled here, and the result records which
+    # were actually in effect rather than assuming.
+    #
+    # PINNED HOST MEMORY. Pageable host pages cannot be DMA'd directly: the
+    # driver stages them through a bounce buffer, which costs an extra copy
+    # in the direction that writes host memory. That is d2h, and it is the
+    # oldest explanation for exactly this asymmetry. pin_memory() is best
+    # effort -- it is a CUDA-shaped API and may be a no-op or unavailable on
+    # this stack, so the result says which memory it really got.
+    def host_buffer(fill):
+        plain = torch.full((plan["elements"],), fill, dtype=torch.bfloat16)
+        try:
+            return plain.pin_memory(), True
+        except (RuntimeError, NotImplementedError, AssertionError):
+            return plain, False
+
+    host, pinned_source = host_buffer(1.0)
+    # ALTERNATING SOURCES. If the runtime can tell that h2d copies the same
+    # bytes every pass, it may serve the copy without moving them, which
+    # would inflate h2d rather than depress d2h -- and the two are
+    # indistinguishable from the ratio alone. Two sources with different
+    # contents, alternating, remove that explanation.
+    host_alt, _ = host_buffer(2.0)
+    landing, pinned_landing = host_buffer(0.0)
+
     resident = host.to(device)
     xm.mark_step()
     xm.wait_device_ops()
@@ -76,14 +138,27 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         leg_started = time.perf_counter()
         while time.perf_counter() < min(share, deadline):
             if direction == "h2d":
-                resident = host.to(device)
+                # SUSPECT: this reads as "copy into the existing buffer, so
+                # no per-pass allocation", and that rests on in-place
+                # semantics XLA does not have. An assignment lowers to a
+                # dynamic-update-slice that produces a *new* tensor -- see
+                # docs/xla_has_no_in_place_write.md, where kv_cache_churn
+                # measured it -- so this leg may allocate 1 GiB a pass
+                # anyway. The fix it belongs to moved d2h 1.0 -> 1.1 and
+                # h2d 6.0 -> 6.4 GB/s, which is consistent with it having
+                # changed nothing. Unresolved, and it needs a hardware run
+                # rather than a third guess.
+                resident.copy_(host if passes % 2 == 0 else host_alt)
+                # Lazy: the copy is queued, so the barrier is what makes
+                # this a transfer measurement rather than a submission one.
+                xm.mark_step()
+                xm.wait_device_ops()
             else:
-                # .cpu() is synchronous, so this leg needs no extra barrier;
-                # the h2d leg does, which is why the barrier is below rather
-                # than shared.
-                _ = resident.cpu()
-            xm.mark_step()
-            xm.wait_device_ops()
+                # Copying from an XLA tensor to a host one is synchronous --
+                # it returns with the bytes already on the host -- so no
+                # barrier is needed and adding one would charge this leg for
+                # a round trip the transfer has already completed.
+                landing.copy_(resident)
             moved += plan["bytes"]
             passes += 1
         leg_elapsed = time.perf_counter() - leg_started
@@ -105,6 +180,16 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         # a degraded link actually shows itself.
         "analytic_gbps": total_moved / elapsed / 1e9 if elapsed else 0.0,
         "per_direction": per_direction,
+        # Says how the number was produced. Three methodologies have now
+        # produced a d2h figure; a row that does not say which is not
+        # comparable with one that does.
+        "buffers": "preallocated",
+        # Whether the host pages were actually pinned, not whether pinning
+        # was requested. If these are False the bounce-buffer explanation
+        # for the d2h asymmetry is still live and untested.
+        "host_source_pinned": pinned_source,
+        "host_landing_pinned": pinned_landing,
+        "h2d_sources_alternate": True,
         "score_method": "workload",
         "analytic_basis": "bytes transferred / wall time",
         "warning": verify_directions_are_balanced(per_direction),
@@ -120,9 +205,14 @@ def verify_directions_are_balanced(
 
     Some asymmetry is normal -- the two directions do not share a code path
     and device-to-host is usually the slower one. An order-of-magnitude
-    split is not normal, and it is the signature of a link that trained down
-    or a host-side buffer that is not pinned. Reported rather than failed:
-    this is a diagnostic, and the number is still a measurement.
+    split is not normal. Reported rather than failed: this is a diagnostic,
+    and the number is still a measurement.
+
+    The message names the harness before it names the hardware, because the
+    first time this guard fired the harness was the cause: d2h allocated a
+    fresh host buffer per pass and h2d did not, and the 6x split that
+    produced was read as a link property. It was not. A guard that points
+    only at the link teaches the reader to suspect the wrong thing.
     """
     rates = {name: leg.get("gbps", 0.0) for name, leg in per_direction.items()}
     if len(rates) < 2:
@@ -135,7 +225,9 @@ def verify_directions_are_balanced(
         slow_name = min(rates, key=rates.get)
         return (
             f"{slow_name} ran at {slowest:.1f} GB/s against {fastest:.1f} the "
-            "other way -- check the negotiated link width before reading this "
-            "as a transfer rate"
+            "other way -- before reading this as a link property, check that "
+            "both legs reused a preallocated buffer (the 2026-09-08 split was "
+            "a per-pass host allocation, not the link), then the negotiated "
+            "link width"
         )
     return None

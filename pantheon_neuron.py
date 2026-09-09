@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import platform
+import statistics
 import sys
 import time
 import typing
@@ -38,10 +39,17 @@ DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "databas
 def get_system_snapshot(devices) -> dict:
     """Aggregate run context for the report.
 
-    This repository is public and reports are committed to it, so the
-    snapshot must never contain host identifiers -- no hostname, no IP, no
-    EC2 instance ID, no availability zone.  ``tests/test_report_privacy.py``
-    enforces this; if you add a field here, assume it will be published.
+    Reports are written to ``database/``, which is gitignored -- they are
+    not committed. The invariant does not rest on that: a report is the
+    artifact that gets pasted into an issue, attached to a mail, or copied
+    into a public write-up, and it is produced on a rented instance whose
+    identifiers are somebody's account. Being one paste away from public is
+    the same requirement as being public.
+
+    So the snapshot must never contain host identifiers -- no hostname, no
+    IP, no EC2 instance ID, no availability zone.
+    ``tests/test_report_privacy.py`` enforces this; if you add a field here,
+    assume it will be published.
     """
     snapshot = {
         "pantheon_neuron_version": PANTHEON_NEURON_VERSION,
@@ -95,6 +103,31 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
 
 # --- Execution --------------------------------------------------------------
 
+def reservation_cost(workloads) -> typing.Tuple[typing.List[str], typing.List[str]]:
+    """What a selection costs the profiler: (aggregate names, workloads billed).
+
+    The first list is the workloads that force the reservation off by
+    declaring ``cores: "all"``. The second is the workloads that pay for it
+    -- the ones whose registry entry names ``neuron-profile``, which are
+    exactly the ones that will fall back to the analytic figure.
+
+    Split out from ``reserve_profiler_core`` so the cost can be named in the
+    message, asserted by a test, and rendered in the workload reference
+    without re-deriving the rule in three places.
+    """
+    aggregate = [w.name for w in workloads
+                 if (w.problem or {}).get("cores") == "all"]
+    if not aggregate:
+        return [], []
+    billed = [
+        w.name for w in workloads
+        if w.name not in aggregate
+        and w.score_source is not None
+        and w.score_source.source == registry.PROFILER
+    ]
+    return aggregate, billed
+
+
 def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     """Keep one NeuronCore free so the profiler can replay a NEFF.
 
@@ -115,19 +148,32 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     number would quietly be the aggregate of all-but-one core under a name
     that says otherwise. A missing profiler Score announces itself in the
     row; a Score over the wrong core count does not.
+
+    That rule has a consequence worth stating plainly, because it applies to
+    the invocation the README puts first: ``--test all`` and ``--test
+    memory`` both select an aggregate workload, so neither can reach the
+    profiler for ``memory_read`` or ``memory_write``. The declared source is
+    available only to a selection with no ``cores: "all"`` workload in it.
+    The message below names which workloads are paying, rather than saying
+    "these Scores" and leaving the reader to work out which.
     """
     if nki_backend.mock_mode():
         return None
     if os.environ.get(cores.VISIBLE_CORES):
         return None
 
-    aggregate = [w.name for w in workloads
-                 if (w.problem or {}).get("cores") == "all"]
+    aggregate, billed = reservation_cost(workloads)
     if aggregate:
         print(
             f"[PANTHEON-NEURON] no core reserved: {aggregate[0]} measures all "
-            "cores, so these Scores use the analytic fallback"
+            "cores"
         )
+        if billed:
+            print(
+                f"[PANTHEON-NEURON]   {', '.join(billed)} will report the "
+                f"analytic fallback, not {registry.PROFILER}; run them in a "
+                "selection with no cores:all workload to reach it"
+            )
         return None
 
     total = sum(device.neuroncores for device in devices)
@@ -144,8 +190,8 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     return plan["profiler"]
 
 
-def run_workload(workload, devices, duration: int, monitor_period: float) -> dict:
-    """Execute one workload and return its result row."""
+def _measure_once(workload, devices, duration: int, monitor_period: float) -> dict:
+    """One execution of one workload, scored. See ``run_workload``."""
     skip = workload.skip_reason(devices)
     if skip is not None:
         # A skipped row still declares its Unit and Problem, so a
@@ -161,6 +207,10 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
             "Score": None,
             "Unit": workload.unit,
             "Score Method": None,
+            # Declared and empty, like Score above: a cross-platform
+            # comparison reads an explicit gap, not a missing key.
+            "Measurement": None,
+            "Repeats": None,
             "Problem": dict(workload.problem) if workload.problem else None,
             "Telemetry": {"samples": 0},
         }
@@ -181,6 +231,18 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
     run = _LAST_RUN.get(workload.name)
     if run and run.get("warning") and status == "PASS":
         detail = run["warning"]
+        if run.get("score_invalid"):
+            # The kernel says its own output could not be verified, so the
+            # throughput beside it is not a measurement of anything. The
+            # 2026-09-08 full-coverage run reported llm_prefill, llm_decode
+            # and speculative_decode as PASS with published Scores while
+            # every one of them had produced a NaN: the check fired, the
+            # message reached the row's Detail, and nothing acted on it.
+            #
+            # An unverifiable output is indistinguishable from a graph that
+            # never ran, which is the definition of a failed workload.
+            status = "FAIL"
+            score = None
 
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
@@ -201,7 +263,7 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         elif score is None and (_wants_monitor_score(workload)
                                 or _wants_execution_rate(workload)):
             counter = ("effective_flops" if _wants_monitor_score(workload)
-                       else "an execution rate")
+                       else "execution rate")
             detail = detail or (
                 f"neuron-monitor reported no {counter}, so this run has "
                 "no Score from its declared source"
@@ -221,9 +283,105 @@ def run_workload(workload, devices, duration: int, monitor_period: float) -> dic
         "Score": round(score, 4) if isinstance(score, (int, float)) else None,
         "Unit": workload.unit,
         "Score Method": _score_method(workload, score),
+        "Measurement": _provenance(workload),
+        # Filled in by run_workload when more than one repeat ran; declared
+        # here so every row has the same shape.
+        "Repeats": None,
         "Problem": dict(workload.problem) if workload.problem else None,
         "Telemetry": metrics,
     }
+
+
+def run_workload(workload, devices, duration: int, monitor_period: float,
+                 repeat: int = 1) -> dict:
+    """Execute one workload ``repeat`` times and return its result row.
+
+    **A single sample is not a measurement, and this suite spent a day
+    finding that out.** memory_read's declared profiler Score read 256.17,
+    178.7 and 119.19 GB/s on three separate runs of the same pinned problem
+    -- a 2x spread nobody would have seen, because every run reported one
+    number and moved on. The cause was real and is fixed, but the reason it
+    went unnoticed for so long is that nothing ever ran a workload twice.
+
+    So the row now carries the spread alongside the Score. ``Score`` is the
+    median of the successful repeats, which is what a reader should quote;
+    ``Repeats`` records how many ran, the range, and the coefficient of
+    variation, which is what tells them whether to trust it.
+
+    Repeats are separate executions with separate telemetry, not one
+    execution measured twice: a compile is amortised across them the way a
+    real run amortises it, and a monitor-sourced Score is read per repeat
+    from the counters that repeat produced.
+
+    A failure in any repeat fails the row. A workload that works four times
+    in five is not a workload that works.
+    """
+    rows = [_measure_once(workload, devices, duration, monitor_period)
+            for _ in range(max(1, repeat))]
+
+    row = rows[-1]
+    if len(rows) == 1:
+        return row
+
+    # A skip is a property of the hardware, not of the run: repeating it
+    # says nothing, so the first answer stands.
+    if row["Status"] == "SKIPPED":
+        return row
+
+    failed = [r for r in rows if r["Status"] == "FAIL"]
+    if failed:
+        row = dict(failed[0])
+        row["Detail"] = (
+            f"{len(failed)} of {len(rows)} repeats failed: {failed[0]['Detail']}"
+        )
+
+    scores = [r["Score"] for r in rows
+              if isinstance(r.get("Score"), (int, float))]
+    row["Repeats"] = _spread(scores, len(rows))
+    if scores and row["Status"] == "PASS":
+        row["Score"] = round(statistics.median(scores), 4)
+        unstable = _unstable(row["Repeats"])
+        if unstable:
+            row["Detail"] = "; ".join(filter(None, [row.get("Detail"), unstable]))
+    return row
+
+
+# Above this, repeats of the same pinned problem disagree enough that the
+# median is not a summary of them. Chosen to be loud rather than strict:
+# memory_read's three runs spanned 256.17 to 119.19 GB/s, a coefficient of
+# variation near 0.4, and that is the kind of thing a row has to say out
+# loud rather than average away.
+UNSTABLE_CV = 0.10
+
+
+def _spread(scores, attempted: int) -> dict:
+    """What the repeats actually did, so a Score can be judged."""
+    summary = {"attempted": attempted, "scored": len(scores)}
+    if not scores:
+        return summary
+    summary["min"] = round(min(scores), 4)
+    summary["max"] = round(max(scores), 4)
+    summary["median"] = round(statistics.median(scores), 4)
+    if len(scores) > 1:
+        mean = statistics.fmean(scores)
+        deviation = statistics.stdev(scores)
+        summary["stdev"] = round(deviation, 4)
+        # Relative, because these Scores span GB/s and tokens/s and a
+        # absolute threshold would mean something different for each.
+        summary["cv"] = round(deviation / mean, 4) if mean else None
+    return summary
+
+
+def _unstable(spread: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
+    """Say so when repeats of one problem do not agree."""
+    cv = spread.get("cv")
+    if not isinstance(cv, (int, float)) or cv <= UNSTABLE_CV:
+        return None
+    return (
+        f"repeats disagree: {spread['min']} to {spread['max']} "
+        f"(cv {cv:.2f} over {spread['scored']} runs), so the median is a "
+        "summary of unlike numbers rather than a measurement"
+    )
 
 
 # Workloads whose Score does not yet come from the source the registry
@@ -337,6 +495,75 @@ def _score_method(workload, score) -> typing.Optional[str]:
             return f"analytic ({basis}); declared source is {_declared(workload)}"
         return method
     return workload.score_source.source if workload.score_source else None
+
+
+# What a kernel measured, beyond the Score itself, that a reader needs in
+# order to judge the Score. A whitelist rather than "everything the kernel
+# returned": these rows are published, and a kernel result also carries
+# filesystem paths and plan dicts that have no business in a report.
+#
+# Added after the 2026-09-08 validation, where memory_read and memory_write
+# finally scored from neuron-profile and the report could not say how hard
+# the NEFF search had to look. `profiler_candidates_tried` is the number
+# that says whether mtime ranking is still weak, and it was invisible.
+_PROVENANCE_KEYS = (
+    # Which graph the profiler actually read, and how sure we are it was
+    # ours. A basename, never a path -- compiler workdirs carry usernames.
+    "profiler_neff",
+    "profiler_plan_coverage",
+    "profiler_candidates_tried",
+    "profiler_candidates_available",
+    # The counters the declared formula divides, so a Score can be
+    # recomputed from the report rather than trusted.
+    "hbm_read_bytes",
+    "hbm_write_bytes",
+    "profiler_total_time_s",
+    # The cross-check the profiler figure is meant to be compared against.
+    "analytic_gbps",
+    # A raw ops/s rate nobody can read, restated at a human scale.
+    "quantized_tops",
+    # kv_cache_churn: the bandwidth its update rate actually achieved,
+    # which is what says whether the rate measured memory or dispatch.
+    "cache_gbps",
+    # MoE dispatch: slots per expert, which is what the arithmetic scales
+    # with once routing is balanced.
+    "capacity",
+    # omni_virus: the shape it actually ran, which may be smaller than the
+    # Problem the row advertises.
+    "tile",
+    "ran_pinned_shape",
+    # memory_*_agg: an aggregate is a claim about cores loading memory at
+    # the same time, and summed bytes cannot tell that from cores doing it
+    # one after another.
+    "concurrent_window_s",
+    "worker_span_s",
+    # serving_mix: a request is many scheduler steps, so both rates are
+    # wanted, and implied_tflops is what a request count cannot contradict.
+    "scheduler_steps_per_s",
+    "blocks_executed",
+    "implied_tflops",
+    "read_verified_ratio",
+    "write_verified_ratio",
+    "product_verified_ratio",
+    # pcie_bandwidth: says whether the row predates the preallocated-buffer
+    # fix, which is the difference between two incomparable methodologies.
+    "buffers",
+    "per_direction",
+)
+
+
+def _provenance(workload) -> typing.Optional[dict]:
+    """The measured detail behind a Score, for the report row.
+
+    A Score that cannot be recomputed or attributed is a number the reader
+    has to take on faith, which is the thing this suite exists not to ask.
+    """
+    run = _LAST_RUN.get(workload.name)
+    if not run:
+        return None
+    found = {key: run[key] for key in _PROVENANCE_KEYS
+             if run.get(key) is not None}
+    return found or None
 
 
 def _declared(workload) -> str:
@@ -586,6 +813,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force the CPU mock backend (same as PANTHEON_NEURON_MOCK=1)",
     )
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Run each workload this many times and report the spread "
+             "(default: 1). A single sample cannot show that a Score is "
+             "irreproducible, which is how a 2x swing in memory_read went "
+             "unnoticed.",
+    )
+    parser.add_argument(
         "--list", action="store_true", help="List workloads and exit"
     )
     parser.add_argument(
@@ -637,10 +873,16 @@ def main(argv=None) -> int:
 
     for workload in workloads:
         print(f"[PANTHEON-NEURON] -> {workload.name}")
-        row = run_workload(workload, devices, args.duration, args.monitor_period)
+        row = run_workload(workload, devices, args.duration,
+                           args.monitor_period, repeat=args.repeat)
         results.append(row)
         detail = f" ({row['Detail']})" if row.get("Detail") else ""
         print(f"[PANTHEON-NEURON]    {row['Status']}{detail}")
+        spread = row.get("Repeats") or {}
+        if spread.get("scored", 0) > 1:
+            print(f"[PANTHEON-NEURON]    {spread['scored']} repeats: "
+                  f"{spread['min']} to {spread['max']}, "
+                  f"median {spread['median']}, cv {spread.get('cv')}")
 
     if not args.no_report:
         path = write_report(snapshot, results, run_id)

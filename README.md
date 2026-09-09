@@ -39,35 +39,307 @@ Still unverified:
 
 ## Kernel status
 
-Every workload in the registry now has an implementation: **26 of 26**. What
-differs is how much of each has met hardware.
+Every workload in the registry now has an implementation: **26 of 26**, and
+**24 of 26 have run on hardware**. The last full pass was 23 PASS, 0 FAIL,
+with 8 Scores from a declared hardware source (trn1.2xlarge, 2026-09-08).
 
-| Workload | Kernel | Score source |
-|---|---|---|
-| `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ✅ **verified** on trn1.2xlarge and inf2.xlarge | `neuron-profile`, analytic fallback |
-| `memory_write` | ✅ **verified** on inf2.xlarge, not at the pinned 8 GiB | `neuron-profile`, analytic fallback |
-| `tensor_virus` | ✅ **verified** on inf2.xlarge at 1024³/2048³, not at 8192³ | `neuron-monitor` |
-| `int_virus` | ⚠️ same GEMM over int8, untested | `neuron-monitor` |
-| `pulse_virus` | ⚠️ tensor_virus's GEMM, duty-cycled, untested | `neuron-monitor` |
-| `omni_virus` | ⚠️ all four engines in one dependent chain, untested | `neuron-monitor` |
-| `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
-| `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
-| `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
-| `pcie_bandwidth` | ⚠️ host transfers, untested | workload |
-| `allocation_fragmentation` | ⚠️ allocator churn, untested | workload |
-| `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
-| `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |
-| `speculative_decode` / `serving_mix` | ⚠️ untested | workload |
-| `rag_embedding` / `vision_encoder` | ⚠️ untested | workload |
-| `transformer_train_step` | ⚠️ untested; skips on Inferentia | workload |
-| `all_reduce` / `p2p_thrasher` | ⚠️ **cannot be run yet** | `nccom-test` |
+Figures are single runs unless stated. The one quantity measured repeatedly
+turned out not to be reproducible until its cause was found, so treat a lone
+number as provisional and use `--repeat`.
+
+| Workload | Status | Measured | Score source |
+|---|---|--:|---|
+| `baseline_metrics` | ✅ telemetry only, no load | — | — |
+| `memory_read` | ✅ scored from its declared source | 256.17 GB/s | `neuron-profile` |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.69 GB/s | `neuron-profile` |
+| `memory_read_agg` | ✅ 98% worker overlap confirmed | 543.71 GB/s | workload |
+| `memory_write_agg` | ✅ 98% worker overlap confirmed | 507.06 GB/s | workload |
+| `tensor_virus` | ✅ at the pinned 8192³ | 25.88 TFLOPS | `neuron-monitor` |
+| `int_virus` | ✅ at the pinned 8192³, uint8 | 27.71 TOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty | 13.85 TFLOPS | `neuron-monitor` |
+| `omni_virus` | ✅ at the pinned 8192³ | 48.13 TFLOPS | `neuron-monitor` |
+| `transformer_virus` | ✅ realistic instruction mix | 46.28 TFLOPS | `neuron-monitor` |
+| `graph_replay` | ✅ rate trimmed of compile time | 1,188.9 graph-steps/s | `neuron-monitor` |
+| `allocation_fragmentation` | ✅ | 539.3 events/s | workload |
+| `llm_prefill` | ✅ pre-normalised, no NaN | 3,808.5 prompt-tokens/s | workload |
+| `llm_decode` | ✅ | 20.62 tokens/s | workload |
+| `kv_cache_churn` | ✅ memory-bound at last | 97,167 cache-updates/s | workload |
+| `fused_attention` | ✅ | 6,036.6 attention-tiles/s | workload |
+| `quantized_gemm` | ✅ | 18.44 TOPS | workload |
+| `moe_router` | ✅ balanced dispatch | 254,743 routed-tokens/s | workload |
+| `speculative_decode` | ✅ verifies through the target model | 74.0 verified-tokens/s | workload |
+| `rag_embedding` | ✅ 12-layer encoder | 853.7 vectors/s | workload |
+| `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
+| `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
+| `pcie_bandwidth` | ⚠️ d2h asymmetry unexplained | 3.89 GB/s | workload |
+| `serving_mix` | ⚠️ completes no decode request at 20 s | 0.0312 requests/s | workload |
+| `all_reduce` / `p2p_thrasher` | ❌ **cannot be run** — quota | — | `nccom-test` |
+
+Two rows carry a caveat the Score cannot express on its own. `pcie_bandwidth`
+reproduces a 6× d2h/h2d split on trn1 that is absent on inf2 and survives
+three methodologies; **do not cite the d2h figure as a link property**.
+`serving_mix` needs 32 scheduler steps to finish one decode request and the
+scheduler sustains about one a second, so a 20-second run reports prefills
+only — the row says so, and whether to lengthen the run or shorten the
+pinned response is an open decision.
 
 `all_reduce` and `p2p_thrasher` need two or more devices. `trn1.32xlarge` is
 the smallest instance with device-to-device NeuronLink and needs 128 vCPUs
 against a granted 64, so they are written against the documented
 `nccom-test` output rather than against observed output, and their tests are
 the only thing behind them until that quota lands.
+
+### What the 2026-09-08 findings were resolved into
+
+The four open items that run recorded are closed, and all four have since
+met hardware. What follows is the reasoning at the time; where a later run
+changed the answer, it says so.
+
+**The profiler now searches for its graph instead of guessing.** The capture
+worked and captured the wrong NEFF: *profiled graph moved 4 bytes against a
+plan of 8589934592*. `find_neff` ranked candidates by mtime and returned the
+top one, and `verify_profile_covers_plan` then rejected it — so the plan
+check was a rejector standing next to a guess. It is now the selector.
+`profiler.find_neffs` returns the ranking and `profiler.select_by_plan`
+captures candidates until one accounts for the planned traffic.
+
+*Superseded twice since.* Taking the first candidate over the coverage floor
+made the Score irreproducible (256.17 / 178.7 / 119.19 GB/s), so the search
+takes the **best** match. Then a warm cache showed the real limit was the
+budget, not the ranking: a cache hit leaves the kernel's own NEFF with its
+original timestamp, so it sorts last — candidate 13 of 14 in one run, and
+outside the budget entirely in a fuller one. The search is now largely
+removed rather than widened: `NEURON_COMPILE_CACHE_URL` points the compiler
+at the run's own workdir and `find_neffs` searches it exclusively, which
+took the candidate list from 16 to 3. See "Coverage is necessary and not
+sufficient" below.
+
+**`int_virus` is repinned to uint8.** trn1's Tensor Engine rejects signed
+int8 and accepts uint8, so the workload was unreachable as declared. uint8
+rather than fp8 of the reachable options: the unit is TOPS, which means
+integer operations, and fp8 would keep the label while changing the quantity
+underneath it. An all-ones GEMM still reaches exactly K, so the correctness
+check is unchanged. What this costs is that a signed-int8 path is not
+measured here — which is why the dtype travels with the Score in `problem`.
+
+**`memory_write` is repinned to 4 GiB.** A write's destination is the whole
+plan and the runtime still holds the previous one while the next is
+allocated, so the pin costs twice its size in residency against 16 GB a core.
+4 GiB rather than 6: both fit, but the drop from 255.1 to 162.5 GB/s at 6 GiB
+is the part running out of room, and a number measured under allocation
+pressure is not the write bandwidth this workload claims. `memory_read` keeps
+8 GiB — a read allocates only a source and was verified there.
+
+**`pcie_bandwidth`: the fix was right and the diagnosis was wrong.** *Two
+further explanations have since been eliminated; see the kernel's docstring
+for the current state.* The legs genuinely were not symmetric — h2d reused one host tensor while d2h called
+`.cpu()`, which allocates a fresh 1 GiB host destination every pass — so both
+now `copy_` into a destination allocated before the clock starts, and the row
+records `buffers: preallocated`.
+
+But that was not the cause. **The rerun measured d2h at 1.1 GB/s against h2d
+6.0, essentially unchanged from the 1.0 that started this.** The allocation
+was a real defect in the harness and removing it moved nothing. See the
+2026-09-08 rerun below for what the two parts then said, which is the useful
+part.
+
+### The pinned problem compiles, and neuron-monitor finally scored
+
+`tensor_virus` and its four relatives declare `mean(effective_flops) / 1e12`
+from neuron-monitor. **That source had never once produced a Score**, and the
+reason was not the monitor: the pinned 8192³ problem had never compiled, so
+the compute workloads had only ever been run by hand at a reduced shape,
+which bypasses `monitor_score` entirely.
+
+**The cause was one word.** The kernel's innermost loop accumulates into
+`acc` — a loop-carried dependency — but was declared `nl.affine_range`, which
+NKI reserves for loops *without* one and which the compiler fully unrolls.
+The unroll is cubic in the shape:
+
+| shape | matmul calls | before | after |
+|---|--:|---|---|
+| 2048³ | 1,024 | compiled | 22.46 TFLOPS, product verified 1.0 |
+| 4096³ | 8,192 | untested | **36.56 TFLOPS**, verified |
+| 8192³ | 65,536 | **never compiled** | **26.24 TFLOPS in 77 s**, verified |
+
+`nl.sequential_range` is both the semantically correct choice for an
+accumulator and the one that rolls the loop, dividing the unrolled body count
+by `k_tiles` — 64× at the pinned shape.
+
+With the pinned problem reachable, the orchestrated run produced this:
+
+| Workload | Score | Source | Problem |
+|---|--:|---|---|
+| `tensor_virus` | 22.60 TFLOPS | **`neuron-monitor`** | 8192³ bf16 |
+| `int_virus` | 27.28 TOPS | **`neuron-monitor`** | 8192³ uint8 |
+| `pulse_virus` | 13.38 TFLOPS | **`neuron-monitor`** | 8192³ bf16, 50% duty |
+
+Three things worth reading off that table. **uint8 is faster than bf16**
+(27.28 against 22.60), which is what an 8-bit integer datapath should do and
+is the first evidence the repin measures a real path rather than just a
+compilable one. **`pulse_virus` lands at 59% of sustained** for a 50% duty
+cycle, consistent with the wall-clock/loaded-only split it reports itself.
+And the counter reads **below** the kernel's analytic figure — 22.60 against
+26.24 at the same shape — which is the right direction: the analytic number
+counts arithmetic issued and the counter counts what the engine retired.
+
+**4096³ is faster than the pinned 8192³**, by a wide margin, and the reason
+is not what it looked like.
+
+| shape | streaming | blocked | operand traffic cut | speedup |
+|---|--:|--:|--:|--:|
+| 2048³ | 23.30 | 23.38 | 4.2× | 1.00× |
+| 4096³ | **36.55** | **38.85** | 4.5× | 1.06× |
+| 8192³ | 26.26 | 27.93 | 4.7× | 1.06× |
+
+The kernel re-reads operand tiles for every (row, col) pair, so operand
+traffic scales as n³ exactly like the FLOPs and arithmetic intensity stays
+flat at ~102 FLOP/byte. At 8192³ that implied 256.4 GB/s of traffic against
+`memory_read`'s measured 256.2 GB/s on the same part — a 0.1% agreement that
+looked exactly like a bandwidth wall.
+
+**It was a coincidence.** A blocked tiling that cuts operand traffic 4.7×
+moved throughput by 1.06×. Had bandwidth been the constraint, the speedup
+would have tracked the traffic. So operand bandwidth is ruled out, and what
+actually binds this kernel is still unknown: both tilings sit at 25–41% of
+the ~95 TFLOPS one NeuronCore-v2 should reach in bf16, and 4096³ beats 8192³
+under both. The next place to look is per-tile issue overhead and the
+128×512 tile shape, not the memory system.
+
+Both tilings ship and both product-verify at exactly 1.0. `streaming` is the
+default: a 6% gain does not pay for an extra SBUF block and a deprecated NKI
+layout, and the argument that motivated `blocked` turned out to be wrong.
+Select it with `PANTHEON_NEURON_GEMM_TILING=blocked` or
+`problem["tiling"]`, and compare them with `tools/compare_tiling.py`.
+
+### What the 2026-09-08 rerun found, on both parts
+
+trn1.2xlarge (us-east-1f) and inf2.xlarge (us-east-1d), same commit, run in
+parallel. Raw logs in [`data/validation-2026-09-08/`](data/validation-2026-09-08/).
+
+**The declared profiler Score fired, for the first time in this suite's
+history: 2 of 4, on both parts.**
+
+| Workload | trn1.2xlarge | inf2.xlarge | Source |
+|---|--:|--:|---|
+| `memory_read` | 256.17 GB/s | 256.19 GB/s | **`neuron-profile`** |
+| `memory_write` | 226.50 GB/s | 226.77 GB/s | **`neuron-profile`** |
+| `allocation_fragmentation` | 544.42 | 492.93 | workload |
+| `pcie_bandwidth` | 3.56 GB/s | 2.12 GB/s | workload |
+
+`memory_read`'s 256.17 GB/s cross-checks against the 264 GB/s wall-clock
+figure measured on this part in August, which is what
+`verify_against_analytic` exists to confirm. **`memory_write` ran at the new
+4 GiB pin with no `NRT_RESOURCE` failure on either part**, which is the
+repin doing its job.
+
+**The two parts agree to four significant figures, and that is expected
+rather than suspicious.** Both are NeuronCore-v2 against the same 32 GB HBM
+config, and the profiler figure is one NEFF replay with no cache and no
+contention — a deterministic per-execution measurement, which is exactly why
+it makes a better regression signal than wall-clock timing.
+
+**`int_virus` ran for the first time**: 23.05 TOPS on trn1 and 20.71 on inf2
+at 2048³ uint8, `product verified 1.0` on both. It sits just under
+`tensor_virus` on the same shape (23.31 / 20.41 TFLOPS), which is what an
+engine treating uint8 and bf16 at the same rate looks like. The workload was
+unreachable before the repin.
+
+**The NEFF search returned the right graph and never had to search.** Both
+parts reported `plan_coverage 1.0` from `candidates_tried 1` of
+`candidates_available 1`: a fresh instance with `PANTHEON_NEURON_WORKDIR`
+set has exactly one NEFF, so the ranking had nothing to rank. What is
+confirmed is that the coverage check identifies the right graph and does not
+reject a correct one. **The multi-candidate search — the actual fix — is
+still unexercised on hardware**, because the failure it addresses needs an
+accumulated compile cache to reproduce.
+
+**The PCIe asymmetry is a trn1 property, not a harness artifact.** The same
+commit, with both legs preallocated, produced d2h 1.1 GB/s against h2d 6.0
+on trn1 and **no asymmetry warning at all on inf2**. A defect in the harness
+would have shown on both. So the split is reproducible on trn1 across two
+different methodologies and is not explained by the allocation, which was
+the hypothesis.
+
+Before it is read as a link property, one thing is worth ruling out: the h2d
+leg copies the same `host` into `resident` every pass, and if XLA elides a
+copy whose result never changes, the inflated figure would be the 6.0 rather
+than the depressed one being the 1.1. That is a testable question and it has
+not been tested.
+
+**Profiler and wall-clock diverge by more than the summary shows.** A
+direct 1 GiB `memory_read` on inf2 gave 178.7 GB/s from the profiler against
+260.1 GB/s analytic — a ratio of 0.69, inside the 50% tolerance
+`verify_against_analytic` allows, so no warning fired. The profiler times a
+single cold NEFF replay while the analytic figure averages thousands of
+steady-state passes, so some gap is expected; whether 31% is the right
+amount of gap is not something this run answers.
+
+### What the 2026-09-08 trn1.2xlarge validation found
+
+The first Trainium run of the harness, and the first time the reserved
+profiler core was exercised.
+
+**int8 does not exist on this Tensor Engine.** `int_virus` failed with
+`nc_matmul does not support stationary.dtype=int8`; the supported set is
+fp8_e4m3, fp8_e5m2, bf16, fp16, tf32, fp32 and **uint8**. The registry pinned
+int8, so the workload was unreachable on trn1 as declared. *Resolved: uint8,
+see above.*
+
+**The reserved core worked and the profiler still produced nothing.** The run
+logged `cores 0 to the workload, 1 reserved for neuron-profile`, so the
+capture ran for the first time. It then captured the wrong graph, and
+`verify_profile_covers_plan` refused it: *profiled graph moved 4 bytes
+against a plan of 8589934592*. Scores from a declared hardware source: 0 of
+4. Narrowing NEFF selection by compile timestamp is not enough to identify
+the kernel's own graph. *Resolved: the plan check is now the selector rather
+than only the rejector, see above.*
+
+**pulse_virus behaves as designed.** Its loaded-only figure (23.74 TFLOPS)
+lands on `tensor_virus`'s sustained figure (23.25 TFLOPS) while its
+wall-clock figure is 11.88, which is what a 50% duty cycle should look like
+if pulsing costs no throughput while loaded.
+
+**memory_write fails at the pinned 8 GiB on trn1 exactly as on inf2**, same
+`NRT_RESOURCE` exhaustion. Both target parts have 32 GB across two cores, so
+the pin is unreachable on either -- now confirmed rather than inferred.
+
+**pcie_bandwidth's asymmetry guard fired on its first run**: d2h 1.0 GB/s
+against h2d 6.0 GB/s. *Reproduced on trn1 after the harness was fixed, and
+absent on inf2. See the rerun below.*
+
+### What the transformer family's first tests found
+
+The five modules behind the ten AI workloads — `transformer_ops`,
+`llm_inference`, `inference_mix`, `encoders`, `transformer_compute` — were
+the only kernel modules no test imported, roughly 1,100 lines. Adding
+`tests/test_transformer_family.py` found one defect immediately:
+
+**`omni_virus` called a `_read_back` it did not have.** The helper was copied
+privately into four modules and `omni_virus` was not one of them, so its
+`run()` ended in `NameError: name '_read_back' is not defined` — *after* the
+full-duration stress loop, turning a completed run into a FAIL row with
+nothing to show for the device time. It could only ever have surfaced on
+hardware, and `omni_virus` has never run there.
+
+The helper now lives once, in `transformer_ops.read_back`. Two tests keep
+that class of defect closed: one asserts there is exactly one definition, and
+one walks every kernel module's AST for names that are neither defined,
+imported, nor builtin — with a self-test that the checker actually fails the
+`omni_virus` code, since a checker that cannot catch its own motivating bug
+proves nothing.
+
+The rest of the file covers what can be checked without a device: the FLOP
+arithmetic (including that prefill and decode still differ by orders of
+magnitude, which is the registry's stated reason for keeping them separate
+workloads), the vision encoder's patch geometry, the serving interleave, and
+that every workload's dispatch key exists in the kernel that must produce it.
+
+`verify_output_is_finite` was renamed to `verify_output_is_a_number`. Its
+name and summary line promised an inf check the body deliberately did not do
+— inf is expected here, since all-ones weights with no normalisation saturate
+bf16 — and a check whose name overstates it is the same defect this suite
+spends its Score labelling on.
 
 ### Why the AI workloads are separate workloads
 
@@ -103,9 +375,8 @@ whole plan and the runtime still holds the previous one when the next is
 allocated. Measured ceiling on this part: 4 GiB runs at 255.1 GB/s and 6 GiB
 at 162.5 GB/s, both with the destination check at exactly 1.0; 8 GiB fails
 with 8.59 GB requested against 8.099 GB resident. Both parts this suite
-targets have 32 GB across 2 cores, so the pin is unreachable on either.
-Lowering it or splitting the destination across cores is a registry
-decision and is left open.
+targets have 32 GB across 2 cores, so the pin was unreachable on either.
+*Resolved: lowered to 4 GiB, see above.*
 
 `tensor_virus` is the first kernel whose Score does not come from the kernel.
 `effective_flops` lives only in the neuron-monitor stream and does not exist
@@ -220,6 +491,157 @@ Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
 workload), `--device` (indices or `all`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
+### The first clean run: 23 of 23, and eight fixes confirmed
+
+`validate_hardware.sh` over every single-device workload, trn1.2xlarge,
+after a day of fixes. **23 PASS, 0 FAIL**, 8 of 23 Scores from a declared
+hardware source.
+
+| workload | before | after | predicted |
+|---|--:|--:|---|
+| `kv_cache_churn` | 0.85 → 8,716 → 133 | **97,167/s** | memory-bound at last |
+| `moe_router` | FAIL (SIGABRT) | **254,743/s** | — |
+| `llm_prefill` | FAIL (NaN) | **3,808/s** | — |
+| `graph_replay` | 729 / 1,175 swing | **1,189** | trimming removes dilution |
+| `speculative_decode` | 2,180 | **74.0** | ÷32 — measured ÷29.5 |
+| `rag_embedding` | 1,551,194 | **853.7** | ÷2040 — measured ÷1817 |
+| `vision_encoder` | 1,676,047 | **58,131** | ÷18 — measured ÷28.8 |
+| `serving_mix` | 138 | **0.0312** | a real request is many steps |
+
+The last four are the size of the "ran a fraction of the model" defect,
+and in each case the prediction made from arithmetic beforehand matched
+the measurement to within a factor of two. That is the one class of
+off-hardware reasoning that held up all day.
+
+`serving_mix` at 0.0312 requests/s is honest and not yet useful: a real
+request is 32 scheduler steps, so a 20-second run completes well under one.
+The workload needs a longer duration or a shorter pinned decode length
+before its Score means anything.
+
+### Coverage is necessary and not sufficient
+
+The same run regressed `memory_read` to 23.58 GB/s against an analytic
+271.7 — a ratio of 0.09, caught by the divergence guard.
+
+The captured graph cleared the coverage floor, because **two workloads
+here pin 8 GiB and byte-coverage cannot tell their graphs apart.** The
+exact-match early exit could not help: another graph also covers the plan.
+Cold-cache reproducibility was fixed; warm-cache *identification* was not.
+
+`read_verified_ratio` adjudicates. It is measured from the kernel's own
+accumulator rather than from any capture, so when it reads 1.0 the kernel
+provably touched every planned byte, the analytic figure is the
+trustworthy one, and the profile belongs to somebody else's graph. Both
+bandwidth kernels degrade to analytic and say so, rather than publishing a
+number from a capture they cannot attribute.
+
+**But the real cause was the search budget, not the adjudication.** A
+warm-cache run found the right graph as *candidate 13 of 14* — a cache hit
+leaves the kernel's own NEFF with its original timestamp, so fresh-first
+ranking puts it systematically last. With 80+ NEFFs on the machine it fell
+outside the 16-candidate budget, and raising the budget does not scale when
+each candidate costs a NEFF replay.
+
+So the search is removed rather than widened. `NEURON_COMPILE_CACHE_URL`
+points the compiler at the run's own workdir, and `find_neffs` searches that
+directory exclusively when it holds anything:
+
+| | NEFFs searched | candidate found at |
+|---|--:|--:|
+| shared cache | 16 (capped, 17 present) | 2 of 16 |
+| isolated cache | **3** | **2 of 3** |
+
+Identification becomes a confirmation instead of a discovery, and the
+adjudication stays as the net beneath it. Both halves measured on
+trn1.2xlarge, 2026-09-08; the isolated figure reproduced to 0.04% across
+two runs (215.61 and 215.70 GB/s at 2 GiB).
+
+### A KV cache cannot be updated in place on this stack
+
+The most useful thing `kv_cache_churn` has produced is not a Score. XLA is
+functional: `cache[:, a:b, :] = entry` lowers to a dynamic-update-slice,
+which produces a **new tensor**. There is no in-place write. Appending 512
+tokens to a 2 GiB cache does not move 256 MiB — it reads 2 GiB and writes
+2 GiB.
+
+It took three measurements on trn1.2xlarge to see that, and each one first
+looked like a different problem:
+
+| attempt | measured | what it looked like |
+|---|---|---|
+| 1 layer, 1 token | 115 µs for 16 KiB — 1,794× what HBM needs | dispatch overhead |
+| 32 layers, 64 tokens | 455 ms for 32 MiB — 54× more than rewriting every layer's whole slice | a slow scatter |
+| 8 static ring slots | **~7 minutes to compile each slot's graph** | — |
+
+A graph that compiles for seven minutes to write a slice is a graph handling
+the whole 2 GiB tensor. Once that is true the other two follow, and the first
+two diagnoses were both wrong.
+
+The consequence for anyone serving on Neuron is larger than this workload:
+**the cost of appending to a KV cache is proportional to the size of the
+cache, not to the number of tokens appended.** The pinned problem is now
+sized so a whole-cache copy is tractable — 8 layers, 2048 context, 2048
+hidden, a 128 MiB cache and a 256 MiB step — and `bytes_per_step` reports the
+copy rather than the slice, because counting the slice would report a
+sixteenth of what the hardware moves.
+
+**Unverified at this size.** The 2 GiB version never finished compiling.
+
+### Repeats
+
+Most Scores in this README are from a single run, and the one quantity that
+was ever measured twice turned out not to be reproducible: `memory_read`'s
+declared profiler Score read 256.17, 178.7 and 119.19 GB/s on three runs of
+the same pinned problem.
+
+The cause was the NEFF selector taking the first candidate over the coverage
+floor rather than the best match, so a partially-matching graph could win.
+With the selector fixed, three consecutive runs read **256.2692, 256.2847
+and 256.1250 GB/s** — a coefficient of variation of 0.0003 against roughly
+0.4 before — each identifying its graph at coverage exactly 1.0, on the
+second of three candidates. The search skipping a wrong first candidate is
+the fix doing its job.
+
+What is not fixed by finding that is that nothing would have caught it,
+because nothing ever ran a workload twice.
+
+```bash
+python pantheon_neuron.py --test memory_read --duration 60 --repeat 5
+```
+
+The row then carries `Repeats` beside the Score: the range, the median and
+the coefficient of variation. **`Score` becomes the median**, which is what
+to quote; the spread is what says whether to quote it at all. Above a
+coefficient of variation of 0.10 the row says so in its `Detail`, because a
+median of unlike numbers is not a measurement.
+
+A failure in any repeat fails the row. A workload that works four times in
+five is not a workload that works.
+
+### What `--test all` cannot measure
+
+The profiler needs a NeuronCore of its own to replay a NEFF, and the Neuron
+runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation — so the split
+between workload and profiler is fixed for a whole run and cannot be
+renegotiated per workload.
+
+`memory_read_agg` and `memory_write_agg` declare `cores: "all"`. Holding a
+core back from them would report the aggregate of all-but-one core under a
+name that says otherwise, so their presence in a selection turns the
+reservation off for the entire run. **`--test all` and `--test memory` both
+select them**, which means `memory_read` and `memory_write` report the
+analytic fallback rather than the `neuron-profile` Score they declare.
+
+To reach the declared source, run them in a selection with no `cores: "all"`
+workload in it:
+
+```bash
+python pantheon_neuron.py --test memory_read --duration 60
+```
+
+The run says which it did — the console names the workloads that are paying,
+and each row's `Score Method` records the method actually used.
+
 ## Running without hardware
 
 The full orchestrator, telemetry and reporting path runs on any machine via a
@@ -234,9 +656,13 @@ device, a workload with no NKI implementation raises rather than passing.
 
 ## Reports
 
-Runs write JSON to `database/`, which is gitignored. **This repository is
-public**, so reports must never contain host identifiers — no hostname, no IP,
-no EC2 instance ID, no availability zone.
+Runs write JSON to `database/`, which is gitignored — reports are not
+committed. The invariant does not rest on that. A report is the artifact that
+gets pasted into an issue, attached to a mail, or quoted in a write-up, and it
+is produced on a rented instance whose identifiers belong to somebody's
+account. One paste away from public is the same requirement as public, so
+reports must never contain host identifiers — no hostname, no IP, no EC2
+instance ID, no availability zone.
 
 `neuron-monitor` volunteers several of these in every sample, so telemetry is
 scrubbed at ingest rather than at write time. `tests/test_report_privacy.py`

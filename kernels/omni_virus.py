@@ -29,6 +29,7 @@ counter, so a missing engine reading is expected on Trainium rather than a
 fault.
 """
 
+import os
 import time
 import typing
 
@@ -53,13 +54,24 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     m, n, k = (int(value) for value in problem["shape"])
     dtype = tiling.torch_dtype(str(problem["dtype"]))
 
-    # The pinned shape is 8192^3, which as a dense matmul is the same graph
-    # tensor_virus has never compiled. Here the matmul is one link in a
-    # chain rather than the whole workload, so the tile is cut down and the
-    # chain length carries the load instead. The Score is the monitor's
-    # reading either way, so this changes what is issued, not how it is
-    # measured.
-    tile = min(m, 2048)
+    # The pinned shape, measured. This was capped at 2048 because 8192^3
+    # "has never compiled" -- true when it was written, and untrue since
+    # the accumulation loop was rolled (see tensor_virus.TILING). Measured
+    # on trn1.2xlarge 2026-09-08:
+    #
+    #     tile   TFLOPS   setup
+    #     2048    22.53       -
+    #     4096    34.83     21s
+    #     8192    48.13    120s
+    #
+    # So the cap was costing more than half the throughput as well as
+    # making the row advertise a shape it did not run. `problem` is the
+    # comparison contract, and the kernel now honours it.
+    #
+    # Two minutes of compile is the price, which is why the cap survives as
+    # an override: a bring-up on a new part wants a shape that compiles in
+    # seconds before it wants the pinned one.
+    tile = min(m, int(os.environ.get("PANTHEON_NEURON_OMNI_TILE", m)))
 
     device = xm.xla_device()
     lhs = torch.ones((tile, tile), dtype=dtype, device=device)
@@ -106,14 +118,37 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "passes": passes,
         "elapsed_s": elapsed,
         "tile": tile,
+        "pinned_shape": [m, n, k],
+        # Says whether the row's Problem describes what ran.
+        "ran_pinned_shape": tile == m == n == k,
         "flops_issued": flops,
         "analytic_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "matmul FLOPs issued / wall time, chain stages excluded",
-        "warning": transformer_ops.verify_output_is_finite(
-            _read_back(sink), "chain output"),
+        **_shape_warning(tile, m, n, k, transformer_ops.output_check(
+            transformer_ops.read_back(sink), "chain output")),
     }
+
+
+def _shape_warning(tile: int, m: int, n: int, k: int,
+                   checked: typing.Dict[str, typing.Any]
+                   ) -> typing.Dict[str, typing.Any]:
+    """Add the cut-down shape to whatever the output check already said.
+
+    A row whose Problem reads 8192^3 while the kernel ran 2048^3 is
+    advertising work it did not do, and a cross-platform comparison joining
+    on that Problem would put a GPU's 8192^3 against a Neuron 2048^3.
+    """
+    if tile == m == n == k:
+        return checked
+    note = (
+        f"ran {tile}^3, not the pinned {m}x{n}x{k} -- the row's Problem "
+        "describes a larger shape than this Score measures"
+    )
+    existing = checked.get("warning")
+    return {**checked,
+            "warning": f"{existing}; {note}" if existing else note}
 
 
 def engine_activity(metrics: typing.Mapping[str, typing.Any]) -> typing.Dict[str, float]:

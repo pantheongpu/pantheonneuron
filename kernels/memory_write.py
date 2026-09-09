@@ -35,7 +35,7 @@ import os
 import time
 import typing
 
-from . import nki_backend, profiler, registry, tiling
+from . import cores, nki_backend, profiler, registry, tiling
 
 
 PARTITION = tiling.PARTITION
@@ -96,6 +96,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
     workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
     os.makedirs(workdir, exist_ok=True)
+    # Compile into the directory the profiler searches; see kernels/cores.py.
+    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     import torch  # type: ignore
@@ -213,8 +215,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         result["warning"] = f"profiler unavailable, Score is analytic: {error}"
         return result
 
+    divergence = verify_against_analytic(result["profiler_gbps"], analytic)
     warnings = [
-        verify_against_analytic(result["profiler_gbps"], analytic),
+        divergence,
         verify_write_dominates_read(
             result.get("hbm_write_bytes"), result.get("hbm_read_bytes")
         ),
@@ -222,26 +225,59 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     found = [w for w in warnings if w]
     if found:
         result["warning"] = "; ".join(found)
+
+    # The profiler figure is the one that loses when the two disagree.
+    # Coverage says the captured graph moved about the planned bytes, but
+    # more than one workload here pins the same size, so byte-coverage
+    # cannot tell their graphs apart -- on trn1.2xlarge 2026-09-08 a warm
+    # cache had memory_read's selector publish 23.58 GB/s against an
+    # analytic 271.7.
+    #
+    # write_verified_ratio breaks the tie. It comes from the kernel's own
+    # destination check rather than from any profile, so at 1.0 it proves
+    # this kernel wrote every planned byte, the analytic figure is
+    # trustworthy, and the profile belongs to some other graph.
+    if divergence and _touched_the_whole_plan(result.get("write_verified_ratio")):
+        result["profiler_gbps"] = None
+        result["score_method"] = "analytic"
+        result["analytic_basis"] = (
+            "bytes moved / wall time; the profiled graph could not be "
+            "attributed to this kernel"
+        )
     return result
 
 
-def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
-    """Capture a profile and read the declared counters out of it.
+def _touched_the_whole_plan(ratio, tolerance: float = 0.01) -> bool:
+    """Did the kernel provably move the bytes its plan describes?
 
-    ``since`` and ``planned_bytes`` both exist to make sure the counters
-    came from this kernel: the first narrows which graph is captured, the
-    second refuses the result if it plainly did not.
+    Read from the kernel's own output, so it is independent of whatever
+    the profiler captured -- which is what makes it able to adjudicate
+    between them.
     """
-    neff = profiler.find_neff(workdir, since=since)
+    return isinstance(ratio, (int, float)) and abs(ratio - 1.0) <= tolerance
+
+
+def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
+    """Identify this kernel's graph among the compiler's NEFFs, and read it.
+
+    ``since`` ranks the candidates and ``planned_bytes`` decides which one
+    is actually ours. The plan check used to run once against a single
+    guess and reject it; it now selects. See ``profiler.select_by_plan``.
+    """
+    candidates = profiler.find_neffs(workdir, since=since)
     session = os.path.join(workdir, "memory_write.ntff")
-    counters = profiler.read_counters(neff, session)
-    profiler.verify_profile_covers_plan(counters, "write", planned_bytes)
+    found = profiler.select_by_plan(candidates, session, "write", planned_bytes)
+    counters = found["counters"]
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "write"),
         "score_method": registry.PROFILER,
         "hbm_write_bytes": counters.get("hbm_write_bytes"),
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        "profiler_neff": os.path.basename(found["neff"]),
+        "profiler_plan_coverage": found["plan_coverage"],
+        "profiler_candidates_tried": found["candidates_tried"],
+        "profiler_candidates_available": found["candidates_available"],
     }
 
 

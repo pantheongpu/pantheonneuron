@@ -70,6 +70,64 @@ def _scrub(sample: dict) -> dict:
     return clean
 
 
+def execution_rate(series: typing.Sequence[typing.Tuple[int, int]],
+                   times: typing.Sequence[float]) -> typing.Dict[str, typing.Any]:
+    """delta(completed) / period, over the span the counter actually moved.
+
+    ``series`` is (sample index, completed count) for every sample that
+    carried the counter; ``times`` is the arrival time of every sample.
+
+    Both ends are trimmed. A leading flat run is the workload compiling --
+    the counter exists and does not move -- and a trailing flat run is the
+    workload having finished while the monitor is still sampling. Including
+    either dilutes a rate with time no execution happened in, and the
+    leading one is the larger error because compiles are slow.
+
+    Returns an empty dict when there is nothing to measure: fewer than two
+    samples, or a counter that never moved at all. A rate over a counter
+    that never advanced is not a slow rate, it is no measurement.
+    """
+    if len(series) < 2:
+        return {}
+
+    first_count = series[0][1]
+    last_count = series[-1][1]
+    if last_count <= first_count:
+        return {"executions_delta": last_count - first_count}
+
+    # Last sample before the counter moved, and first sample after it
+    # stopped: the window in which work was actually being completed.
+    start = series[0][0]
+    for index, count in series:
+        if count == first_count:
+            start = index
+        else:
+            break
+
+    end = series[-1][0]
+    for index, count in reversed(series):
+        if count == last_count:
+            end = index
+        else:
+            break
+
+    summary: typing.Dict[str, typing.Any] = {
+        "executions_delta": last_count - first_count,
+        "execution_samples": len(series),
+    }
+    if len(times) > max(start, end) and end > start:
+        span = times[end] - times[start]
+        summary["execution_span_s"] = round(span, 4)
+        # How much of the observed window was not executing. A large value
+        # means the Score was mostly measuring a compile.
+        observed = times[series[-1][0]] - times[series[0][0]]
+        if observed > 0:
+            summary["execution_idle_fraction"] = round(1 - span / observed, 4)
+        if span > 0:
+            summary["executions_per_s"] = (last_count - first_count) / span
+    return summary
+
+
 class NeuronMonitor:
     """Samples neuron-monitor in a background thread for the run's duration."""
 
@@ -384,23 +442,22 @@ class NeuronMonitor:
                 "p50_mean": round(statistics.fmean(latency_p50), 6),
                 "p99_peak": round(max(latency_p99), 6) if latency_p99 else None,
             }
-        # graph_replay's declared formula is delta(completed) / period, which
-        # a maximum cannot answer: it says how many executions the run
-        # reached, not how fast it got there. The first and last samples that
-        # carried the counter bound both the count and the clock, so the rate
-        # is measured over the span actually observed rather than over the
-        # requested duration -- the monitor starts and stops around the
-        # workload, not with it.
-        if len(completed_series) >= 2:
-            first_index, first_count = completed_series[0]
-            last_index, last_count = completed_series[-1]
-            span = 0.0
-            if len(self._sample_times) > max(first_index, last_index):
-                span = self._sample_times[last_index] - self._sample_times[first_index]
-            summary["executions_delta"] = last_count - first_count
-            summary["execution_span_s"] = round(span, 4)
-            if span > 0:
-                summary["executions_per_s"] = (last_count - first_count) / span
+        # graph_replay's declared formula is delta(completed) / period,
+        # which a maximum cannot answer: it says how many executions the run
+        # reached, not how fast it got there.
+        #
+        # The span is trimmed to where the counter was actually moving, and
+        # that is not a refinement. The monitor starts before the workload
+        # and stops after it, and a workload compiles before it executes --
+        # during which the counter is present and flat. Spanning the first
+        # sample that *carried* the counter therefore puts compile time in
+        # the denominator of a rate. Two runs of graph_replay at the same
+        # pinned problem reported 729.3 and 1174.8 graph-steps/s on
+        # trn1.2xlarge 2026-09-08, a 61% swing: the ratio implies 38% of
+        # the slower run's window was spent not executing, which at
+        # DURATION=20 is about 7.6 seconds of compile.
+        rate = execution_rate(completed_series, self._sample_times)
+        summary.update(rate)
 
         summary["ecc_events"] = ecc
         summary["ecc_events_total"] = sum(ecc.values())

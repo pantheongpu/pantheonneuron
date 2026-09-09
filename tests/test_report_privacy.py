@@ -182,3 +182,52 @@ def test_committed_data_carries_no_identifiers(path):
             f"{os.path.relpath(path, REPO_ROOT)} contains a real {label}: "
             f"{match.group(0)!r} — redact it"
         )
+
+
+def test_the_measurement_field_carries_no_paths(monkeypatch):
+    """Provenance is a whitelist, and it must never widen into a path.
+
+    `profiler_neff` is a basename on purpose: the compiler's own workdirs
+    are under /tmp/no-user/... and a caller-set PANTHEON_NEURON_WORKDIR can
+    sit anywhere, including a home directory. A path in a published row
+    leaks a username.
+    """
+    for key in pantheon_neuron._PROVENANCE_KEYS:
+        assert not key.endswith("_path"), key
+        assert "workdir" not in key, key
+        assert "session" not in key, key
+
+
+def test_provenance_is_a_whitelist_not_a_dump():
+    """A kernel result also holds plan dicts and paths that must not publish."""
+    workload = next(w for w in pantheon_neuron.registry.WORKLOADS
+                    if w.name == "memory_read")
+    pantheon_neuron._LAST_RUN[workload.name] = {
+        "profiler_gbps": 256.17,
+        "profiler_neff": "model.neff",
+        "profiler_candidates_tried": 1,
+        "hbm_read_bytes": 1073741824,
+        # None of the below may reach a report row.
+        "session_path": "/home/someone/pantheon_ccwork/memory_read.ntff",
+        "workdir": "/home/someone/pantheon_ccwork",
+        "plan": {"tiles": 8192},
+    }
+    try:
+        found = pantheon_neuron._provenance(workload)
+    finally:
+        pantheon_neuron._LAST_RUN.pop(workload.name, None)
+
+    assert found["profiler_neff"] == "model.neff"
+    assert found["profiler_candidates_tried"] == 1
+    assert "session_path" not in found
+    assert "workdir" not in found
+    assert "plan" not in found
+    assert "someone" not in json.dumps(found)
+
+
+def test_provenance_is_absent_rather_than_empty():
+    """A workload that recorded nothing gets None, not a misleading {}."""
+    workload = next(w for w in pantheon_neuron.registry.WORKLOADS
+                    if w.name == "baseline_metrics")
+    pantheon_neuron._LAST_RUN.pop(workload.name, None)
+    assert pantheon_neuron._provenance(workload) is None

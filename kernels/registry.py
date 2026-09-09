@@ -119,15 +119,33 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'neuroncore_counters.*.effective_flops',
                  ),
                  formula='mean(effective_flops) / 1e12')),
+    # dtype is uint8, not int8, and the difference is measured rather than
+    # stylistic. trn1's Tensor Engine rejects signed int8 outright --
+    # `nc_matmul does not support stationary.dtype=int8`, 2026-09-08 -- and
+    # the supported operand set is fp8_e4m3, fp8_e5m2, bf16, fp16, tf32,
+    # fp32 and uint8. Pinning int8 made this workload unreachable on the
+    # only Trainium part we can run.
+    #
+    # uint8 rather than fp8, of the reachable options: the unit is TOPS,
+    # which means integer operations, and fp8 would keep the label while
+    # changing the quantity underneath it to floating-point. uint8 is the
+    # same 8-bit integer datapath the name claims, and an all-ones GEMM
+    # reaches exactly K either way, so the correctness check is unchanged.
+    #
+    # What this costs: a signed-int8 path exists on other accelerators and
+    # is not measured here. A cross-platform reader must not read this row
+    # as a signed-int8 figure, which is why the dtype travels with the
+    # Score in ``problem`` rather than living only in this comment.
     Workload("int_virus", "core",
-             "Sustained INT8 throughput on the Tensor Engine.", _COMPUTE,
+             "Sustained UINT8 throughput on the Tensor Engine.", _COMPUTE,
              unit="TOPS",
-             problem={"op": "matmul", "shape": [8192, 8192, 8192], "dtype": "int8"},
+             problem={"op": "matmul", "shape": [8192, 8192, 8192],
+                      "dtype": "uint8"},
              score_source=ScoreSource(MONITOR,
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12   # int8 ops, reported as TOPS')),
+                 formula='mean(effective_flops) / 1e12   # uint8 ops, reported as TOPS')),
     Workload("pulse_virus", "core",
              "Duty-cycled load to provoke power/clock transients.", _COMPUTE,
              unit="TFLOPS",
@@ -174,10 +192,29 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'total_time',
                  ),
                  formula='hbm_read_bytes / total_time / 1e9')),
+    # 4 GiB, not the 8 GiB memory_read uses, and the asymmetry is measured.
+    # A write's destination is the whole plan and the runtime still holds
+    # the previous one while the next is allocated, so the pin costs twice
+    # its size in residency. Both parts this suite targets have 32 GB
+    # across two cores. Measured on inf2.xlarge 2026-09-07: 4 GiB runs at
+    # 255.1 GB/s with the destination check at exactly 1.0, 6 GiB at 162.5
+    # GB/s, and 8 GiB fails outright with 8.59 GB requested against 8.099
+    # GB resident. trn1.2xlarge 2026-09-08 failed at 8 GiB identically.
+    #
+    # 4 GiB rather than 6: both fit, but the 36% drop at 6 GiB is the part
+    # running out of room, not the memory system going slower. A number
+    # measured under allocation pressure is not the write bandwidth this
+    # workload claims to report.
+    #
+    # memory_read keeps 8 GiB because a read allocates only a source and
+    # was verified there (236.9 GB/s on inf2). The two are joined against
+    # their own name on another platform, not against each other, so they
+    # do not need the same size -- but ``problem`` carries the size into
+    # the report precisely so nobody compares them as though they did.
     Workload("memory_write", "memory",
              "Streaming HBM writes on one NeuronCore.", _HBM,
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": 1},
+             problem={"bytes": 4 << 30, "dtype": "bf16", "cores": 1},
              score_source=ScoreSource(PROFILER,
                  counters=(
                      'hbm_write_bytes',
@@ -195,11 +232,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'total_time',
                  ),
                  formula='sum(hbm_read_bytes over cores) / total_time / 1e9')),
+    # 4 GiB per core, for the same residency reason as memory_write: each
+    # worker allocates its own destination on its own core, so the pin is
+    # per-core and the arithmetic is identical.
     Workload("memory_write_agg", "memory",
              "Aggregate HBM write bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
-             problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"},
+             problem={"bytes": 4 << 30, "dtype": "bf16", "cores": "all"},
              score_source=ScoreSource(PROFILER,
                  counters=(
                      'hbm_write_bytes',
@@ -262,10 +302,25 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'elapsed_s',
                  ),
                  formula='prompt_tokens / elapsed_s')),
+    # Sized so that a whole-cache copy per append is tractable, because on
+    # this stack that is what an append costs. XLA is functional, so
+    # cache[:, a:b, :] = entry produces a new tensor rather than writing in
+    # place: appending to a 2 GiB cache reads 2 GiB and writes 2 GiB, and
+    # its graph takes about seven minutes to compile. See
+    # llm_inference.cache_plan for the three measurements that established
+    # it, each of which first looked like a different problem.
+    #
+    # 8 layers x 2048 context x 2048 hidden is a 128 MiB cache, so a step
+    # moves 256 MiB -- about 1 ms of bandwidth -- and its graphs compile in
+    # something like a minute rather than an hour. Smaller than a
+    # production cache on purpose: the alternative is a workload that
+    # cannot finish, and a number that does not exist is worse than a
+    # number from a small cache that says so.
     Workload("kv_cache_churn", "inference",
              "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM,
              unit="cache-updates/s",
-             problem={"hidden": 4096, "heads": 32, "context": 4096, "dtype": "bf16"},
+             problem={"hidden": 2048, "heads": 16, "context": 2048,
+                      "layers": 8, "ring_slots": 8, "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'cache_updates',
@@ -305,7 +360,13 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("speculative_decode", "inference",
              "Draft-and-verify speculative decoding.", _COMPUTE,
              unit="verified-tokens/s",
-             problem={"draft_len": 4, "hidden": 4096, "dtype": "bf16"},
+             # layers is pinned because a verification pass runs the target
+             # model, and the kernel used to run one of its blocks -- making
+             # the expensive half of speculative decoding a thirty-second of
+             # its real cost, which is the half the technique exists to
+             # amortise. Same defect serving_mix had.
+             problem={"draft_len": 4, "hidden": 4096, "layers": 32,
+                      "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'verified_tokens',
@@ -324,10 +385,26 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  formula='routed_tokens / elapsed_s')),
 
     # -- training (Trainium only) -----------------------------------------
+    # batch 1 and 4 layers, not batch 4 and 8. The original pin needed
+    # 38.18 GB of peak HBM against the 16 GB a NeuronCore has -- 6.12 GB of
+    # I/O tensors and 30.94 GB of intermediates -- and the compiler refused
+    # it outright on trn1.2xlarge 2026-09-08 with NCC_EOOM001. Backward is
+    # what makes training different here: it keeps every forward activation
+    # alive until its gradient is consumed, so the intermediates scale with
+    # batch x layers in a way no forward-only workload pays.
+    #
+    # This is the fourth pinned problem that turned out to be unreachable
+    # on the hardware it targets, after int_virus's int8, memory_write's
+    # 8 GiB and the 8192^3 unroll. A pin is a claim about what the part can
+    # do, and it needs measuring like any other.
+    #
+    # batch 1 / layers 4 lands near 6.5 GB, which leaves room for the
+    # optimiser state rather than only just fitting. hidden and seq are
+    # unchanged, so a step still exercises the shapes a real model uses.
     Workload("transformer_train_step", "training",
              "Forward, backward and optimiser step.", _TRAINING,
              unit="train-steps/s",
-             problem={"hidden": 4096, "layers": 8, "batch": 4, "seq": 2048,
+             problem={"hidden": 4096, "layers": 4, "batch": 1, "seq": 2048,
                       "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
@@ -362,7 +439,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("rag_embedding", "ai_auxiliary",
              "Embedding generation at retrieval batch sizes.", _COMPUTE,
              unit="embedding-vectors/s",
-             problem={"dim": 1024, "batch": 256, "dtype": "bf16"},
+             # A retrieval embedder is a transformer stack. This pinned a
+             # projection: two matmuls and an L2 normalise, reporting
+             # 1,551,194 vectors/s on trn1.2xlarge 2026-09-08, roughly
+             # 2,000x what a 12-layer encoder over 128-token documents
+             # reaches on this part. batch drops to 64 so a real encoder
+             # pass stays tractable.
+             problem={"dim": 1024, "batch": 64, "seq": 128, "layers": 12,
+                      "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'vectors_embedded',
@@ -372,7 +456,10 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("vision_encoder", "ai_auxiliary",
              "Vision encoder forward pass.", _COMPUTE,
              unit="image-tiles/s",
-             problem={"resolution": 224, "patch": 14, "batch": 64, "dtype": "bf16"},
+             # A ViT-B is twelve blocks; this ran one, and reported about
+             # eighteen times the throughput the model it names can reach.
+             problem={"resolution": 224, "patch": 14, "batch": 64,
+                      "layers": 12, "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'image_tiles',
@@ -434,6 +521,56 @@ NOT_COMPARABLE_WITH_GPU = {
 
 # What pantheongpu reports for those names since v1.0.19.
 GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
+
+
+# NOT_COMPARABLE_WITH_GPU covers one failure mode: the units diverge, so the
+# join fails and the absence is visible. There is a second, worse one that
+# has no register here -- names where the unit matches, the join succeeds,
+# and the two numbers measure different quantities.
+#
+# It applies to the compute viruses. pantheongpu's tensor_virus is __hfma2
+# chains on the FP16 vector lanes with no matrix at all, counted analytically
+# from occupancy; Neuron's is a dense systolic GEMM read from a hardware
+# counter. Same name, same TFLOPS, different functional unit and different
+# provenance -- and the bias has a direction, because it puts the GPU's
+# secondary math path against Neuron's primary one.
+#
+# Encoded below as its own register rather than forced into
+# NOT_COMPARABLE_WITH_GPU, whose tests define it as "the units diverge".
+# These units do not diverge -- that is the whole problem. The evidence is
+# in docs/cross_platform_comparability.md.
+SAME_UNIT_DIFFERENT_QUANTITY = {
+    "tensor_virus": (
+        "pantheongpu runs __hfma2 chains on the FP16 vector lanes with no "
+        "matrix at all, counted analytically from occupancy; this is a dense "
+        "systolic GEMM read from a hardware counter."
+    ),
+    "int_virus": (
+        "pantheongpu runs integer FMA chains counted from occupancy; this is "
+        "a dense uint8 GEMM on the Tensor Engine."
+    ),
+    "pulse_virus": (
+        "pantheongpu duty-cycles scalar fp32 fmaf chains; this duty-cycles a "
+        "dense bf16 GEMM."
+    ),
+    "omni_virus": (
+        "pantheongpu sums analytic per-engine op counts; this drives four "
+        "engines in one dependent chain and reads effective_flops."
+    ),
+}
+
+# transformer_virus is deliberately absent. pantheongpu does use real matrix
+# instructions there (MFMA/WMMA), so the functional-unit objection does not
+# apply -- though the path sits behind an experimental flag with a
+# non-matrix fallback under the same name, and the issued-versus-retired
+# difference still stands. Listing it would overstate what is known; the
+# doc records the caveat.
+
+# Nothing consumes this to change a join. It exists so the comparison
+# tooling can render a warning where a row would otherwise join silently,
+# and so the finding cannot be lost. Fixing it properly means deciding what
+# the two suites claim about each other, which is not a decision a commit
+# should make on its own.
 
 
 SUITES = (

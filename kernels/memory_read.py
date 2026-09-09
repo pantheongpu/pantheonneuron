@@ -24,7 +24,7 @@ import os
 import time
 import typing
 
-from . import nki_backend, profiler, registry, tiling
+from . import cores, nki_backend, profiler, registry, tiling
 
 
 # Tile geometry lives in kernels/tiling.py, shared with memory_write.
@@ -92,6 +92,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # neuron-profile capture needs the NEFF that lives there.
     workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
     os.makedirs(workdir, exist_ok=True)
+    # Compile into the same directory the profiler will search, so it holds
+    # this run's graphs and nothing else. See kernels/cores.py.
+    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,
@@ -206,20 +209,54 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     divergence = verify_against_analytic(result["profiler_gbps"], analytic)
     if divergence:
         result["warning"] = divergence
+        # The profiler figure is the one that loses. Coverage says the
+        # captured graph moved about the planned bytes, but two workloads
+        # in this suite pin 8 GiB, so byte-coverage cannot tell their
+        # graphs apart -- on trn1.2xlarge 2026-09-08 a warm cache had the
+        # selector publish 23.58 GB/s against an analytic 271.7.
+        #
+        # read_verified_ratio breaks the tie. It is measured from the
+        # kernel's own accumulator, not from any profile, and at 1.0 it
+        # proves this kernel touched every planned byte. The analytic
+        # figure is then trustworthy and the profile is somebody else's
+        # graph, so the Score degrades rather than publishing a number
+        # from a capture we cannot attribute.
+        if _touched_the_whole_plan(result.get("read_verified_ratio")):
+            result["profiler_gbps"] = None
+            result["score_method"] = "analytic"
+            result["analytic_basis"] = (
+                "bytes moved / wall time; the profiled graph could not be "
+                "attributed to this kernel"
+            )
     return result
 
 
+def _touched_the_whole_plan(ratio, tolerance: float = 0.01) -> bool:
+    """Did the kernel provably move the bytes its plan describes?
+
+    Read from the kernel's own output, so it is independent of whatever
+    the profiler captured -- which is exactly what makes it able to
+    adjudicate between them.
+    """
+    return isinstance(ratio, (int, float)) and abs(ratio - 1.0) <= tolerance
+
+
 def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
-    """Capture a profile and read the declared counters out of it.
+    """Identify this kernel's graph among the compiler's NEFFs, and read it.
 
     ``since`` and ``planned_bytes`` both exist to make sure the counters
-    came from this kernel: the first narrows which graph is captured, the
-    second refuses the result if it plainly did not.
+    came from this kernel: the first ranks the candidates, the second
+    decides which one is actually ours.
+
+    The plan check used to run once, against a single guess, and reject it
+    -- which is how every scored run in this suite's history ended up on
+    the analytic fallback. It now selects: each candidate is captured until
+    one accounts for the planned traffic. See ``profiler.select_by_plan``.
     """
-    neff = profiler.find_neff(workdir, since=since)
+    candidates = profiler.find_neffs(workdir, since=since)
     session = os.path.join(workdir, "memory_read.ntff")
-    counters = profiler.read_counters(neff, session)
-    profiler.verify_profile_covers_plan(counters, "read", planned_bytes)
+    found = profiler.select_by_plan(candidates, session, "read", planned_bytes)
+    counters = found["counters"]
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "read"),
         # Matches registry.PROFILER exactly, so "declared source" and
@@ -227,6 +264,12 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         "score_method": registry.PROFILER,
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        # What the search had to do to find it. A run that needed the
+        # fourth candidate is telling us mtime ranking is worth revisiting.
+        "profiler_neff": os.path.basename(found["neff"]),
+        "profiler_plan_coverage": found["plan_coverage"],
+        "profiler_candidates_tried": found["candidates_tried"],
+        "profiler_candidates_available": found["candidates_available"],
     }
 
 

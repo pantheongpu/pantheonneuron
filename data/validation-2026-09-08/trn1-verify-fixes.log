@@ -1,0 +1,273 @@
+
+========== part ==========
+instance-type: trn1.2xlarge
+instance-id: <scrubbed>
++--------+--------+----------+--------+--------------+----------+------+
+| NEURON | NEURON |  NEURON  | NEURON |     PCI      |   CPU    | NUMA |
+| DEVICE | CORES  | CORE IDS | MEMORY |     BDF      | AFFINITY | NODE |
++--------+--------+----------+--------+--------------+----------+------+
+| 0      | 2      | 0-1      | 32 GB  | 0000:00:1e.0 | 0-7      | -1   |
++--------+--------+----------+--------+--------------+----------+------+
+NDv2
+Trainium1
+neuronxcc 2.23.6484.0+3b612583 | torch 2.8.0+cu128
+
+========== orchestrated: memory_read (pinned problem) ==========
+2026-09-08 18:29:09.000583:  1642  [INFO]: Compilation Successfully Completed for model.MODULE_7092057769312097889+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:29:30.000960:  1642  [INFO]: Compilation Successfully Completed for model.MODULE_3281419714134748632+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_182403.json
+
+========== orchestrated: memory_write (pinned problem) ==========
+2026-09-08 18:30:57.000930:  3130  [INFO]: Compilation Successfully Completed for model.MODULE_3955677478664133699+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:30:59.000066:  3130  [INFO]: Compilation Successfully Completed for model.MODULE_153420479743731229+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183026.json
+
+========== orchestrated: pcie_bandwidth (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.4 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-09-08 split was a per-pass host allocation, not the link), then the negotiated link width)
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183135.json
+
+========== orchestrated: allocation_fragmentation (pinned problem) ==========
+2026-09-08 18:32:29.000791:  3638  [INFO]: Compilation Successfully Completed for model.MODULE_1515791813894254897+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:32:30.000979:  3638  [INFO]: Compilation Successfully Completed for model.MODULE_9332355670543101497+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183211.json
+
+========== orchestrated: tensor_virus (pinned problem) ==========
+2026-09-08 18:34:13.000425:  4212  [INFO]: Compilation Successfully Completed for model.MODULE_9400800940813514016+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:34:14.000566:  4212  [INFO]: Compilation Successfully Completed for model.MODULE_1447239244895699192+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183239.json
+
+========== orchestrated: int_virus (pinned problem) ==========
+2026-09-08 18:35:49.000485:  4572  [INFO]: Compilation Successfully Completed for model.MODULE_11892316595599065726+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:35:50.000624:  4572  [INFO]: Compilation Successfully Completed for model.MODULE_13790663919741022316+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183419.json
+
+========== orchestrated: pulse_virus (pinned problem) ==========
+Neuron NKI - Kernel call: tensor_virus_kernel(lhs_t = Tensor(shape: (8192, 8192), dtype: bfloat16), rhs = Tensor(shape: (8192, 8192), dtype: bfloat16))
+2026-09-08 18:36:03.000019:  4875  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_4575650840237719531+e30acd3a/model.neff
+2026-09-08 18:36:23.000191:  4875  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_9400800940813514016+e30acd3a/model.neff
+2026-09-08 18:36:23.000201:  4875  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_1447239244895699192+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183555.json
+
+========== orchestrated: transformer_virus (pinned problem) ==========
+2026-09-08 18:37:09.000618:  5045  [INFO]: Compilation Successfully Completed for model.MODULE_7083888443463142733+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:37:31.000117:  5045  [INFO]: Compilation Successfully Completed for model.MODULE_14727602382196641527+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183628.json
+
+========== orchestrated: omni_virus (pinned problem) ==========
+2026-09-08 18:37:47.000423:  5319  [INFO]: Compilation Successfully Completed for model.MODULE_7098222022655765781+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:38:08.000581:  5319  [INFO]: Compilation Successfully Completed for model.MODULE_17808974669084874505+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183736.json
+
+========== orchestrated: graph_replay (pinned problem) ==========
+2026-09-08 18:38:22.000134:  5531  [INFO]: Compilation Successfully Completed for model.MODULE_6853952270853402570+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:38:26.000728:  5531  [INFO]: Compilation Successfully Completed for model.MODULE_17225262999969746197+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183813.json
+
+========== orchestrated: llm_prefill (pinned problem) ==========
+...
+Compiler status PASS
+2026-09-08 18:39:23.000643:  5762  [INFO]: Compilation Successfully Completed for model.MODULE_11799064300522996038+e30acd3a.hlo_module.pb
+2026-09-08 18:39:46.000255:  5762  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_14727602382196641527+e30acd3a/model.neff
+[PANTHEON-NEURON]    FAIL (prefill output is NaN, so this run computed nothing meaningful)
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183831.json
+[VALIDATE] llm_prefill exited 1
+
+========== orchestrated: llm_decode (pinned problem) ==========
+2026-09-08 18:42:07.000299:  5983  [INFO]: Compilation Successfully Completed for model.MODULE_12447462825966941282+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:42:29.000049:  5983  [INFO]: Compilation Successfully Completed for model.MODULE_9803261718099139573+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_183951.json
+
+========== orchestrated: kv_cache_churn (pinned problem) ==========
+2026-09-08 18:42:43.000599:  6366  [INFO]: Compilation Successfully Completed for model.MODULE_17683885032581134198+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:43:04.000734:  6366  [INFO]: Compilation Successfully Completed for model.MODULE_13010352718008439221+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184234.json
+
+========== orchestrated: fused_attention (pinned problem) ==========
+.
+Compiler status PASS
+2026-09-08 18:43:28.000094:  6580  [INFO]: Compilation Successfully Completed for model.MODULE_5165735320452511640+e30acd3a.hlo_module.pb
+2026-09-08 18:43:48.000244:  6580  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_14727602382196641527+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184309.json
+
+========== orchestrated: quantized_gemm (pinned problem) ==========
+2026-09-08 18:44:03.000606:  6825  [INFO]: Compilation Successfully Completed for model.MODULE_6014206837142319809+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:44:24.000779:  6825  [INFO]: Compilation Successfully Completed for model.MODULE_938953601693790584+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184353.json
+
+========== orchestrated: moe_router (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> moe_router
+2026-09-08 18:44:37.000437:  7091  [INFO]: Compilation Successfully Completed for model.MODULE_4503040668689004653+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    FAIL (AttributeError: 'list' object has no attribute 'indices')
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184429.json
+[VALIDATE] moe_router exited 1
+
+========== orchestrated: speculative_decode (pinned problem) ==========
+2026-09-08 18:44:53.000464:  7240  [INFO]: Compilation Successfully Completed for model.MODULE_13623150261577651412+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:45:14.000624:  7240  [INFO]: Compilation Successfully Completed for model.MODULE_4595570322578984853+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184442.json
+
+========== orchestrated: serving_mix (pinned problem) ==========
+2026-09-08 18:45:43.000022:  7516  [INFO]: Compilation Successfully Completed for model.MODULE_13505248456761444872+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:45:52.000278:  7516  [INFO]: Compilation Successfully Completed for model.MODULE_15863921314700077673+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184519.json
+
+========== orchestrated: rag_embedding (pinned problem) ==========
+2026-09-08 18:46:05.000670:  7761  [INFO]: Compilation Successfully Completed for model.MODULE_471336909024406015+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:46:26.000816:  7761  [INFO]: Compilation Successfully Completed for model.MODULE_9558247884243234964+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184557.json
+
+========== orchestrated: vision_encoder (pinned problem) ==========
+2026-09-08 18:46:53.000298:  8029  [INFO]: Compilation Successfully Completed for model.MODULE_12203573437220824935+e30acd3a.hlo_module.pb
+.
+Compiler status PASS
+2026-09-08 18:47:14.000509:  8029  [INFO]: Compilation Successfully Completed for model.MODULE_4278466687835782297+e30acd3a.hlo_module.pb
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184632.json
+
+========== orchestrated: transformer_train_step (pinned problem) ==========
+2026-09-08 18:51:15.000027:  8303  [INFO]: Compilation Successfully Completed for model.MODULE_2332295644278424524+e30acd3a.hlo_module.pb
+~/pn/kernels/transformer_ops.py:157: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:835.)
+  return float(tensor.reshape(-1)[0])
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_184719.json
+
+========== orchestrated: memory_read_agg (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_185120.json
+
+========== orchestrated: memory_write_agg (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] no core reserved: memory_write_agg measures all cores
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_185212.json
+
+========== NEFF search against a warm compile cache ==========
+NEFFs now on this machine:
+65
+2026-09-08 18:53:08.000674:  10083  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_7092057769312097889+e30acd3a/model.neff
+2026-09-08 18:53:28.000836:  10083  [INFO]: Using a cached neff at /var/tmp/neuron-compile-cache/neuronxcc-2.23.6484.0+3b612583/MODULE_3281419714134748632+e30acd3a/model.neff
+[PANTHEON-NEURON]    PASS (profiler 119.2 GB/s and analytic 271.7 GB/s differ by more than 50% (ratio 0.44))
+[PANTHEON-NEURON] report: ~/pn/database/pantheon_neuron_report_20260908_185302.json
+
+========== reduced shape: the GEMM family (2048^3) ==========
+tensor_virus: OK
+  analytic          23.51 TFLOPS
+  passes            27370
+  product verified  1.0
+  warning           None
+int_virus: OK
+  analytic          22.81 TOPS
+  passes            26559
+  product verified  1.0
+  warning           None
+pulse_virus: OK
+  analytic          11.57 TFLOPS
+  loaded-only       23.13 TFLOPS
+  pulses            10
+  passes            13470
+  product verified  1.0
+  warning           None
+
+========== NEFF selection: how many candidates the search needed ==========
+  memory_read    via neuron-profile
+    candidate 2 of 3, coverage 1.0, graph model.neff
+  memory_write   via neuron-profile
+    candidate 3 of 7, coverage 1.0, graph model.neff
+  memory_read    via neuron-profile
+    candidate 2 of 16, coverage 3.837677009869367, graph model.neff
+    profiler 119.2 GB/s and analytic 271.7 GB/s differ by more than 50% (ratio 0.44)
+  (a run that needed a late candidate means mtime ranking is weak;
+   raise PANTHEON_NEURON_NEFF_CANDIDATES if a search reports exhaustion)
+
+========== summary: which Score sources fired ==========
+  allocation_fragmentation   PASS           559.8702 allocation-events/s via workload
+  fused_attention            PASS          6043.8532 attention-tiles/s via workload
+  graph_replay               PASS          1174.8145 graph-steps/s  via neuron-monitor
+  int_virus                  PASS            25.5083 TOPS           via neuron-monitor
+  kv_cache_churn             PASS          8716.0946 cache-updates/s via workload
+  llm_decode                 PASS            20.6842 tokens/s       via workload
+  llm_prefill                FAIL                  - prompt-tokens/s via None
+    prefill output is NaN, so this run computed nothing meaningful
+  memory_read                PASS           119.1923 GB/s           via neuron-profile
+    profiler 119.2 GB/s and analytic 271.7 GB/s differ by more than 50% (ratio 0.44)
+  memory_read_agg            PASS           543.6894 GB/s           via workload
+  memory_write               PASS           226.4974 GB/s           via neuron-profile
+  memory_write_agg           PASS           507.2203 GB/s           via workload
+  moe_router                 FAIL                  - routed-tokens/s via None
+    AttributeError: 'list' object has no attribute 'indices'
+  omni_virus                 PASS            32.7454 TFLOPS         via neuron-monitor
+  pcie_bandwidth             PASS             3.7334 GB/s           via workload
+    d2h ran at 1.1 GB/s against 6.4 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-0
+  pulse_virus                PASS            12.9219 TFLOPS         via neuron-monitor
+  quantized_gemm             PASS     18442342834453.8 quantized-ops/s via workload
+  rag_embedding              PASS       1551194.7888 embedding-vectors/s via workload
+  serving_mix                PASS           138.5807 requests/s     via workload
+  speculative_decode         PASS          2180.1597 verified-tokens/s via workload
+  tensor_virus               PASS            23.6724 TFLOPS         via neuron-monitor
+  transformer_train_step     PASS             3.6726 train-steps/s  via workload
+  transformer_virus          PASS            50.3871 TFLOPS         via neuron-monitor
+  vision_encoder             PASS       1676047.7887 image-tiles/s  via workload
+
+  Workloads run: 23  PASS 21  FAIL 2  SKIP 0
+  Scores from a declared hardware source: 8 of 23
+
+  Failures:
+    llm_prefill                prefill output is NaN, so this run computed nothing meaningful
+    moe_router                 AttributeError: 'list' object has no attribute 'indices'
+
+========== done ==========
+EXIT=0
