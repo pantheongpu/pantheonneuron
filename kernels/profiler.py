@@ -167,26 +167,40 @@ def find_neffs(workdir: str, since: typing.Optional[float] = None,
     was not first. That is why callers should hand the list to
     ``select_by_plan`` rather than taking the head of it.
     """
-    candidates = []
-    seen = set()
-    for root in (workdir, *DEFAULT_WORKDIRS):
-        if not root or not os.path.isdir(root):
-            continue
-        for base, _, names in os.walk(root):
-            for name in names:
-                if not name.endswith(".neff"):
-                    continue
-                path = os.path.join(base, name)
-                # The caller's workdir can sit inside a default one, so the
-                # same file is reachable by two roots.
-                real = os.path.realpath(path)
-                if real in seen:
-                    continue
-                try:
-                    candidates.append((os.path.getmtime(path), path))
-                except OSError:
-                    continue
-                seen.add(real)
+    def scan(roots):
+        found = []
+        seen = set()
+        for root in roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for base, _, names in os.walk(root):
+                for name in names:
+                    if not name.endswith(".neff"):
+                        continue
+                    path = os.path.join(base, name)
+                    # The caller's workdir can sit inside a default one, so
+                    # the same file is reachable by two roots.
+                    real = os.path.realpath(path)
+                    if real in seen:
+                        continue
+                    try:
+                        found.append((os.path.getmtime(path), path))
+                    except OSError:
+                        continue
+                    seen.add(real)
+        return found
+
+    # The caller's own directory *exclusively*, when it holds anything.
+    # The docstring has always said "first, then the defaults"; the code
+    # searched both at once, which is how a warm shared cache buried the
+    # kernel's own graph. Setting NEURON_COMPILE_CACHE_URL to this same
+    # directory makes it hold only this run's graphs -- measured on
+    # trn1.2xlarge 2026-09-08: 3 NEFFs there against 14 in the shared
+    # cache -- so searching it alone turns identification from a search
+    # into a confirmation.
+    candidates = scan([workdir])
+    if not candidates:
+        candidates = scan(DEFAULT_WORKDIRS)
 
     if not candidates:
         raise ProfilerUnavailable(

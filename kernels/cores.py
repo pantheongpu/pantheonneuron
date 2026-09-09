@@ -37,6 +37,20 @@ VISIBLE_CORES = "NEURON_RT_VISIBLE_CORES"
 # var rather than an argument so profiler.py needs no device discovery.
 RESERVED_CORE = "PANTHEON_NEURON_PROFILE_CORE"
 
+# Where the Neuron compiler keeps its cache. Pointing it at the run's own
+# workdir is what makes a captured profile attributable: the shared cache
+# at /var/tmp/neuron-compile-cache accumulates every graph ever compiled on
+# the machine, and on a warm one the kernel's own NEFF ranks last by mtime
+# because a cache hit leaves its timestamp alone. Measured on trn1.2xlarge
+# 2026-09-08: the right graph was candidate 13 of 14, and in a fuller run
+# it fell outside the search budget entirely and a wrong graph was
+# published at 23.58 GB/s against an analytic 271.7.
+#
+# With this set, the run's directory holds only the run's graphs -- 3
+# against the shared cache's 14 in the same measurement -- and
+# profiler.find_neffs searches it exclusively.
+COMPILE_CACHE = "NEURON_COMPILE_CACHE_URL"
+
 
 def split(total_cores: int) -> typing.Optional[typing.Dict[str, str]]:
     """Divide ``total_cores`` between the workload and the profiler.

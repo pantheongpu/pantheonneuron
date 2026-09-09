@@ -35,7 +35,7 @@ import os
 import time
 import typing
 
-from . import nki_backend, profiler, registry, tiling
+from . import cores, nki_backend, profiler, registry, tiling
 
 
 PARTITION = tiling.PARTITION
@@ -96,6 +96,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
     workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
     os.makedirs(workdir, exist_ok=True)
+    # Compile into the directory the profiler searches; see kernels/cores.py.
+    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     import torch  # type: ignore

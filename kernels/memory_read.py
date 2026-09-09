@@ -24,7 +24,7 @@ import os
 import time
 import typing
 
-from . import nki_backend, profiler, registry, tiling
+from . import cores, nki_backend, profiler, registry, tiling
 
 
 # Tile geometry lives in kernels/tiling.py, shared with memory_write.
@@ -92,6 +92,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # neuron-profile capture needs the NEFF that lives there.
     workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
     os.makedirs(workdir, exist_ok=True)
+    # Compile into the same directory the profiler will search, so it holds
+    # this run's graphs and nothing else. See kernels/cores.py.
+    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,

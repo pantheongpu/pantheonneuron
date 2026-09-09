@@ -452,3 +452,69 @@ def test_the_divergence_that_triggered_this_would_now_degrade():
     message = memory_read.verify_against_analytic(23.58, 271.7)
     assert message is not None
     assert "0.09" in message
+
+
+# -- searching the caller's directory exclusively ----------------------------
+#
+# The docstring always said "the caller's workdir first, then the compiler's
+# defaults". The code searched both at once, so a warm shared cache buried
+# the kernel's own graph: candidate 13 of 14 in one measurement, and outside
+# the budget entirely in a fuller run, which published a wrong graph at
+# 23.58 GB/s against an analytic 271.7.
+
+def test_the_callers_directory_is_searched_exclusively(tmp_path, monkeypatch):
+    """When the workdir holds graphs, the shared cache is not consulted."""
+    shared = tmp_path / "shared"
+    mine = tmp_path / "mine"
+    for index in range(5):
+        _neff(str(shared / f"s{index}" / "model.neff"), 9000 + index)
+    ours = _neff(str(mine / "model.neff"), 1000)   # older than all of them
+    monkeypatch.setattr(profiler, "DEFAULT_WORKDIRS", (str(shared),))
+
+    found = profiler.find_neffs(str(mine))
+    assert found == [ours], "an isolated workdir makes this a confirmation"
+
+
+def test_the_defaults_are_still_the_fallback(tmp_path, monkeypatch):
+    """An empty workdir must not mean no candidates at all.
+
+    An @nki.jit kernel ignores compiler_workdir and writes to the
+    compiler's own tree, which is why the fallback exists.
+    """
+    shared = tmp_path / "shared"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    theirs = _neff(str(shared / "model.neff"), 5000)
+    monkeypatch.setattr(profiler, "DEFAULT_WORKDIRS", (str(shared),))
+
+    assert profiler.find_neffs(str(empty)) == [theirs]
+
+
+def test_a_missing_workdir_still_falls_back(tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    theirs = _neff(str(shared / "model.neff"), 5000)
+    monkeypatch.setattr(profiler, "DEFAULT_WORKDIRS", (str(shared),))
+
+    assert profiler.find_neffs(str(tmp_path / "does-not-exist")) == [theirs]
+
+
+def test_the_bandwidth_kernels_point_the_compiler_at_that_directory():
+    """Isolation only works if the graphs actually land there."""
+    import sourcecheck
+    from kernels import cores, memory_read, memory_write
+
+    assert cores.COMPILE_CACHE == "NEURON_COMPILE_CACHE_URL"
+    for module in (memory_read, memory_write):
+        code = sourcecheck.function_code(module.run)
+        assert "os . environ . setdefault ( cores . COMPILE_CACHE , workdir )" in code
+
+
+def test_an_explicit_compile_cache_is_not_overridden(monkeypatch):
+    """setdefault, not assignment: someone who pinned it is answering a
+    question we should not overrule."""
+    import sourcecheck
+    from kernels import memory_read
+
+    code = sourcecheck.function_code(memory_read.run)
+    assert "setdefault" in code
+    assert "os . environ [ cores . COMPILE_CACHE ] =" not in code
