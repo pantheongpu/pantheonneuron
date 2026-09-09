@@ -505,8 +505,29 @@ Cold-cache reproducibility was fixed; warm-cache *identification* was not.
 accumulator rather than from any capture, so when it reads 1.0 the kernel
 provably touched every planned byte, the analytic figure is the
 trustworthy one, and the profile belongs to somebody else's graph. Both
-bandwidth kernels now degrade to analytic and say so, rather than
-publishing a number from a capture they cannot attribute.
+bandwidth kernels degrade to analytic and say so, rather than publishing a
+number from a capture they cannot attribute.
+
+**But the real cause was the search budget, not the adjudication.** A
+warm-cache run found the right graph as *candidate 13 of 14* — a cache hit
+leaves the kernel's own NEFF with its original timestamp, so fresh-first
+ranking puts it systematically last. With 80+ NEFFs on the machine it fell
+outside the 16-candidate budget, and raising the budget does not scale when
+each candidate costs a NEFF replay.
+
+So the search is removed rather than widened. `NEURON_COMPILE_CACHE_URL`
+points the compiler at the run's own workdir, and `find_neffs` searches that
+directory exclusively when it holds anything:
+
+| | NEFFs searched | candidate found at |
+|---|--:|--:|
+| shared cache | 16 (capped, 17 present) | 2 of 16 |
+| isolated cache | **3** | **2 of 3** |
+
+Identification becomes a confirmation instead of a discovery, and the
+adjudication stays as the net beneath it. Both halves measured on
+trn1.2xlarge, 2026-09-08; the isolated figure reproduced to 0.04% across
+two runs (215.61 and 215.70 GB/s at 2 GiB).
 
 ### A KV cache cannot be updated in place on this stack
 
