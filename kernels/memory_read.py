@@ -206,7 +206,36 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     divergence = verify_against_analytic(result["profiler_gbps"], analytic)
     if divergence:
         result["warning"] = divergence
+        # The profiler figure is the one that loses. Coverage says the
+        # captured graph moved about the planned bytes, but two workloads
+        # in this suite pin 8 GiB, so byte-coverage cannot tell their
+        # graphs apart -- on trn1.2xlarge 2026-09-08 a warm cache had the
+        # selector publish 23.58 GB/s against an analytic 271.7.
+        #
+        # read_verified_ratio breaks the tie. It is measured from the
+        # kernel's own accumulator, not from any profile, and at 1.0 it
+        # proves this kernel touched every planned byte. The analytic
+        # figure is then trustworthy and the profile is somebody else's
+        # graph, so the Score degrades rather than publishing a number
+        # from a capture we cannot attribute.
+        if _touched_the_whole_plan(result.get("read_verified_ratio")):
+            result["profiler_gbps"] = None
+            result["score_method"] = "analytic"
+            result["analytic_basis"] = (
+                "bytes moved / wall time; the profiled graph could not be "
+                "attributed to this kernel"
+            )
     return result
+
+
+def _touched_the_whole_plan(ratio, tolerance: float = 0.01) -> bool:
+    """Did the kernel provably move the bytes its plan describes?
+
+    Read from the kernel's own output, so it is independent of whatever
+    the profiler captured -- which is exactly what makes it able to
+    adjudicate between them.
+    """
+    return isinstance(ratio, (int, float)) and abs(ratio - 1.0) <= tolerance
 
 
 def _profile(workdir: str, since: float, planned_bytes: int) -> dict:

@@ -213,8 +213,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         result["warning"] = f"profiler unavailable, Score is analytic: {error}"
         return result
 
+    divergence = verify_against_analytic(result["profiler_gbps"], analytic)
     warnings = [
-        verify_against_analytic(result["profiler_gbps"], analytic),
+        divergence,
         verify_write_dominates_read(
             result.get("hbm_write_bytes"), result.get("hbm_read_bytes")
         ),
@@ -222,7 +223,36 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     found = [w for w in warnings if w]
     if found:
         result["warning"] = "; ".join(found)
+
+    # The profiler figure is the one that loses when the two disagree.
+    # Coverage says the captured graph moved about the planned bytes, but
+    # more than one workload here pins the same size, so byte-coverage
+    # cannot tell their graphs apart -- on trn1.2xlarge 2026-09-08 a warm
+    # cache had memory_read's selector publish 23.58 GB/s against an
+    # analytic 271.7.
+    #
+    # write_verified_ratio breaks the tie. It comes from the kernel's own
+    # destination check rather than from any profile, so at 1.0 it proves
+    # this kernel wrote every planned byte, the analytic figure is
+    # trustworthy, and the profile belongs to some other graph.
+    if divergence and _touched_the_whole_plan(result.get("write_verified_ratio")):
+        result["profiler_gbps"] = None
+        result["score_method"] = "analytic"
+        result["analytic_basis"] = (
+            "bytes moved / wall time; the profiled graph could not be "
+            "attributed to this kernel"
+        )
     return result
+
+
+def _touched_the_whole_plan(ratio, tolerance: float = 0.01) -> bool:
+    """Did the kernel provably move the bytes its plan describes?
+
+    Read from the kernel's own output, so it is independent of whatever
+    the profiler captured -- which is what makes it able to adjudicate
+    between them.
+    """
+    return isinstance(ratio, (int, float)) and abs(ratio - 1.0) <= tolerance
 
 
 def _profile(workdir: str, since: float, planned_bytes: int) -> dict:

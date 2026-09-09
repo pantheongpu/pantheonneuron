@@ -464,6 +464,50 @@ Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
 workload), `--device` (indices or `all`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
+### The first clean run: 23 of 23, and eight fixes confirmed
+
+`validate_hardware.sh` over every single-device workload, trn1.2xlarge,
+after a day of fixes. **23 PASS, 0 FAIL**, 8 of 23 Scores from a declared
+hardware source.
+
+| workload | before | after | predicted |
+|---|--:|--:|---|
+| `kv_cache_churn` | 0.85 → 8,716 → 133 | **97,167/s** | memory-bound at last |
+| `moe_router` | FAIL (SIGABRT) | **254,743/s** | — |
+| `llm_prefill` | FAIL (NaN) | **3,808/s** | — |
+| `graph_replay` | 729 / 1,175 swing | **1,189** | trimming removes dilution |
+| `speculative_decode` | 2,180 | **74.0** | ÷32 — measured ÷29.5 |
+| `rag_embedding` | 1,551,194 | **853.7** | ÷2040 — measured ÷1817 |
+| `vision_encoder` | 1,676,047 | **58,131** | ÷18 — measured ÷28.8 |
+| `serving_mix` | 138 | **0.0312** | a real request is many steps |
+
+The last four are the size of the "ran a fraction of the model" defect,
+and in each case the prediction made from arithmetic beforehand matched
+the measurement to within a factor of two. That is the one class of
+off-hardware reasoning that held up all day.
+
+`serving_mix` at 0.0312 requests/s is honest and not yet useful: a real
+request is 32 scheduler steps, so a 20-second run completes well under one.
+The workload needs a longer duration or a shorter pinned decode length
+before its Score means anything.
+
+### Coverage is necessary and not sufficient
+
+The same run regressed `memory_read` to 23.58 GB/s against an analytic
+271.7 — a ratio of 0.09, caught by the divergence guard.
+
+The captured graph cleared the coverage floor, because **two workloads
+here pin 8 GiB and byte-coverage cannot tell their graphs apart.** The
+exact-match early exit could not help: another graph also covers the plan.
+Cold-cache reproducibility was fixed; warm-cache *identification* was not.
+
+`read_verified_ratio` adjudicates. It is measured from the kernel's own
+accumulator rather than from any capture, so when it reads 1.0 the kernel
+provably touched every planned byte, the analytic figure is the
+trustworthy one, and the profile belongs to somebody else's graph. Both
+bandwidth kernels now degrade to analytic and say so, rather than
+publishing a number from a capture they cannot attribute.
+
 ### A KV cache cannot be updated in place on this stack
 
 The most useful thing `kv_cache_churn` has produced is not a Score. XLA is

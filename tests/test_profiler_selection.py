@@ -411,3 +411,44 @@ def test_everything_below_the_floor_still_raises(monkeypatch):
     with pytest.raises(profiler.ProfilerUnavailable, match="none of 2 candidate"):
         profiler.select_by_plan(
             ["/tmp/a.neff", "/tmp/b.neff"], "/tmp/s.ntff", "read", planned)
+
+
+# -- coverage is necessary and not sufficient --------------------------------
+#
+# trn1.2xlarge 2026-09-08, warm cache: the selector published 23.58 GB/s for
+# memory_read against an analytic 271.7. The captured graph cleared the
+# coverage floor -- it moved about the planned bytes -- because two
+# workloads in this suite pin 8 GiB and byte-coverage cannot tell their
+# graphs apart. The exact-match early exit could not help: another graph
+# also covers the plan.
+
+def test_a_diverging_profile_is_refused_when_the_kernel_read_everything():
+    """read_verified_ratio adjudicates, because it comes from the kernel.
+
+    It is measured from the accumulator rather than from any capture, so
+    when it says the plan was fully read, the analytic figure is the
+    trustworthy one and the profile belongs to another graph.
+    """
+    from kernels import memory_read
+
+    assert memory_read._touched_the_whole_plan(1.0)
+    assert memory_read._touched_the_whole_plan(0.995)
+    assert not memory_read._touched_the_whole_plan(0.5)
+    assert not memory_read._touched_the_whole_plan(None)
+
+
+def test_both_bandwidth_kernels_adjudicate_the_same_way():
+    from kernels import memory_read, memory_write
+
+    for module in (memory_read, memory_write):
+        assert module._touched_the_whole_plan(1.0)
+        assert not module._touched_the_whole_plan(0.0)
+
+
+def test_the_divergence_that_triggered_this_would_now_degrade():
+    """23.58 against 271.7 is a ratio of 0.09, far outside tolerance."""
+    from kernels import memory_read
+
+    message = memory_read.verify_against_analytic(23.58, 271.7)
+    assert message is not None
+    assert "0.09" in message
