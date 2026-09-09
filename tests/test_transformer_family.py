@@ -887,13 +887,27 @@ def test_the_shape_note_does_not_displace_an_output_failure():
     assert both["score_invalid"] is True
 
 
-def test_the_cut_down_justification_is_recorded_as_stale():
-    """It was cut down because 8192^3 never compiled. It does now."""
-    import inspect
+def test_omni_virus_runs_the_pinned_shape_by_default():
+    """The cap was a workaround for a limitation that no longer exists.
 
-    source = inspect.getsource(omni_virus.run)
-    assert "stale" in source
-    assert "tensor_virus.TILING" in source
+    Measured on trn1.2xlarge 2026-09-08: 22.53 TFLOPS at 2048, 34.83 at
+    4096, 48.13 at the pinned 8192 -- so the cap cost more than half the
+    throughput as well as making the row advertise a shape it did not run.
+    """
+    import sourcecheck
+
+    code = sourcecheck.function_code(omni_virus.run)
+    assert 'PANTHEON_NEURON_OMNI_TILE" , m' in code, "the default is the pin"
+    assert '"PANTHEON_NEURON_OMNI_TILE" , 2048' not in code
+
+
+def test_the_cap_survives_as_an_override():
+    """A bring-up on a new part wants a shape that compiles in seconds."""
+    import sourcecheck
+
+    code = sourcecheck.function_code(omni_virus.run)
+    assert "os . environ . get" in code
+    assert "min ( m ," in code
 
 
 def test_a_run_that_finishes_no_decode_request_says_so():

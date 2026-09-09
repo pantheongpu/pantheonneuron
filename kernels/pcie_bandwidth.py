@@ -16,30 +16,33 @@ asymmetry, and the asymmetry is usually where the fault is -- reads back
 from the device commonly run slower than writes to it, so averaging them
 turns a one-sided regression into a smaller two-sided one.
 
-**The d2h asymmetry is real, reproducible, and not yet explained.**
+**The d2h asymmetry is real, reproducible, and still unexplained** -- but
+the list of candidate explanations is now shorter by two.
+
 trn1.2xlarge measured d2h 1.0 GB/s against h2d 6.0 on 2026-09-08 and the
-guard fired. The obvious suspect was the harness: h2d reused one host
-tensor while d2h called ``.cpu()``, which allocates a fresh host
-destination on every pass. That was a real defect and it was fixed --
-both legs now ``copy_`` into a destination allocated before the clock
-starts -- and the number did not move. The rerun measured 1.1 against 6.0.
+guard fired. inf2.xlarge ran the same code in the same window and the
+guard did not fire at all, so it is a property of that part rather than of
+this code. Three explanations have been tested:
 
-Better evidence that it is not the harness: **inf2.xlarge ran the same
-code in the same window and the guard did not fire at all.** A defect here
-would show on both parts.
-
-Two further explanations are controlled for in ``run`` below, each
-recorded in the result rather than assumed: pageable host memory, which
-costs a bounce-buffer copy in the direction that writes the host and is
-the oldest explanation for exactly this shape of asymmetry; and a runtime
-that can serve a repeated identical h2d copy without moving bytes, which
-would mean the 6.0 is inflated rather than the 1.1 depressed. The ratio
-alone cannot distinguish those two, which is why both are controlled
-rather than argued about.
+- **Per-pass allocation.** The d2h leg called ``.cpu()``, which returns a
+  new host tensor every pass, while h2d reused one buffer. Real defect,
+  fixed, and the number did not move: 1.1 against 6.4.
+- **A cached identical copy.** If the runtime could serve a repeated
+  identical h2d copy without moving bytes, the 6.x would be inflated
+  rather than the 1.x depressed. The h2d leg now alternates between two
+  sources with different contents. Measured 2026-09-08 with the
+  alternation confirmed active: d2h 1.13 against h2d 6.52. Unchanged, so
+  this is not it either.
+- **Pageable host memory.** Untested, and not testable here:
+  ``pin_memory()`` is a CUDA-shaped API and returned unpinned buffers on
+  this stack. The row records ``host_source_pinned`` and
+  ``host_landing_pinned``, both False in every run so far, so the
+  bounce-buffer explanation remains open by default rather than by
+  choice.
 
 Until one of them lands, **the d2h figure should not be cited as a link
-property.** What is established is that it reproduces on trn1 across two
-methodologies and is absent on inf2.
+property.** What is established: it reproduces on trn1 across three
+methodologies, it is absent on inf2, and it is not the harness.
 
 STATUS: verified on both parts 2026-09-08; the pinning and alternating-
 source controls are UNTESTED. No NKI: this is torch tensor movement, so it

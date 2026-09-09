@@ -50,11 +50,11 @@ differs is how much of each has met hardware.
 | `tensor_virus` | ✅ **verified at the pinned 8192³**; scored from `neuron-monitor` | `neuron-monitor` |
 | `int_virus` | ✅ **verified at the pinned 8192³** at uint8; scored from `neuron-monitor` | `neuron-monitor` |
 | `pulse_virus` | ✅ **verified at the pinned 8192³**; scored from `neuron-monitor` | `neuron-monitor` |
-| `omni_virus` | ⚠️ all four engines in one dependent chain, untested; a NameError that would have failed its first hardware run is now fixed | `neuron-monitor` |
+| `omni_virus` | ✅ **verified at the pinned 8192³** — 48.13 TFLOPS, more than double the shape it used to cut down to | `neuron-monitor` |
 | `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
 | `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
 | `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
-| `pcie_bandwidth` | ⚠️ **verified**; d2h asymmetry reproduces on trn1, absent on inf2, unexplained | workload |
+| `pcie_bandwidth` | ⚠️ **verified**; d2h asymmetry reproduces on trn1 across three methodologies, absent on inf2, unexplained | workload |
 | `allocation_fragmentation` | ✅ **verified on trn1.2xlarge** | workload |
 | `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
 | `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |

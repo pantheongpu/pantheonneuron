@@ -54,25 +54,24 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     m, n, k = (int(value) for value in problem["shape"])
     dtype = tiling.torch_dtype(str(problem["dtype"]))
 
-    # The tile is cut down from the pinned shape, and the row has to say
-    # so. `problem` is the comparison contract -- a Score is only comparable
-    # if both platforms ran the same problem -- so a kernel that quietly
-    # runs 2048^3 against a pinned 8192^3 makes the row advertise work it
-    # did not do. That is the same defect serving_mix's
-    # requested_decode_length was.
+    # The pinned shape, measured. This was capped at 2048 because 8192^3
+    # "has never compiled" -- true when it was written, and untrue since
+    # the accumulation loop was rolled (see tensor_virus.TILING). Measured
+    # on trn1.2xlarge 2026-09-08:
     #
-    # The original justification is also now stale: it was cut down because
-    # 8192^3 "has never compiled", and since the accumulation loop was
-    # rolled (see tensor_virus.TILING) it does. Whether this chain compiles
-    # at full width is still untested -- its cumsum over an 8192^2 fp32
-    # intermediate is 256 MiB per link, which tensor_virus never allocates.
+    #     tile   TFLOPS   setup
+    #     2048    22.53       -
+    #     4096    34.83     21s
+    #     8192    48.13    120s
     #
-    # The cap is unconditional, so passing a larger shape does not test it.
-    # An attempt on trn1.2xlarge 2026-09-08 did exactly that and learned
-    # nothing: it reported tile 2048 for a requested 8192. Answering the
-    # question means lifting the cap deliberately, which is a change with a
-    # compile-time risk attached rather than an experiment to run casually.
-    tile = min(m, int(os.environ.get("PANTHEON_NEURON_OMNI_TILE", 2048)))
+    # So the cap was costing more than half the throughput as well as
+    # making the row advertise a shape it did not run. `problem` is the
+    # comparison contract, and the kernel now honours it.
+    #
+    # Two minutes of compile is the price, which is why the cap survives as
+    # an override: a bring-up on a new part wants a shape that compiles in
+    # seconds before it wants the pinned one.
+    tile = min(m, int(os.environ.get("PANTHEON_NEURON_OMNI_TILE", m)))
 
     device = xm.xla_device()
     lhs = torch.ones((tile, tile), dtype=dtype, device=device)

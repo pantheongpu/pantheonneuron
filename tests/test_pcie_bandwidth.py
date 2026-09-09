@@ -232,3 +232,24 @@ def test_the_in_place_assumption_is_flagged_not_asserted():
     assert "xla_has_no_in_place_write" in source
     # The old, confident phrasing must not come back.
     assert "would allocate a new device\n                # buffer per pass" not in source
+
+
+def test_pinning_is_reported_false_when_it_did_not_happen():
+    """pin_memory() returned unpinned buffers on this stack, three runs
+    running. The flag has to say that, because the bounce-buffer
+    explanation for the d2h asymmetry stands or falls on it."""
+    import inspect
+
+    source = inspect.getsource(pcie_bandwidth.run)
+    # Achieved, not requested: the except clause returns False rather than
+    # letting the caller assume pinning worked.
+    assert "return plain, False" in source
+    assert '"host_source_pinned": pinned_source' in source
+
+
+def test_the_docstring_records_which_explanations_are_eliminated():
+    """Two down, one untestable. A reader should not re-test the first two."""
+    doc = pcie_bandwidth.__doc__
+    assert "Per-pass allocation" in doc and "not move" in doc
+    assert "cached identical copy" in doc and "not it either" in doc
+    assert "Pageable host memory" in doc and "not testable here" in doc
