@@ -859,3 +859,38 @@ def test_the_encoder_flop_counts_follow_the_pinned_depth():
     encoder = layers * transformer_ops.block_flops(dim, seq, batch)
     projection = 2 * (2 * batch * dim * dim)      # what it used to run
     assert encoder > 1000 * projection
+
+
+# -- omni_virus advertised a shape it did not run ----------------------------
+
+def test_omni_virus_declares_when_it_cut_the_shape_down():
+    """`problem` is the comparison contract; a row must not overstate it.
+
+    The kernel runs min(m, 2048) while the registry pins 8192^3, so a
+    cross-platform comparison joining on Problem would put a GPU's 8192^3
+    against a Neuron 2048^3. Same defect as serving_mix's
+    requested_decode_length: a field naming work that did not happen.
+    """
+    cut = omni_virus._shape_warning(2048, 8192, 8192, 8192, {"warning": None})
+    assert "ran 2048^3" in cut["warning"]
+    assert "8192x8192x8192" in cut["warning"]
+
+    full = omni_virus._shape_warning(8192, 8192, 8192, 8192, {"warning": None})
+    assert full["warning"] is None
+
+
+def test_the_shape_note_does_not_displace_an_output_failure():
+    """A NaN still has to reach the row, and still has to fail it."""
+    checked = {"warning": "chain output is NaN", "score_invalid": True}
+    both = omni_virus._shape_warning(2048, 8192, 8192, 8192, checked)
+    assert "NaN" in both["warning"] and "ran 2048^3" in both["warning"]
+    assert both["score_invalid"] is True
+
+
+def test_the_cut_down_justification_is_recorded_as_stale():
+    """It was cut down because 8192^3 never compiled. It does now."""
+    import inspect
+
+    source = inspect.getsource(omni_virus.run)
+    assert "stale" in source
+    assert "tensor_virus.TILING" in source

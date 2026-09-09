@@ -528,6 +528,10 @@ _PROVENANCE_KEYS = (
     # MoE dispatch: slots per expert, which is what the arithmetic scales
     # with once routing is balanced.
     "capacity",
+    # omni_virus: the shape it actually ran, which may be smaller than the
+    # Problem the row advertises.
+    "tile",
+    "ran_pinned_shape",
     # memory_*_agg: an aggregate is a claim about cores loading memory at
     # the same time, and summed bytes cannot tell that from cores doing it
     # one after another.
