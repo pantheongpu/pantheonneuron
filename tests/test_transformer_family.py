@@ -929,7 +929,7 @@ def test_a_run_that_finishes_no_decode_request_says_so():
 
 def test_the_mix_note_does_not_displace_an_output_failure():
     checked = {"warning": "serving output is NaN", "score_invalid": True}
-    both = inference_mix._mix_warning(6, 26, 0, checked)
+    both = inference_mix._mix_warning(10, 5, 6, 26, 0, checked)
     assert "NaN" in both["warning"] and "prefills only" in both["warning"]
     assert both["score_invalid"] is True
 
@@ -944,3 +944,44 @@ def test_how_long_the_pinned_mix_needs_to_mean_anything():
     measured_steps_per_s = 1.0
     seconds_for_one_request = steps_per_request / measured_steps_per_s
     assert seconds_for_one_request > 20, "a 20s run cannot finish one"
+
+
+def test_a_run_too_short_to_sample_the_mix_says_so():
+    """The hole the narrower guard left.
+
+    trn1.2xlarge 2026-09-09: a 20-second run completed ONE scheduler step,
+    reported 0.031 requests/s from that single prefill, and carried no
+    caveat -- because verify_requests_completed only fires once a decode
+    step has run, and none had.
+    """
+    assert inference_mix.verify_mix_was_observed(1, 5) is not None
+    assert "never completed one cycle" in inference_mix.verify_mix_was_observed(1, 5)
+    assert inference_mix.verify_mix_was_observed(5, 5) is None
+    assert inference_mix.verify_mix_was_observed(100, 5) is None
+    # A ratio of zero means no interleave to sample.
+    assert inference_mix.verify_mix_was_observed(1, 0) is None
+
+
+def test_both_mix_caveats_can_fire_together():
+    both = inference_mix._mix_warning(1, 5, 1, 0, 0, {"warning": None})
+    assert "never completed one cycle" in both["warning"]
+
+    tokens_no_request = inference_mix._mix_warning(
+        10, 5, 2, 8, 0, {"warning": None})
+    assert "prefills only" in tokens_no_request["warning"]
+
+    healthy = inference_mix._mix_warning(100, 5, 20, 80, 2, {"warning": None})
+    assert healthy["warning"] is None
+
+
+def test_serving_mix_warms_both_graph_shapes():
+    """A prefill and a decode step are different graphs.
+
+    Warming only decode left the prefill to compile inside the timed
+    region -- the defect memory_read documents, where a mismatched warm-up
+    measured seven minutes of compilation as bandwidth. Measured here: one
+    scheduler step in twenty seconds, that step taking about 32.
+    """
+    code = sourcecheck.function_code(inference_mix.run_serving_mix)
+    warmup = code[:code.index("while time . perf_counter")]
+    assert "for shape in ( decode_batch , prompt_batch )" in warmup

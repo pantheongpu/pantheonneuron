@@ -464,6 +464,28 @@ def serving_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, t
     }
 
 
+def verify_mix_was_observed(steps: int, period: int) -> typing.Optional[str]:
+    """Say so when the run never completed one interleave cycle.
+
+    The mix is defined by ``period`` -- one prefill every N steps -- so
+    fewer than N steps have not sampled it. The observed ratio is then an
+    artefact of where the run stopped, and requests/s is whatever the first
+    step or two happened to be.
+
+    Measured on trn1.2xlarge 2026-09-09: a 20-second run completed **one**
+    scheduler step, reported 0.031 requests/s from that single prefill, and
+    carried no caveat at all -- because the other guard only fires once a
+    decode step has run, and none had.
+    """
+    if period and steps < period:
+        return (
+            f"{steps} scheduler step(s) against an interleave period of "
+            f"{period}: the run never completed one cycle of the mix, so "
+            "this rate is whichever step it managed rather than the mix"
+        )
+    return None
+
+
 def verify_requests_completed(prefills: int, decode_steps: int,
                               decode_requests: int) -> typing.Optional[str]:
     """Say so when the mix never finished a decode request.
@@ -518,10 +540,18 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
             state = transformer_ops.block(state, params)
         return state
 
-    warm = step(decode_batch)
-    xm.mark_step()
-    xm.wait_device_ops()
-    del warm
+    # Both shapes, not just decode. A prefill and a decode step are
+    # different graphs, so warming only one leaves the other to compile
+    # inside the timed region -- the defect memory_read documents, where a
+    # mismatched warm-up measured seven minutes of compilation as
+    # bandwidth. Measured here on trn1.2xlarge 2026-09-09: a 20-second run
+    # completed exactly one scheduler step, and that step took about 32
+    # seconds because it was the prefill compiling.
+    for shape in (decode_batch, prompt_batch):
+        warm = step(shape)
+        xm.mark_step()
+        xm.wait_device_ops()
+        del warm
 
     sink = None
     steps = prefills = decode_steps = 0
@@ -574,19 +604,28 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         "score_method": "workload",
         "analytic_basis": "requests completed / wall time",
         **_mix_warning(
-            prefills, decode_steps, decode_requests,
+            steps, period, prefills, decode_steps, decode_requests,
             transformer_ops.output_check(
                 transformer_ops.read_back(sink), "serving output")),
     }
 
 
-def _mix_warning(prefills: int, decode_steps: int, decode_requests: int,
+def _mix_warning(steps: int, period: int, prefills: int, decode_steps: int,
+                 decode_requests: int,
                  checked: typing.Dict[str, typing.Any]
                  ) -> typing.Dict[str, typing.Any]:
-    """Add the incomplete-mix note without displacing an output failure."""
-    note = verify_requests_completed(prefills, decode_steps, decode_requests)
-    if not note:
+    """Add whichever mix caveats apply, without displacing an output failure.
+
+    Two of them, and the narrower one alone was not enough: a run short
+    enough to complete no decode step slipped past it entirely.
+    """
+    notes = [
+        verify_mix_was_observed(steps, period),
+        verify_requests_completed(prefills, decode_steps, decode_requests),
+    ]
+    found = [note for note in notes if note]
+    if not found:
         return checked
     existing = checked.get("warning")
     return {**checked,
-            "warning": f"{existing}; {note}" if existing else note}
+            "warning": "; ".join(([existing] if existing else []) + found)}
