@@ -39,29 +39,49 @@ Still unverified:
 
 ## Kernel status
 
-Every workload in the registry now has an implementation: **26 of 26**. What
-differs is how much of each has met hardware.
+Every workload in the registry now has an implementation: **26 of 26**, and
+**24 of 26 have run on hardware**. The last full pass was 23 PASS, 0 FAIL,
+with 8 Scores from a declared hardware source (trn1.2xlarge, 2026-09-08).
 
-| Workload | Kernel | Score source |
-|---|---|---|
-| `baseline_metrics` | ✅ telemetry only, no load | — |
-| `memory_read` | ✅ **verified**, and **scored from `neuron-profile`** on both parts | `neuron-profile` |
-| `memory_write` | ✅ **verified** on both parts at the 4 GiB pin; **scored from `neuron-profile`** | `neuron-profile` |
-| `tensor_virus` | ✅ **verified at the pinned 8192³**; scored from `neuron-monitor` | `neuron-monitor` |
-| `int_virus` | ✅ **verified at the pinned 8192³** at uint8; scored from `neuron-monitor` | `neuron-monitor` |
-| `pulse_virus` | ✅ **verified at the pinned 8192³**; scored from `neuron-monitor` | `neuron-monitor` |
-| `omni_virus` | ✅ **verified at the pinned 8192³** — 48.13 TFLOPS, more than double the shape it used to cut down to | `neuron-monitor` |
-| `transformer_virus` | ⚠️ realistic instruction mix, untested | `neuron-monitor` |
-| `graph_replay` | ⚠️ dispatch rate, untested | `neuron-monitor` execution counter |
-| `memory_read_agg` / `memory_write_agg` | ⚠️ one process per core, untested | workload |
-| `pcie_bandwidth` | ⚠️ **verified**; d2h asymmetry reproduces on trn1 across three methodologies, absent on inf2, unexplained | workload |
-| `allocation_fragmentation` | ✅ **verified on trn1.2xlarge** | workload |
-| `llm_prefill` / `llm_decode` / `kv_cache_churn` | ⚠️ untested | workload |
-| `fused_attention` / `quantized_gemm` / `moe_router` | ⚠️ untested | workload |
-| `speculative_decode` / `serving_mix` | ⚠️ untested | workload |
-| `rag_embedding` / `vision_encoder` | ⚠️ untested | workload |
-| `transformer_train_step` | ⚠️ untested; skips on Inferentia | workload |
-| `all_reduce` / `p2p_thrasher` | ⚠️ **cannot be run yet** | `nccom-test` |
+Figures are single runs unless stated. The one quantity measured repeatedly
+turned out not to be reproducible until its cause was found, so treat a lone
+number as provisional and use `--repeat`.
+
+| Workload | Status | Measured | Score source |
+|---|---|--:|---|
+| `baseline_metrics` | ✅ telemetry only, no load | — | — |
+| `memory_read` | ✅ scored from its declared source | 256.17 GB/s | `neuron-profile` |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.69 GB/s | `neuron-profile` |
+| `memory_read_agg` | ✅ 98% worker overlap confirmed | 543.71 GB/s | workload |
+| `memory_write_agg` | ✅ 98% worker overlap confirmed | 507.06 GB/s | workload |
+| `tensor_virus` | ✅ at the pinned 8192³ | 25.88 TFLOPS | `neuron-monitor` |
+| `int_virus` | ✅ at the pinned 8192³, uint8 | 27.71 TOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty | 13.85 TFLOPS | `neuron-monitor` |
+| `omni_virus` | ✅ at the pinned 8192³ | 48.13 TFLOPS | `neuron-monitor` |
+| `transformer_virus` | ✅ realistic instruction mix | 46.28 TFLOPS | `neuron-monitor` |
+| `graph_replay` | ✅ rate trimmed of compile time | 1,188.9 graph-steps/s | `neuron-monitor` |
+| `allocation_fragmentation` | ✅ | 539.3 events/s | workload |
+| `llm_prefill` | ✅ pre-normalised, no NaN | 3,808.5 prompt-tokens/s | workload |
+| `llm_decode` | ✅ | 20.62 tokens/s | workload |
+| `kv_cache_churn` | ✅ memory-bound at last | 97,167 cache-updates/s | workload |
+| `fused_attention` | ✅ | 6,036.6 attention-tiles/s | workload |
+| `quantized_gemm` | ✅ | 18.44 TOPS | workload |
+| `moe_router` | ✅ balanced dispatch | 254,743 routed-tokens/s | workload |
+| `speculative_decode` | ✅ verifies through the target model | 74.0 verified-tokens/s | workload |
+| `rag_embedding` | ✅ 12-layer encoder | 853.7 vectors/s | workload |
+| `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
+| `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
+| `pcie_bandwidth` | ⚠️ d2h asymmetry unexplained | 3.89 GB/s | workload |
+| `serving_mix` | ⚠️ completes no decode request at 20 s | 0.0312 requests/s | workload |
+| `all_reduce` / `p2p_thrasher` | ❌ **cannot be run** — quota | — | `nccom-test` |
+
+Two rows carry a caveat the Score cannot express on its own. `pcie_bandwidth`
+reproduces a 6× d2h/h2d split on trn1 that is absent on inf2 and survives
+three methodologies; **do not cite the d2h figure as a link property**.
+`serving_mix` needs 32 scheduler steps to finish one decode request and the
+scheduler sustains about one a second, so a 20-second run reports prefills
+only — the row says so, and whether to lengthen the run or shorten the
+pinned response is an open decision.
 
 `all_reduce` and `p2p_thrasher` need two or more devices. `trn1.32xlarge` is
 the smallest instance with device-to-device NeuronLink and needs 128 vCPUs
@@ -71,9 +91,9 @@ the only thing behind them until that quota lands.
 
 ### What the 2026-09-08 findings were resolved into
 
-The four open items that run recorded are now closed in code. None of the
-fixes has met hardware; what changed is that each has a decided answer and a
-test, so the next window spends its time confirming rather than discovering.
+The four open items that run recorded are closed, and all four have since
+met hardware. What follows is the reasoning at the time; where a later run
+changed the answer, it says so.
 
 **The profiler now searches for its graph instead of guessing.** The capture
 worked and captured the wrong NEFF: *profiled graph moved 4 bytes against a
@@ -81,12 +101,18 @@ plan of 8589934592*. `find_neff` ranked candidates by mtime and returned the
 top one, and `verify_profile_covers_plan` then rejected it — so the plan
 check was a rejector standing next to a guess. It is now the selector.
 `profiler.find_neffs` returns the ranking and `profiler.select_by_plan`
-captures candidates in turn until one accounts for the planned traffic. Both
-times this failed on hardware, the kernel's own graph was in the list and was
-not first, so a wrong first guess now costs another capture rather than the
-whole Score. The search is capped at 6 captures (each is a real NEFF replay);
-`PANTHEON_NEURON_NEFF_CANDIDATES` raises it, and exhausting it reports what
-every candidate moved rather than only that one was wrong.
+captures candidates until one accounts for the planned traffic.
+
+*Superseded twice since.* Taking the first candidate over the coverage floor
+made the Score irreproducible (256.17 / 178.7 / 119.19 GB/s), so the search
+takes the **best** match. Then a warm cache showed the real limit was the
+budget, not the ranking: a cache hit leaves the kernel's own NEFF with its
+original timestamp, so it sorts last — candidate 13 of 14 in one run, and
+outside the budget entirely in a fuller one. The search is now largely
+removed rather than widened: `NEURON_COMPILE_CACHE_URL` points the compiler
+at the run's own workdir and `find_neffs` searches it exclusively, which
+took the candidate list from 16 to 3. See "Coverage is necessary and not
+sufficient" below.
 
 **`int_virus` is repinned to uint8.** trn1's Tensor Engine rejects signed
 int8 and accepts uint8, so the workload was unreachable as declared. uint8
@@ -104,8 +130,9 @@ is the part running out of room, and a number measured under allocation
 pressure is not the write bandwidth this workload claims. `memory_read` keeps
 8 GiB — a read allocates only a source and was verified there.
 
-**`pcie_bandwidth`: the fix was right and the diagnosis was wrong.** The legs
-genuinely were not symmetric — h2d reused one host tensor while d2h called
+**`pcie_bandwidth`: the fix was right and the diagnosis was wrong.** *Two
+further explanations have since been eliminated; see the kernel's docstring
+for the current state.* The legs genuinely were not symmetric — h2d reused one host tensor while d2h called
 `.cpu()`, which allocates a fresh 1 GiB host destination every pass — so both
 now `copy_` into a destination allocated before the clock starts, and the row
 records `buffers: preallocated`.
