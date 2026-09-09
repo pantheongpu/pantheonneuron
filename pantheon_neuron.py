@@ -528,6 +528,11 @@ _PROVENANCE_KEYS = (
     # MoE dispatch: slots per expert, which is what the arithmetic scales
     # with once routing is balanced.
     "capacity",
+    # memory_*_agg: an aggregate is a claim about cores loading memory at
+    # the same time, and summed bytes cannot tell that from cores doing it
+    # one after another.
+    "concurrent_window_s",
+    "worker_span_s",
     # serving_mix: a request is many scheduler steps, so both rates are
     # wanted, and implied_tflops is what a request count cannot contradict.
     "scheduler_steps_per_s",
