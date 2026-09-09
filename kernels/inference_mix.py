@@ -464,6 +464,30 @@ def serving_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, t
     }
 
 
+def verify_requests_completed(prefills: int, decode_steps: int,
+                              decode_requests: int) -> typing.Optional[str]:
+    """Say so when the mix never finished a decode request.
+
+    The Score is prefills plus completed decode requests. A decode request
+    needs `decode / batch` steps, and at the pinned 256 tokens that is 32 --
+    so a run short enough to produce decode *tokens* but no decode
+    *request* reports a requests/s that is prefills only, while the row
+    still claims to measure a prefill/decode mix.
+
+    Measured on trn1.2xlarge 2026-09-08: 0.0312 requests/s from a 20-second
+    run, where the scheduler sustained about one step a second. The number
+    is arithmetically correct and describes half the workload.
+    """
+    if decode_steps > 0 and decode_requests == 0:
+        return (
+            f"{decode_steps} decode steps completed no decode request, so "
+            "this requests/s is prefills only -- the run is too short for "
+            "the pinned decode length, and the mix it reports is not the "
+            "mix it measured"
+        )
+    return None
+
+
 def run_serving_mix(problem: typing.Mapping[str, typing.Any],
                     duration: int) -> dict:
     """Interleave prefill and decode steps at a serving ratio."""
@@ -549,6 +573,20 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         "plan": plan,
         "score_method": "workload",
         "analytic_basis": "requests completed / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "serving output"),
+        **_mix_warning(
+            prefills, decode_steps, decode_requests,
+            transformer_ops.output_check(
+                transformer_ops.read_back(sink), "serving output")),
     }
+
+
+def _mix_warning(prefills: int, decode_steps: int, decode_requests: int,
+                 checked: typing.Dict[str, typing.Any]
+                 ) -> typing.Dict[str, typing.Any]:
+    """Add the incomplete-mix note without displacing an output failure."""
+    note = verify_requests_completed(prefills, decode_steps, decode_requests)
+    if not note:
+        return checked
+    existing = checked.get("warning")
+    return {**checked,
+            "warning": f"{existing}; {note}" if existing else note}

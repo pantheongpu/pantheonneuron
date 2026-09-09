@@ -894,3 +894,39 @@ def test_the_cut_down_justification_is_recorded_as_stale():
     source = inspect.getsource(omni_virus.run)
     assert "stale" in source
     assert "tensor_virus.TILING" in source
+
+
+def test_a_run_that_finishes_no_decode_request_says_so():
+    """Otherwise requests/s is prefills wearing the name of a mix.
+
+    A decode request needs decode/batch steps -- 32 at the pinned 256
+    tokens -- so a short run produces decode tokens and completes no decode
+    request. trn1.2xlarge 2026-09-08 reported 0.0312 requests/s from a
+    20-second run on that basis.
+    """
+    message = inference_mix.verify_requests_completed(6, 26, 0)
+    assert message is not None
+    assert "prefills only" in message
+
+    assert inference_mix.verify_requests_completed(6, 64, 2) is None
+    # A pure-prefill mix is not incomplete, it is a different mix.
+    assert inference_mix.verify_requests_completed(6, 0, 0) is None
+
+
+def test_the_mix_note_does_not_displace_an_output_failure():
+    checked = {"warning": "serving output is NaN", "score_invalid": True}
+    both = inference_mix._mix_warning(6, 26, 0, checked)
+    assert "NaN" in both["warning"] and "prefills only" in both["warning"]
+    assert both["score_invalid"] is True
+
+
+def test_how_long_the_pinned_mix_needs_to_mean_anything():
+    """Recorded so the duration is a decision rather than a surprise."""
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    steps_per_request = plan["decode_steps_per_request"]
+    assert steps_per_request == 32
+
+    # The scheduler sustained about one step a second on trn1.
+    measured_steps_per_s = 1.0
+    seconds_for_one_request = steps_per_request / measured_steps_per_s
+    assert seconds_for_one_request > 20, "a 20s run cannot finish one"
