@@ -86,3 +86,23 @@ tensors built before the clock starts, and `memory_agg`, `collectives` and
    an update moved a cache or a register. Whatever a workload claims to
    measure, it should also report the derived quantity that would be absurd
    if the claim were false — bandwidth, here.
+
+## Addendum: kernels contaminate each other in one process
+
+A diagnostic script that ran five kernels in sequence, in one process,
+measured `allocation_fragmentation` at **0.9 allocation-events/s**. The same
+kernel in a clean process measures **1,371.8/s** — a factor of 1,500.
+
+Nothing was wrong with the kernel. The kernels before it had left device
+memory allocated, and the allocator was working against a nearly-full
+NeuronCore.
+
+`validate_hardware.sh` is unaffected: it invokes `pantheon_neuron.py --test
+<name>` per workload, so each gets a fresh process. But anyone writing a
+one-off diagnostic should run one kernel per process, or measure something
+that is not sensitive to how much HBM is already spoken for.
+
+The near-miss is worth recording: the slow number appeared immediately after
+a change to that kernel's eviction accounting, and the obvious inference was
+that the change caused it. It did not. Running the old accounting and the new
+one in clean processes is what separated them.

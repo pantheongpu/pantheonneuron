@@ -29,6 +29,7 @@ counter, so a missing engine reading is expected on Trainium rather than a
 fault.
 """
 
+import os
 import time
 import typing
 
@@ -63,9 +64,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # The original justification is also now stale: it was cut down because
     # 8192^3 "has never compiled", and since the accumulation loop was
     # rolled (see tensor_virus.TILING) it does. Whether this chain compiles
-    # at full width is untested -- its cumsum over an 8192^2 fp32
+    # at full width is still untested -- its cumsum over an 8192^2 fp32
     # intermediate is 256 MiB per link, which tensor_virus never allocates.
-    tile = min(m, 2048)
+    #
+    # The cap is unconditional, so passing a larger shape does not test it.
+    # An attempt on trn1.2xlarge 2026-09-08 did exactly that and learned
+    # nothing: it reported tile 2048 for a requested 8192. Answering the
+    # question means lifting the cap deliberately, which is a change with a
+    # compile-time risk attached rather than an experiment to run casually.
+    tile = min(m, int(os.environ.get("PANTHEON_NEURON_OMNI_TILE", 2048)))
 
     device = xm.xla_device()
     lhs = torch.ones((tile, tile), dtype=dtype, device=device)
