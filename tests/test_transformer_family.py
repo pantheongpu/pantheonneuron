@@ -813,3 +813,49 @@ def test_verification_dominates_drafting():
     draft = draft_len * 2 * (hidden // 4) ** 2
 
     assert verify > 100 * draft
+
+
+# -- the encoders ran a fraction of the models they name ---------------------
+#
+# Four workloads in a row had this: serving_mix and speculative_decode ran
+# one block where a model runs `layers`, and so did vision_encoder.
+# rag_embedding ran no blocks at all -- two matmuls and a normalise.
+
+def test_rag_embedding_runs_an_encoder_stack():
+    code = sourcecheck.function_code(encoders.run_rag_embedding)
+    assert "for _ in range ( layers )" in code
+    assert "transformer_ops . block ( state , params )" in code
+    # It embeds a token sequence and pools it, rather than starting from a
+    # vector that has already been pooled.
+    assert "state . mean ( dim = 1 )" in code
+
+
+def test_vision_encoder_runs_every_layer():
+    code = sourcecheck.function_code(encoders.run_vision_encoder)
+    assert "for _ in range ( layers )" in code
+
+
+@pytest.mark.parametrize("name", ["rag_embedding", "vision_encoder"])
+def test_the_encoders_pin_a_depth(name):
+    assert PROBLEMS[name]["layers"] == 12, "ViT-B and BERT-base are twelve"
+
+
+def test_the_embedder_reads_a_sequence_not_a_vector():
+    problem = PROBLEMS["rag_embedding"]
+    assert problem["seq"] == 128, "retrieval documents are token sequences"
+    assert problem["batch"] == 64
+
+
+def test_the_encoder_flop_counts_follow_the_pinned_depth():
+    """The arithmetic that makes the old numbers implausible.
+
+    A projection is two matmuls; a 12-layer encoder is three orders of
+    magnitude more work, and the reported rate should differ accordingly.
+    """
+    problem = PROBLEMS["rag_embedding"]
+    dim, seq, batch, layers = (problem["dim"], problem["seq"],
+                               problem["batch"], problem["layers"])
+
+    encoder = layers * transformer_ops.block_flops(dim, seq, batch)
+    projection = 2 * (2 * batch * dim * dim)      # what it used to run
+    assert encoder > 1000 * projection

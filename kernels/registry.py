@@ -439,7 +439,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("rag_embedding", "ai_auxiliary",
              "Embedding generation at retrieval batch sizes.", _COMPUTE,
              unit="embedding-vectors/s",
-             problem={"dim": 1024, "batch": 256, "dtype": "bf16"},
+             # A retrieval embedder is a transformer stack. This pinned a
+             # projection: two matmuls and an L2 normalise, reporting
+             # 1,551,194 vectors/s on trn1.2xlarge 2026-09-08, roughly
+             # 2,000x what a 12-layer encoder over 128-token documents
+             # reaches on this part. batch drops to 64 so a real encoder
+             # pass stays tractable.
+             problem={"dim": 1024, "batch": 64, "seq": 128, "layers": 12,
+                      "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'vectors_embedded',
@@ -449,7 +456,10 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("vision_encoder", "ai_auxiliary",
              "Vision encoder forward pass.", _COMPUTE,
              unit="image-tiles/s",
-             problem={"resolution": 224, "patch": 14, "batch": 64, "dtype": "bf16"},
+             # A ViT-B is twelve blocks; this ran one, and reported about
+             # eighteen times the throughput the model it names can reach.
+             problem={"resolution": 224, "patch": 14, "batch": 64,
+                      "layers": 12, "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'image_tiles',
