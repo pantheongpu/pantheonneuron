@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install --upgrade pip && python -m pip install ruff
+      - run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
       - name: Lint
         run: make lint
 
@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run tests
         # A fresh checkout has no __pycache__, which is what makes
         # pytest.ini's `filterwarnings = error` catch a compile-time
@@ -103,7 +103,7 @@ jobs:
           cache: pip
       - run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest pytest-cov
+          python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Test with coverage
         run: make cov
       - name: Upload coverage
@@ -126,7 +126,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
+      - run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Enforce report privacy invariant
         run: python -m pytest tests/test_report_privacy.py -q
 

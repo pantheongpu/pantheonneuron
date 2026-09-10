@@ -167,3 +167,38 @@ def test_the_coverage_config_explains_why_kernels_are_low():
     assert "cannot execute without a Neuron device" in config
     assert "do not raise this number" in config.lower()
     assert "data/hardware_runs.json" in config
+
+
+def test_ci_installs_tooling_from_the_pinned_file():
+    """CI ran `pip install ruff`, unpinned, and got 0.16.7; a local 0.5.6
+    passed the same code. The lint job's verdict depended on the day it
+    ran, and the PR sat red for several commits while I reported it green
+    from a local run.
+
+    So every CI job that installs tooling does it from
+    requirements-dev.txt, and nothing installs ruff by bare name.
+    """
+    import yaml
+
+    with open(os.path.join(ROOT, ".github", "workflows", "ci.yml"),
+              encoding="utf-8") as handle:
+        workflow = yaml.safe_load(handle)
+    installs = [step.get("run", "")
+                for job in workflow["jobs"].values()
+                for step in job.get("steps", [])
+                if "pip install" in step.get("run", "")]
+    assert installs, "no install steps parsed -- the workflow shape changed"
+    for command in installs:
+        assert not re.search(r"pip install[^\n]*\bruff\b", command), command
+        assert not re.search(r"pip install[^\n]* pytest\b(?!-)", command), command
+
+
+def test_the_linter_is_pinned_to_an_exact_version():
+    """A range would reintroduce the drift one release at a time."""
+    with open(os.path.join(ROOT, "requirements-dev.txt"),
+              encoding="utf-8") as handle:
+        pins = [line.strip() for line in handle
+                if line.strip() and not line.startswith("#")]
+    assert pins, "requirements-dev.txt pins nothing"
+    ruff = [p for p in pins if p.startswith("ruff")]
+    assert ruff and "==" in ruff[0], ruff

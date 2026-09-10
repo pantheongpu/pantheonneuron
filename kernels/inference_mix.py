@@ -236,7 +236,7 @@ def routing_balance(tokens: int, experts: int,
 
     Pure arithmetic so the balance can be asserted without a device.
     """
-    counts = {expert: 0 for expert in range(experts)}
+    counts = dict.fromkeys(range(experts), 0)
     for token in range(tokens):
         counts[token % experts] += 1
         if top_k > 1:
@@ -525,7 +525,7 @@ def interleave_period(ratio: float) -> int:
         raise ValueError(f"prefill_ratio must be in [0, 1], got {ratio}")
     if not ratio:
         return 0
-    return max(int(round(1 / ratio)), 1)
+    return max(round(1 / ratio), 1)
 
 def serving_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, typing.Any]:
     """What one scheduler step costs, and when a request is actually done.

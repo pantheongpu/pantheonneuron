@@ -1,0 +1,20 @@
+# Development and CI tooling, pinned.
+#
+# ruff was unpinned in CI -- `pip install ruff` -- and pinned nowhere
+# locally. On 2026-09-10 the PR's lint job installed ruff 0.16.7 and
+# failed on three findings while a local 0.5.6 reported "All checks
+# passed!". Eleven minor versions apart, and the newer one had added
+# rules inside the same selected categories.
+#
+# So the lint job's verdict depended on the day it ran: a PR could go red
+# with no code change, the day ruff released. That is a check whose result
+# is not a function of the code -- the same defect as a test that passes
+# by accident, pointed the other way -- and it was reported green here for
+# several commits because I checked locally and never looked at the run.
+#
+# Pinned to the version CI actually ran, and CI now installs from this
+# file so the two cannot drift. Bump deliberately: raise the pin, run
+# `make lint`, fix what the new version finds, commit together.
+ruff==0.16.7
+pytest==8.3.5
+pytest-cov==7.1.0

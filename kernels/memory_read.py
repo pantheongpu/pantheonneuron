@@ -96,7 +96,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     import torch_xla.core.xla_model as xm  # type: ignore
 
     plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]))
-    _, nl, kernel = _build_kernel()
+    _, _nl, kernel = _build_kernel()
 
     # torch_neuronx deletes its compiler workdir unless told otherwise, and
     # neuron-profile capture needs the NEFF that lives there.
