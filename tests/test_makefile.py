@@ -178,16 +178,18 @@ def test_ci_installs_tooling_from_the_pinned_file():
     So every CI job that installs tooling does it from
     requirements-dev.txt, and nothing installs ruff by bare name.
     """
-    import yaml
-
+    # Read as text, not parsed as YAML. The first version imported yaml,
+    # which is not a declared dependency -- it was on the machine that
+    # wrote the test and not on the runner that ran it, so this test, the
+    # one written to stop works-locally-fails-in-CI drift, failed all four
+    # matrix jobs through exactly that drift. The property is textual
+    # anyway: does any line install a tool by bare name.
     with open(os.path.join(ROOT, ".github", "workflows", "ci.yml"),
               encoding="utf-8") as handle:
-        workflow = yaml.safe_load(handle)
-    installs = [step.get("run", "")
-                for job in workflow["jobs"].values()
-                for step in job.get("steps", [])
-                if "pip install" in step.get("run", "")]
-    assert installs, "no install steps parsed -- the workflow shape changed"
+        workflow = handle.read()
+    installs = [line for line in workflow.split("\n")
+                if "pip install" in line]
+    assert installs, "no install steps found -- the workflow shape changed"
     for command in installs:
         assert not re.search(r"pip install[^\n]*\bruff\b", command), command
         assert not re.search(r"pip install[^\n]* pytest\b(?!-)", command), command
@@ -202,3 +204,78 @@ def test_the_linter_is_pinned_to_an_exact_version():
     assert pins, "requirements-dev.txt pins nothing"
     ruff = [p for p in pins if p.startswith("ruff")]
     assert ruff and "==" in ruff[0], ruff
+
+
+# Modules imported by this repository that are deliberately not declared:
+# the Neuron toolchain installs from the AWS pip index rather than PyPI and
+# only exists on a Neuron instance, and every import of it is behind the
+# mock-mode guard. Local modules are the repo's own files.
+_UNDECLARED_BY_DESIGN = {
+    "torch", "torch_xla", "torch_neuronx", "neuronxcc",
+}
+
+
+def test_every_third_party_import_is_a_declared_dependency():
+    """test_ci_installs_tooling_from_the_pinned_file imported yaml.
+
+    PyYAML was on the machine that wrote the test and not on the runner
+    that ran it, so it failed all four matrix jobs and the coverage job --
+    a test written to stop works-locally-fails-in-CI drift, failing
+    through exactly that drift. It passed locally, because locally is
+    where the undeclared package was.
+
+    This asserts the general case: every top-level module the repository
+    imports is the standard library, the repository itself, the Neuron
+    toolchain by design, or declared in a requirements file.
+    """
+    import ast
+
+    stdlib = getattr(sys, "stdlib_module_names", None)
+    if stdlib is None:
+        pytest.skip("sys.stdlib_module_names needs Python 3.10+")
+
+    declared = set()
+    for name in ("requirements.txt", "requirements-dev.txt"):
+        with open(os.path.join(ROOT, name), encoding="utf-8") as handle:
+            for line in handle:
+                line = line.split("#")[0].strip()
+                if line:
+                    declared.add(re.split(r"[=<>!~\\[]", line)[0]
+                                 .strip().lower().replace("-", "_"))
+    # pytest-cov is imported as pytest_cov and pulled in as a plugin; its
+    # distribution name is declared under the hyphenated spelling.
+    assert declared, "no requirements parsed -- the sweep is vacuous"
+
+    local = {name[:-3] for name in os.listdir(ROOT) if name.endswith(".py")}
+    local |= {"kernels", "tests", "tools", "sourcecheck"}
+    for sub in ("tests", "tools", "kernels"):
+        local |= {name[:-3]
+                  for name in os.listdir(os.path.join(ROOT, sub))
+                  if name.endswith(".py")}
+
+    undeclared = set()
+    for directory in (ROOT, os.path.join(ROOT, "kernels"),
+                      os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")):
+        for name in os.listdir(directory):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(directory, name), encoding="utf-8") as h:
+                tree = ast.parse(h.read())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    modules = [node.module or ""]
+                else:
+                    continue
+                for module in modules:
+                    top = module.split(".")[0]
+                    if (not top or top in stdlib or top in local
+                            or top in _UNDECLARED_BY_DESIGN
+                            or top.lower() in declared):
+                        continue
+                    undeclared.add(f"{top} ({name})")
+
+    assert not undeclared, (
+        f"imported but not declared in a requirements file: "
+        f"{sorted(undeclared)}")
