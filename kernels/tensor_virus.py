@@ -20,38 +20,37 @@ dead code, and one over constant operands can in principle be folded at
 compile time. The output is the kernel's return value, held live by the
 caller across ``mark_step()``, for the reason memory_read documents.
 
-STATUS: VERIFIED ON HARDWARE at the pinned 8192^3 shape, trn1.2xlarge
-2026-09-08 and 2026-09-10, 26.1 TFLOPS bf16 with the product verified
-exactly. Earlier verification at reduced shapes on inf2.xlarge 2026-09-07:
+STATUS: VERIFIED ON HARDWARE at the pinned 8192^3 shape, trn1.2xlarge.
+Coalesced tiling (the default) 2026-09-10: 70.42 TFLOPS analytic, 71.80
+by neuron-monitor (median of three), every row-tile of the product exact.
+Streaming tiling 2026-09-08 and 2026-09-10: 26.1 TFLOPS, product exact.
+Earlier verification at reduced shapes on inf2.xlarge 2026-09-07:
 ``verify_product_is_correct`` returned exactly 1.0 at 1024^3 (2.68 TFLOPS)
 and 2048^3 (21.05 TFLOPS).
 
 **THIS NUMBER IS A PROPERTY OF THIS KERNEL, NOT OF THE PART.**
 
-trn1.2xlarge 2026-09-10, same 8192^3 shape, same bf16, same process, both
-products verified exact:
+That was learned the hard way. trn1.2xlarge 2026-09-10, same 8192^3
+shape, same bf16, same process, both products verified exact, under the
+then-default streaming tiling:
 
     NKI (this kernel)      26.19 TFLOPS    598 passes
     XLA (torch.matmul)     66.32 TFLOPS   1510 passes
 
-A plain ``torch.matmul`` compiled by neuronx-cc is **2.53x** this kernel.
-The suite's headline compute figure is therefore a floor on what the
-device can do, and a reader comparing it against another accelerator's
-peak is comparing against a ceiling this repo built rather than one
-Trainium imposes. ``tools/compare_matmul_paths.py`` re-runs that
-comparison; keeping it runnable is what stops the claim going stale.
+A plain ``torch.matmul`` was **2.53x** this kernel, so the headline was a
+floor this repo built, not a ceiling Trainium imposed. The coalesced
+tiling closed it the same day -- 70.42 against torch.matmul's 66.25 in
+one session -- and the lesson stands the other way round too: 71.80 is
+75.6% of one NeuronCore's 95 TFLOPS, the best kernel measured here, and
+still not the part's peak. ``tools/compare_matmul_paths.py`` re-runs the
+comparison; keeping it runnable is what stops either claim going stale.
 
-The cause is not operand bandwidth. That was the first diagnosis -- the
-streaming tiling re-reads every operand tile per (row, col), giving n^3
-traffic and a flat ~102 FLOP/byte, and 102 x memory_read's 256.2 GB/s
-lands on 26.1 almost exactly. It is a coincidence: the blocked tiling cuts
-operand traffic 4.7x as modelled -- 2.55x as measured by neuron-profile at
-4096^3 -- and buys 1.06x. Whatever the ceiling is, it is not
-the one that arithmetic describes, and it has not been found yet.
-
-What is settled is that the kernel is correct and slow, which is the right
-way round -- but the figure must not be quoted as Trainium's bf16
-throughput. See docs/the_headline_number_is_the_kernel.md.
+The cause was not operand bandwidth -- 102 FLOP/byte x memory_read's
+256.2 GB/s lands on 26.1 by coincidence, and blocked tiling's 2.55x
+traffic cut bought 1.06x. It was the lhs load: four one-tile loads per
+four matmuls instead of one four-tile load. A variant with coalesced's
+four accumulators and narrow loads read 28.08, blocked's figure. See
+docs/the_headline_number_is_the_kernel.md.
 """
 
 import os
@@ -69,6 +68,27 @@ CONTRACTION = tiling.PARTITION      # K per matmul call
 STATIONARY = tiling.PARTITION       # M per matmul call
 MOVING = 512                        # N per matmul call
 
+# Stationary tiles loaded by one lhs DMA in the "coalesced" tiling.
+#
+# Why this exists: neuron-profile's full trace counted the transfers on
+# trn1.2xlarge 2026-09-10. At almost equal bytes the blocked kernel made
+# 5.1x as many DMA transfers as torch.matmul (174,942 against 34,031) and
+# ran 1.35x slower, and neither NKI tiling made a single transfer over
+# 64 KB where XLA made 128.
+#
+# The transfer size is set by the tile's free-dimension width, not its
+# size. `lhs_t[k-slice, m-slice]` reads 128 partition rows of STATIONARY
+# bf16 each -- 256 contiguous bytes per row, strided in HBM -- so every
+# lhs load is 128 transfers of 256 bytes. Loading COALESCE_ROWS stationary
+# tiles at once makes each row COALESCE_ROWS * 256 bytes and cuts the
+# number of lhs loads by the same factor.
+#
+# 4 because the accumulator grows with it: COALESCE_ROWS fp32 tiles of
+# MOVING columns is 8 KiB per partition at 4, half of NeuronCore-v2's
+# 16 KiB of PSUM per partition, which leaves room for the compiler to
+# double-buffer. 8 would fill it.
+COALESCE_ROWS = 4
+
 # Which tiling the kernel uses. Both compute the same product -- both
 # product-verify at exactly 1.0 on hardware -- and they differ only in how
 # often an operand tile is re-read from HBM.
@@ -80,8 +100,8 @@ MOVING = 512                        # N per matmul call
 #                by the model, 2.55x by neuron-profile at 4096^3,
 #                at 8192^3, for 8 MiB of SBUF.
 #
-# **Streaming is the default, and the reason is a measurement that refuted
-# the argument for blocking.** The shape sweep found the kernel at 26.26
+# **Streaming was the default until 2026-09-10, and the reason was a
+# measurement that refuted the argument for blocking.** The shape sweep found the kernel at 26.26
 # TFLOPS at 8192^3 with implied operand traffic of 256.4 GB/s against
 # memory_read's 256.2 GB/s on the same part, and that 0.1% agreement looked
 # like a bandwidth wall. It was a coincidence. Cutting operand traffic 4.7x
@@ -99,12 +119,34 @@ MOVING = 512                        # N per matmul call
 # place to look is per-tile issue overhead and the 128x128x512 tile shape,
 # not the memory system.
 #
-# blocked stays available and correct. It is not the default because a 6%
-# gain does not pay for the extra SBUF block and a deprecated NKI layout
+# blocked stays available and correct. It was never the default: a 6%
+# gain did not pay for the extra SBUF block and a deprecated NKI layout
 # ("Block dimension is deprecated. The leading dimension of SBUF tensor
-# must be partition dimension"), and because the reason it was written
-# turned out not to be true.
-TILING = os.environ.get("PANTHEON_NEURON_GEMM_TILING", "streaming")
+# must be partition dimension"), and the reason it was written turned out
+# not to be true.
+#
+# **Coalesced is the default, since 2026-09-10, on a hardware run.** It
+# keeps blocked's rhs block and loads the lhs four stationary tiles wide
+# in one nl.load. trn1.2xlarge, 8192^3 bf16, one session, every row-tile
+# of the product checked:
+#
+#     streaming   26.45    blocked   28.16    coalesced   70.42
+#     torch.matmul through neuronx-cc: 66.25
+#
+# and 71.80 TFLOPS by neuron-monitor's effective_flops (median of three,
+# the declared Score source). The accumulators are not the cause: four
+# accumulators fed by four narrow loads read 28.08. The wide load is all
+# of it. See docs/the_headline_number_is_the_kernel.md.
+#
+# Changing the default moves every published tensor_virus, int_virus and
+# pulse_virus Score by ~2.7x, which is why each row carries "tiling".
+# Set PANTHEON_NEURON_GEMM_TILING=streaming to reproduce an older figure.
+TILING = os.environ.get("PANTHEON_NEURON_GEMM_TILING", "coalesced")
+
+# Every tiling the kernel builder accepts. A new one becomes the default
+# only with a hardware run showing it faster *and* correct at the pinned
+# shape -- through the row-distinguishing check, not the all-ones one.
+STRATEGIES = ("streaming", "blocked", "coalesced")
 
 
 def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
@@ -141,6 +183,110 @@ def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
     }
 
 
+# Distinct values per row-tile, so a kernel that stores the right number
+# into the wrong rows cannot pass. Cycles through 1..ROW_CHECK_PERIOD.
+ROW_CHECK_PERIOD = 7
+
+
+def row_tile_scale(tile_index: int) -> int:
+    """The multiple of K that row-tile ``tile_index`` must hold.
+
+    With ``lhs_t[k, m] = row_tile_scale(m // STATIONARY)`` and rhs all
+    ones, ``out[m, n] = K * row_tile_scale(m // STATIONARY)`` exactly.
+    Adjacent tiles -- and the COALESCE_ROWS tiles inside one coalesced
+    block -- all expect different values.
+    """
+    return tile_index % ROW_CHECK_PERIOD + 1
+
+
+def rows_in_wrong_place(output, k: int, tile: int = STATIONARY):
+    """Row-tiles whose values are not the ones only their own rows produce.
+
+    **Why the all-ones product check is not enough.** With lhs and rhs
+    all ones, every output element is K whichever accumulator produced
+    it, so a kernel that stored its first accumulator into every row --
+    or permuted them -- passes ``verify_product_is_correct`` with ratio
+    exactly 1.0. The coalesced tiling's entire change is splitting rows
+    across COALESCE_ROWS accumulators, which is exactly what that check
+    cannot see.
+
+    Measured on trn1.2xlarge 2026-09-10. A deliberately planted
+    ``value=acc[0]`` in the coalesced kernel left 24 of 32 row-tiles
+    wrong under this check at 4096^3 -- tiles 1..3 of each block holding
+    tile 0's value -- and would have passed the all-ones check with every
+    element exact. The real kernel left none wrong.
+
+    ``output`` is a CPU tensor or nested lists of rows; returns
+    ``[(tile_index, expected, (lowest, highest)), ...]`` for each wrong
+    tile. Empty means every element of every tile is exact. A tile is
+    exact when its lowest and highest elements both equal the expected
+    value, which a tensor answers in two reductions -- a Python pass over
+    the 67M elements of an 8192^2 output would take minutes.
+    """
+    wrong = []
+    for index, (lowest, highest) in enumerate(_tile_ranges(output, tile)):
+        expected = float(k * row_tile_scale(index))
+        if lowest != expected or highest != expected:
+            wrong.append((index, expected, (lowest, highest)))
+    return wrong
+
+
+def _tile_ranges(output, tile: int):
+    """(lowest, highest) element of each ``tile``-row slab of ``output``."""
+    if hasattr(output, "amin"):
+        slabs = output.reshape(len(output) // tile, -1).float()
+        return list(zip(slabs.amin(dim=1).tolist(), slabs.amax(dim=1).tolist()))
+    ranges = []
+    for index in range(len(output) // tile):
+        values = [float(v) for row in output[index * tile:(index + 1) * tile]
+                  for v in row]
+        ranges.append((min(values), max(values)))
+    return ranges
+
+
+def row_scales(rows: int, tile: int = STATIONARY) -> typing.List[int]:
+    """The scale each output row carries: ``row_tile_scale(row // tile)``."""
+    return [row_tile_scale(i // tile) for i in range(rows)]
+
+
+def row_check_operands(plan: typing.Mapping[str, int], torch_dtype):
+    """lhs_t and rhs on the host, built so ``rows_in_wrong_place`` can read
+    the product: ``lhs_t[k, m] = row_tile_scale(m // STATIONARY)`` and rhs
+    all ones. Every value is at most ROW_CHECK_PERIOD, exact in each
+    operand dtype the Tensor Engine takes (bf16, fp16, fp32, uint8, fp8),
+    and K * ROW_CHECK_PERIOD is exact in the fp32 and int32 accumulators.
+    """
+    import torch  # type: ignore
+
+    scale = torch.tensor(row_scales(plan["m"]), dtype=torch.float32)
+    lhs_t = scale.unsqueeze(0).expand(plan["k"], plan["m"]).contiguous()
+    rhs = torch.ones((plan["k"], plan["n"]), dtype=torch.float32)
+    return lhs_t.to(torch_dtype), rhs.to(torch_dtype)
+
+
+def validate_tiling(plan: typing.Mapping[str, int], strategy: str) -> None:
+    """Reject a shape a tiling would silently compute wrongly.
+
+    The coalesced kernel steps the row loop COALESCE_ROWS stationary tiles
+    at a time, so M must divide by STATIONARY * COALESCE_ROWS. If it did
+    not, `m // width` would floor and the trailing rows would simply never
+    be computed -- a partial product, and one whose FLOP count would still
+    claim the whole matrix. The product check samples corners and could
+    well miss it; refusing the shape cannot.
+    """
+    if strategy not in STRATEGIES:
+        raise ValueError(
+            f"unknown tiling {strategy!r}; expected one of {STRATEGIES}")
+    if strategy == "coalesced":
+        width = STATIONARY * COALESCE_ROWS
+        if plan["m"] % width:
+            raise ValueError(
+                f"M={plan['m']} must be a multiple of {width} for the "
+                f"coalesced tiling ({COALESCE_ROWS} stationary tiles per "
+                "load); a remainder would leave rows uncomputed"
+            )
+
+
 def accumulator_dtype(dtype: str, nl):
     """The type the Tensor Engine accumulates a product of ``dtype`` into.
 
@@ -153,7 +299,7 @@ def accumulator_dtype(dtype: str, nl):
 
     Integer operands accumulate into int32, floating-point ones into fp32.
     Accumulating an integer product into a float would round partial sums
-    and break the exactness the all-ones check relies on -- and a GEMM of
+    and break the exactness the product check relies on -- and a GEMM of
     size K reaches K in the accumulator, which overflows an 8-bit type long
     before the last tile.
     """
@@ -173,9 +319,9 @@ def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = N
     # Checked before the toolchain import, so a bad strategy fails on any
     # machine rather than only on one with the Neuron SDK installed.
     strategy = tiling_strategy or TILING
-    if strategy not in ("streaming", "blocked"):
+    if strategy not in STRATEGIES:
         raise ValueError(
-            f"unknown tiling {strategy!r}; expected 'streaming' or 'blocked'"
+            f"unknown tiling {strategy!r}; expected one of {STRATEGIES}"
         )
 
     import neuronxcc.nki as nki  # type: ignore
@@ -207,9 +353,9 @@ def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = N
             for col in nl.affine_range(n // MOVING):
                 # Accumulate wider than the operands. Rounding each partial
                 # product back to the operand type would lose the sum and
-                # stop the all-ones check from landing on an exact integer;
-                # for int8 it would also overflow, since the product of an
-                # all-ones GEMM reaches K.
+                # stop the product check from landing on an exact integer;
+                # for 8-bit types it would also overflow, since the product
+                # reaches K times the row-tile's scale.
                 acc = nl.zeros(
                     (nl.par_dim(STATIONARY), MOVING),
                     dtype=accumulate_into, buffer=nl.psum,
@@ -307,8 +453,73 @@ def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = N
                 )
         return out
 
-    chosen = (tensor_virus_blocked if strategy == "blocked"
-              else tensor_virus_kernel)
+    @nki.jit
+    def tensor_virus_coalesced(lhs_t, rhs):
+        """The blocked kernel, with lhs loaded COALESCE_ROWS tiles at a time.
+
+        rhs is held in SBUF per column exactly as in the blocked kernel.
+        What changes is the lhs load: one DMA covers COALESCE_ROWS
+        stationary tiles side by side, so each partition row reads
+        COALESCE_ROWS * STATIONARY contiguous elements instead of
+        STATIONARY, and the row loop needs a quarter of the loads.
+
+        Written against a measurement rather than a model, which is the
+        difference from the tiling before it: blocked was justified by a
+        modelled 4.7x traffic cut that turned out to be 2.55x when
+        measured, and bought 6%. This one is justified by a transfer count
+        read from the hardware, and will be judged by the same count.
+
+        The accumulator is one 3D PSUM tensor indexed by row-in-block,
+        the same shape rhs_block uses in SBUF, so the rows accumulate
+        independently -- and two PSUM tensors are never added together,
+        which the compiler refuses (NCC_IBVF027, measured 2026-09-10).
+        """
+        k, m = lhs_t.shape
+        _, n = rhs.shape
+        k_tiles = k // CONTRACTION
+        width = STATIONARY * COALESCE_ROWS
+
+        out = nl.ndarray((m, n), dtype=accumulate_into, buffer=nl.shared_hbm)
+
+        for col in nl.affine_range(n // MOVING):
+            rhs_block = nl.ndarray(
+                (k_tiles, nl.par_dim(CONTRACTION), MOVING),
+                dtype=rhs.dtype, buffer=nl.sbuf,
+            )
+            for depth in nl.affine_range(k_tiles):
+                rhs_block[depth] = nl.load(
+                    rhs[depth * CONTRACTION:(depth + 1) * CONTRACTION,
+                        col * MOVING:(col + 1) * MOVING]
+                )
+
+            for block in nl.affine_range(m // width):
+                acc = nl.zeros(
+                    (COALESCE_ROWS, nl.par_dim(STATIONARY), MOVING),
+                    dtype=accumulate_into, buffer=nl.psum,
+                )
+                for depth in nl.sequential_range(k_tiles):
+                    # One load, COALESCE_ROWS stationary tiles wide.
+                    lhs_wide = nl.load(
+                        lhs_t[depth * CONTRACTION:(depth + 1) * CONTRACTION,
+                              block * width:(block + 1) * width]
+                    )
+                    for i in range(COALESCE_ROWS):
+                        acc[i] += nl.matmul(
+                            lhs_wide[:, i * STATIONARY:(i + 1) * STATIONARY],
+                            rhs_block[depth], transpose_x=True)
+
+                for i in range(COALESCE_ROWS):
+                    row = block * COALESCE_ROWS + i
+                    nl.store(
+                        out[row * STATIONARY:(row + 1) * STATIONARY,
+                            col * MOVING:(col + 1) * MOVING],
+                        value=acc[i],
+                    )
+        return out
+
+    chosen = {"streaming": tensor_virus_kernel,
+              "blocked": tensor_virus_blocked,
+              "coalesced": tensor_virus_coalesced}[strategy]
     return nki, nl, chosen
 
 
@@ -321,23 +532,25 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     """
     nki_backend.require_toolchain()
 
-    import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
     dtype = str(problem["dtype"])
     plan = gemm_plan(problem["shape"], dtype)
     strategy = str(problem.get("tiling") or TILING)
+    validate_tiling(plan, strategy)
     _, _, kernel = _build_kernel(dtype, strategy)
 
     device = xm.xla_device()
     torch_dtype = tiling.torch_dtype(dtype)
 
-    # All-ones operands make the product exactly K in every element, which is
-    # the correctness check. They are also the reason the kernel must not be
-    # constant-folded: the operands live in device memory and are read as
-    # data, not compiled in as literals.
-    lhs_t = torch.ones((plan["k"], plan["m"]), dtype=torch_dtype, device=device)
-    rhs = torch.ones((plan["k"], plan["n"]), dtype=torch_dtype, device=device)
+    # Row-distinct operands make every row-tile of the product a known,
+    # different multiple of K -- see rows_in_wrong_place for why all-ones
+    # operands could not tell a correct kernel from one that stored the
+    # wrong accumulator. The operands live in device memory and are read
+    # as data, not compiled in as literals, so they cannot be folded.
+    host_lhs_t, host_rhs = row_check_operands(plan, torch_dtype)
+    lhs_t = host_lhs_t.to(device)
+    rhs = host_rhs.to(device)
     xm.mark_step()
 
     # Compile outside the timed region, and compile the graph the loop will
@@ -367,15 +580,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    product_verified = None
-    if sink is not None:
-        try:
-            corner = float(sink[0][0])
-            far = float(sink[plan["m"] - 1][plan["n"] - 1])
-        except Exception:  # materialisation failed; leave unverified
-            corner = far = None
-        if corner is not None and far is not None and plan["k"]:
-            product_verified = (corner + far) / 2.0 / plan["k"]
+    # Read back after the clock stops.
+    product_verified, misplaced = read_product(sink, plan)
 
     flops_issued = plan["flops_per_pass"] * passes
     analytic_tflops = flops_issued / elapsed / 1e12
@@ -401,14 +607,67 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         # label is not comparable with one that has it.
         "tiling": strategy,
         "plan": plan,
-        # 1.0 means both sampled elements equal K exactly.
+        # 1.0 means both corners equal their expected multiple of K.
         "product_verified_ratio": product_verified,
+        # Every row-tile of the product, each checked against the value
+        # only its own rows produce. None when the product was not read.
+        "row_tiles_checked": plan["m"] // STATIONARY if misplaced is not None else None,
+        "row_tiles_wrong": len(misplaced) if misplaced is not None else None,
     }
 
-    wrong = verify_product_is_correct(product_verified)
-    if wrong:
-        result["warning"] = wrong
+    result["warning"] = product_warning(product_verified, misplaced)
+    # A product that is wrong, or was never read, means the FLOPs beside it
+    # describe work that did not happen; the orchestrator fails such a row
+    # rather than publishing its Score. Before 2026-09-10 this path only
+    # warned, so a verified-wrong product still reported PASS.
+    result["score_invalid"] = result["warning"] is not None
     return result
+
+
+def read_product(sink, plan: typing.Mapping[str, int]):
+    """``(product_verified_ratio, misplaced_row_tiles)`` for a product of
+    ``row_check_operands``, both None when it could not be read.
+
+    The whole product, not two corners: a sampled check is what let a
+    row-mixing kernel pass before. Called after the clock stops -- reading
+    back 8192^2 fp32 is 256 MiB and must not land in the timed region.
+    """
+    if sink is None or not plan["k"]:
+        return None, None
+    try:
+        host = sink.to("cpu")
+    except Exception:  # broad: materialisation failed; leave unverified
+        return None, None
+    last_tile = (plan["m"] - 1) // STATIONARY
+    corner = float(host[0][0]) / (plan["k"] * row_tile_scale(0))
+    far = float(host[-1][-1]) / (plan["k"] * row_tile_scale(last_tile))
+    return (corner + far) / 2.0, rows_in_wrong_place(host, plan["k"])
+
+
+def product_warning(product_verified, misplaced) -> typing.Optional[str]:
+    """Both warnings when both fire: the corner ratio says the product is
+    wrong, the row-tile count says how much of it."""
+    warnings = [w for w in (verify_product_is_correct(product_verified),
+                            verify_rows(misplaced)) if w]
+    return "; ".join(warnings) or None
+
+
+def verify_rows(misplaced) -> typing.Optional[str]:
+    """A warning when any row-tile holds a value its own rows cannot produce.
+
+    ``None`` misplaced means the product was never read, which
+    verify_product_is_correct already reports, so this stays quiet then.
+    """
+    if not misplaced:
+        return None
+    index, expected, (lowest, highest) = misplaced[0]
+    return (
+        f"{len(misplaced)} row-tile(s) hold values their own rows cannot "
+        f"produce (tile {index}: expected {expected:g}, found "
+        f"{lowest:g}..{highest:g}) -- the kernel wrote the wrong accumulator "
+        "or the wrong rows, and its FLOP count describes a product it did "
+        "not deliver"
+    )
 
 
 def verify_product_is_correct(
@@ -416,8 +675,9 @@ def verify_product_is_correct(
 ) -> typing.Optional[str]:
     """Check the GEMM computed the product it claims to have computed.
 
-    With all-ones operands every element of the product is exactly K, so a
-    ratio of 1.0 means the sampled corners hold the right value. The far
+    Each corner of the product is a known multiple of K (see
+    row_check_operands), so a ratio of 1.0 means both corners hold the
+    right value. The far
     corner matters as much as the near one: it is produced by the last tile
     of both loops, so a kernel that computed only its first tiles -- or whose
     accumulation was reshaped -- fails here while still posting a full FLOP

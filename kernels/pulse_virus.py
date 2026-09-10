@@ -116,19 +116,23 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     """
     nki_backend.require_toolchain()
 
-    import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
     dtype = str(problem["dtype"])
     plan = tensor_virus.gemm_plan(problem["shape"], dtype)
     cycle = duty_plan(problem)
+    # The same kernel and tiling tensor_virus runs, so the same shape rules
+    # and the same product check -- an all-ones check here would be blind
+    # to exactly the row mixing the coalesced tiling could introduce.
+    tensor_virus.validate_tiling(plan, tensor_virus.TILING)
     _, _, kernel = tensor_virus._build_kernel(dtype)
 
     device = xm.xla_device()
     torch_dtype = tiling.torch_dtype(dtype)
 
-    lhs_t = torch.ones((plan["k"], plan["m"]), dtype=torch_dtype, device=device)
-    rhs = torch.ones((plan["k"], plan["n"]), dtype=torch_dtype, device=device)
+    host_lhs_t, host_rhs = tensor_virus.row_check_operands(plan, torch_dtype)
+    lhs_t = host_lhs_t.to(device)
+    rhs = host_rhs.to(device)
     xm.mark_step()
 
     # Warm up the graph the loop runs, holding the result so the liveness
@@ -169,15 +173,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
 
     elapsed = time.perf_counter() - started
 
-    product_verified = None
-    if sink is not None:
-        try:
-            corner = float(sink[0][0])
-            far = float(sink[plan["m"] - 1][plan["n"] - 1])
-        except Exception:  # materialisation failed; leave unverified
-            corner = far = None
-        if corner is not None and far is not None and plan["k"]:
-            product_verified = (corner + far) / 2.0 / plan["k"]
+    product_verified, misplaced = tensor_virus.read_product(sink, plan)
+    product_wrong = tensor_virus.product_warning(product_verified, misplaced)
 
     flops_issued = plan["flops_per_pass"] * passes
 
@@ -202,10 +199,17 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         # compared them.
         "observed_duty": (loaded_s / elapsed) if elapsed else None,
         "warning": "; ".join(part for part in (
-            tensor_virus.verify_product_is_correct(product_verified),
+            product_wrong,
             verify_duty_cycle_was_observed(loaded_s, elapsed, cycle["duty"]),
         ) if part) or None,
+        # Only the product invalidates the Score; a missed duty cycle is a
+        # warning about the pulse, not about the arithmetic.
+        "score_invalid": product_wrong is not None,
         "plan": plan,
         "duty": cycle,
+        "tiling": tensor_virus.TILING,
         "product_verified_ratio": product_verified,
+        "row_tiles_checked": (plan["m"] // tensor_virus.STATIONARY
+                              if misplaced is not None else None),
+        "row_tiles_wrong": len(misplaced) if misplaced is not None else None,
     }

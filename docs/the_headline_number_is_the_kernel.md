@@ -1,5 +1,14 @@
 # The headline number is the kernel, not the part
 
+> **Resolved 2026-09-10, later the same day.** The coalesced tiling —
+> the lhs loaded four stationary tiles wide — runs at **70.42 TFLOPS**
+> against `torch.matmul`'s 66.25 at 8192³ (one session, every row-tile of
+> the product checked), and **71.80** by `neuron-monitor`. It is now the
+> default. The load width is the cause, isolated by experiment; see
+> [Coalescing the loads](#coalescing-the-loads). What follows is kept as
+> it was written, because how the gap was found and misdiagnosed twice is
+> the useful part.
+
 **trn1.2xlarge, 2026-09-10.** 8192³ bf16, 25s each, one process, both
 products verified exact against all-ones arithmetic.
 
@@ -199,7 +208,98 @@ duration overstates wall time — DMA *active* time fell only from 59% to
 lighter. DMA is not the whole critical path, and what is has not been
 found.
 
+## Coalescing the loads
+
+The previous section pointed at one change, so it was made. The
+`coalesced` tiling keeps blocked's rhs block in SBUF and loads the lhs
+**four stationary tiles wide** in one `nl.load` — 1,024 contiguous bytes
+per partition row instead of 256 — feeding four independent PSUM
+accumulators (4 × 2 KiB of the 16 KiB per partition).
+
+Predictions written before the first run: exact product; transfers well
+below blocked's; bytes about the same; faster than blocked, with a small
+gain meaning transfer count was not the constraint either.
+
+**4096³**, one execution each for the trace, all products exact:
+
+| graph | transfers | MB moved | mean size | TE instructions | TFLOPS |
+|---|--:|--:|--:|--:|--:|
+| streaming | 247,017 | 631.3 | 2.56 KB | 15,373 | 36.62 |
+| blocked | 174,942 | 248.0 | 1.42 KB | 16,482 | 38.75 |
+| **coalesced** | 94,190 | 269.5 | 2.86 KB | 16,501 | **71.78** |
+| XLA | 34,031 | 236.2 | 6.94 KB | 18,338 | 54.78 |
+
+**8192³, the pinned shape**, one session, through `run()` with the
+whole product checked (below):
+
+| path | TFLOPS | row-tiles wrong |
+|---|--:|--:|
+| streaming | 26.45 | 0 / 64 |
+| blocked | 28.16 | 0 / 64 |
+| **coalesced** | **70.42** | 0 / 64 |
+| XLA `torch.matmul` | 66.25 | — |
+
+A second 8192³ session read coalesced at 72.05 against streaming's 26.21.
+
+**The hand-written kernel now beats the compiler's matmul** — 1.06× at
+8192³, 1.31× at 4096³ — and is **2.66× the old headline**. The
+tensor-engine instruction count is the second quantity that says this is
+the same work done faster rather than less work: coalesced issues 16,501
+against blocked's 16,482.
+
+### What caused it — measured, not inferred
+
+Coalescing changed two things at once: the load width, and one lhs load
+now feeds four independent accumulators instead of one. Either could
+explain the gain, and the transfer counts argue against the obvious
+reading: coalesced makes 2.8× as many transfers as XLA, of less than half
+the mean size, and is faster. So "fewer, larger transfers" is not the
+mechanism, or not all of it.
+
+The isolating variant keeps the four accumulators and puts back the
+narrow loads — four `nl.load`s of one tile each, everything else
+identical. 8192³, trn1.2xlarge, same instance and day, product exact:
+
+| variant | accumulators | lhs load | TFLOPS |
+|---|--:|---|--:|
+| blocked | 1 | 1 tile | 28.16 |
+| four accumulators, narrow loads | 4 | 1 tile ×4 | **28.08** |
+| coalesced | 4 | 4 tiles ×1 | **70.42** |
+
+**The accumulators buy nothing; the wide load buys all of it.** What
+moved throughput is the number of lhs load instructions per matmul —
+one per four instead of one per one — not the number or size of the DMA
+transfers the trace counts, which is why the transfer counts did not
+predict the XLA comparison. Why a load instruction costs that much is not
+measured here; that it does is.
+
+### The check that would have passed a broken version
+
+All-ones operands make every output element K, whichever accumulator
+wrote it, so the product check that verified every tiling above could not
+see the one thing coalescing changed. A deliberately planted
+`value=acc[0]` — every row-tile of a block storing the first accumulator
+— run through the new `run()` at 4096³:
+
+```
+coalesced(MUT)   4096   186.82 TFLOPS  corners 0.625  row-tiles wrong 24/32
+```
+
+**186.8 TFLOPS from one NeuronCore, whose bf16 peak is 95** — twice
+what the core can do. The compiler eliminated the three matmul chains
+whose results were never stored, and the analytic rate counted them
+anyway. Under all-ones operands both
+corners would have read exactly K and this would have passed with ratio
+1.0.
+
+`run()` now uses operands under which each 128-row tile must hold a
+different multiple of K, and checks every tile after the clock stops.
+See `docs/checks_that_pass_by_accident.md` #20.
+
 ## What is settled
+
+**Now: correct and faster than the compiler's matmul**, at the pinned
+shape, by both the analytic rate and the monitor. Before coalescing:
 
 The kernel is **correct and slow**, which is the right way round. Its
 product verifies exactly at every shape tested, on both parts. Nothing

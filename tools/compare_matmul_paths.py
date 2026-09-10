@@ -10,6 +10,12 @@ shape, in the same process, with both products verified exact.
 a cross-platform reader comparing it against another accelerator's peak
 is comparing against a ceiling this repo built.
 
+**Closed the same day by the coalesced tiling, now the default.** One
+session, 8192^3, trn1.2xlarge 2026-09-10: tensor_virus 70.42 TFLOPS
+against torch.matmul's 66.25, every row-tile of the NKI product checked.
+The tool stays, because the question does not go away: it is what says
+whether the next change to the kernel kept it there.
+
 That is a fact about the suite, not a bug report about Trainium, and it
 belongs where anyone can re-run it:
 
@@ -91,7 +97,12 @@ def nki_kernel():
         "tflops": result["analytic_tflops"],
         "passes": result["passes"],
         "product": ratio,
-        "exact": ratio is not None and abs(ratio - 1.0) < 0.01,
+        "tiling": result.get("tiling"),
+        # Both corners and every row-tile. The corners alone cannot see a
+        # kernel that wrote the right value into the wrong rows -- see
+        # tensor_virus.rows_in_wrong_place.
+        "exact": (ratio is not None and abs(ratio - 1.0) < 0.01
+                  and result.get("row_tiles_wrong") == 0),
     }
 
 

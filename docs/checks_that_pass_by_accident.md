@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced nineteen of them, and they are collected
+would go. This repo has now produced twenty of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -359,6 +359,45 @@ a parse that finds no matches — all pass silently when they find nothing.
 Every such test in this suite now asserts the collection is non-empty
 before asserting anything about its contents.
 
+### 20. Every element has the same right answer
+
+tensor_virus checked its product with all-ones operands: every element of
+the result is exactly K. Two corners were read, both were K, the ratio was
+1.0. It had said 1.0 on every tiling since the kernel was written.
+
+The coalesced tiling splits each block of rows across four accumulators,
+so the first question about it is whether each accumulator lands on its
+own rows. The all-ones check cannot ask that question. If every element
+should be K, then an output where every row-tile holds accumulator 0's
+value is also every element K. A kernel storing the wrong accumulator,
+permuting them, or writing one row-tile four times scores exactly 1.0 —
+not approximately, exactly.
+
+Measured on trn1.2xlarge, 2026-09-10, at 4096³. With operands chosen so
+each 128-row tile must hold a different multiple of K
+(`lhs_t[k, m] = (m // 128) % 7 + 1`, rhs all ones), a deliberately
+planted `value=acc[0]` left **24 of 32** row-tiles wrong — tiles 1–3 of
+every block holding tile 0's value. Under all-ones operands the same
+broken kernel returns every element exact. The real coalesced kernel left
+0 of 32 wrong at 4096³ and 0 of 64 at the pinned 8192³.
+
+It gets worse when the broken kernel is timed. Run through `run()`, the
+planted defect posted **186.8 TFLOPS on one NeuronCore, whose bf16 peak
+is 95**: the compiler deleted the three matmul chains whose results were
+never stored, and the analytic rate still counted their FLOPs. So the
+blind check was not guarding a small error. It would have passed a
+headline figure twice the physical limit.
+
+The fix was not a better tolerance: it was inputs under which a wrong
+answer looks different from a right one. `run()` now builds those
+operands and checks every row-tile of the product after the clock stops
+(`rows_in_wrong_place`); a wrong tile becomes the run's warning.
+
+The general form: **a correctness check is only as strong as the set of
+wrong answers that produce a different output.** Uniform inputs collapse
+that set. Before trusting a check against a change, plant the defect the
+change could plausibly introduce and watch the check fail.
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -369,6 +408,8 @@ could disagree with it:
   string.
 - The stale statuses: a hardware record read next to a docstring.
 - The quantised Score: a cv read next to the Score's own resolution.
+- The row-mixing blind spot: a planted defect held against a check
+  that still read 1.0.
 - The tiling diagnosis: less traffic buying 1.06× — 4.7× by the model,
   2.55× when neuron-profile finally measured it.
 
@@ -377,4 +418,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-nineteen above were found by reading what a passing check had filtered out.
+twenty above were found by reading what a passing check had filtered out.

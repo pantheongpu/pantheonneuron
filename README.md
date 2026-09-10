@@ -90,8 +90,12 @@ A `neuron-profile` Score is a single deterministic NEFF replay; a
 difference is worth remembering before quoting a monitor figure to three
 decimals.
 
-**And `tensor_virus`'s TFLOPS is a floor, not this part's capability.** A
-`torch.matmul` at the same shape reaches 2.53× it. See
+**`tensor_virus` was a floor, not this part's capability, until
+2026-09-10.** A `torch.matmul` at the same shape reached 2.53× it. The
+coalesced tiling, now the default, closes that: 70.42 TFLOPS against
+`torch.matmul`'s 66.25 in one session, and 71.80 by `neuron-monitor`. The
+`tensor_virus`, `int_virus` and `pulse_virus` rows below are at the new
+default; older reports ran `streaming` and are ~2.7× lower. See
 [the headline TFLOPS figure is the kernel, not the
 part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 
@@ -102,9 +106,9 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.50 GB/s | `neuron-profile` |
 | `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
 | `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
-| `tensor_virus` | ✅ at the pinned 8192³ | 25.88 TFLOPS | `neuron-monitor` |
-| `int_virus` | ✅ at the pinned 8192³, uint8 | 31.58 TOPS | `neuron-monitor` |
-| `pulse_virus` | ✅ at the pinned 8192³, 50% duty | 13.85 TFLOPS | `neuron-monitor` |
+| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 71.80 TFLOPS | `neuron-monitor` |
+| `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 37.42 TFLOPS | `neuron-monitor` |
 | `omni_virus` | ✅ at the pinned 8192³ | 54.02 TFLOPS | `neuron-monitor` |
 | `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
 | `graph_replay` | ✅ rate trimmed of compile time | 3,040.2 graph-steps/s | `neuron-monitor` |
@@ -522,7 +526,7 @@ of them could have been found by a workload reporting one rate and passing.
 
 | Document | What it establishes |
 |---|---|
-| [The headline number is the kernel, not the part](docs/the_headline_number_is_the_kernel.md) | `torch.matmul` reaches 2.53× `tensor_virus` at a matched shape, so the suite's compute figure is a floor rather than a capability |
+| [The headline number is the kernel, not the part](docs/the_headline_number_is_the_kernel.md) | `torch.matmul` reached 2.53× `tensor_virus` at a matched shape; the coalesced tiling closed it (70.42 against 66.25), and the load width, not the accumulators, is why |
 | [A dtype the engine refuses](docs/a_dtype_the_engine_refuses.md) | int8 is the slowest arithmetic on this part, fp8 is refused outright, and NKI and XLA do not accept the same operand set |
 | [XLA has no in-place write](docs/xla_has_no_in_place_write.md) | `cache[:, a:b, :] = entry` lowers to dynamic-update-slice and produces a new tensor — three wrong diagnoses before this one |
 | [Cross-platform comparability](docs/cross_platform_comparability.md) | Which workloads share a name with a pantheongpu row and must not be compared to it |
@@ -856,11 +860,12 @@ how many chips an instance carries.
 | `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
 | `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
 | `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
-| `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | **69.8%** |
+| `pulse_virus` | 37.42 TFLOPS | 1 of 2, 50% duty | **78.8%** |
+| `tensor_virus` | 71.80 TFLOPS | 1 of 2 | **75.6%** |
+| `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |
 | `omni_virus` | 54.0 TFLOPS | 1 of 2 | 56.8% |
 | `transformer_virus` | 53.2 TFLOPS | 1 of 2 | 56.0% |
-| `pulse_virus` | 13.85 TFLOPS | 1 of 2, 50% duty | 29.2% |
-| `tensor_virus` | 26.1 TFLOPS | 1 of 2 | **27.5%** |
+| `tensor_virus`, `streaming` tiling (before 2026-09-10) | 26.1 TFLOPS | 1 of 2 | 27.5% |
 
 "Cores it had" is what the run exposed, not what the problem says. The
 profiler reservation sets `NEURON_RT_VISIBLE_CORES=0` on every
@@ -900,9 +905,17 @@ would call a saturated memory path unused.
 
 It also separates the two kinds of gap. The bandwidth kernels reach
 51–62% of HBM — ordinary for a streaming benchmark, and a figure worth
-comparing across vendors. `tensor_virus` reaches 27.5%, which is a
-statement about the kernel: a plain `torch.matmul` on the same core
-reaches 69.8%, and the transformer family 56%.
+comparing across vendors. `tensor_virus` reached 27.5% under the
+`streaming` tiling, which was a statement about the kernel: a plain
+`torch.matmul` on the same core reaches 69.8%. Coalescing its lhs loads
+took it to 75.6% — past the compiler's matmul — and nothing about the
+silicon changed in between.
+
+**A Score above 105% of its ceiling now fails the row.** A planted defect
+in the coalesced kernel posted 186.8 TFLOPS on one 95 TFLOPS core: the
+compiler removed matmuls whose results were never stored, and the rate
+counted them. That figure is not a measurement, and the row says so and
+publishes no Score, while keeping the number in its Detail.
 
 **An earlier version of this table was wrong, in the flattering
 direction.** `kernels/memory_read.py` had long quoted "the part's ~820
@@ -923,38 +936,47 @@ which is twelve chips' worth. Compute reconciles on both — 16 × 190 =
 
 ### The headline TFLOPS figure is the kernel, not the part
 
-trn1.2xlarge, 2026-09-10. 8192³ bf16, 25s each, one process, both
-products verified exact against all-ones arithmetic.
+**Until 2026-09-10 it was.** trn1.2xlarge, 8192³ bf16, one process:
+`tensor_virus` 26.19 TFLOPS, a plain `torch.matmul` through `neuronx-cc`
+66.32 — **2.53×** this suite's own compute kernel. Quoted against another
+accelerator's peak, 26.1 would have reported a hand-written kernel's
+shortfall as a property of the silicon.
 
-| path | TFLOPS | passes |
+**The coalesced tiling closes it, and is now the default.** It keeps the
+blocked tiling's rhs block in SBUF and loads the lhs four stationary
+tiles wide in one `nl.load`. 8192³, one session, every row-tile of every
+product checked:
+
+| path | TFLOPS | row-tiles wrong |
 |---|--:|--:|
-| NKI (`tensor_virus`) | 26.19 | 598 |
-| XLA (`torch.matmul`) | **66.32** | 1510 |
+| `tensor_virus`, streaming (old default) | 26.45 | 0 / 64 |
+| `tensor_virus`, blocked | 28.16 | 0 / 64 |
+| **`tensor_virus`, coalesced** | **70.42** | 0 / 64 |
+| `torch.matmul` | 66.25 | — |
 
-**A plain `torch.matmul` compiled by `neuronx-cc` is 2.53× this suite's
-own compute kernel.**
+`neuron-monitor`, the declared Score source, reads **71.80** (median of
+three, cv 0.035).
 
-`tensor_virus` is what a cross-platform comparison joins on, and the
-premise of that comparison is that both sides ran the same problem on
-comparable terms. A 2.53× gap does not survive that premise: quoting 26.1
-TFLOPS against another accelerator's peak compares a compiler-generated
-matmul on one side against a hand-written kernel on the other, and
-reports the difference as a property of the silicon.
+What caused it was measured, not guessed. Coalescing changes the load
+width and gives each lhs load four independent accumulators, so a
+variant with the four accumulators and narrow loads was run too:
+**28.08** — blocked's figure. The accumulators buy nothing; loading the
+lhs in one wide instruction instead of four narrow ones buys all of it.
+Operand bytes barely moved (269.5 MB against blocked's 248.0 at 4096³),
+and coalesced still makes 2.8× as many DMA transfers as `torch.matmul`
+while beating it — so neither traffic nor transfer count was the
+constraint. Two earlier diagnoses, bandwidth and serialisation, were each
+believed because a plausible number agreed with them; this one was an
+experiment that could have come out the other way.
 
-**So the figure is a floor, not a capability.** It is a real, correct,
-sustained measurement of what this kernel does on this part. It is not
-what this part does, and the kernel's docstring now says so in those
-words.
-
-The cause is *not* operand bandwidth — that was the first diagnosis and
-it is wrong. Arithmetic intensity is flat near 102 FLOP/byte, and 102 ×
-`memory_read`'s 256.2 GB/s is 26.1 TFLOPS, which matches almost exactly
-and is a coincidence: blocked tiling cuts operand traffic (4.7× modelled,
-2.55× measured) and buys
-1.06×. The ceiling is somewhere neither the arithmetic nor the tiling
-experiment has looked. Recording "2.53× slower, cause unknown" is worth
-more than a third confident diagnosis — the first two were both wrong,
-and each was believed because a plausible number agreed with it.
+**The check that verified every tiling above could not see what
+coalescing changed.** All-ones operands make every output element K,
+whichever accumulator wrote it. A planted `value=acc[0]` defect ran at
+186.8 TFLOPS — twice one core's peak, because the compiler dropped the
+unstored matmuls — and both of its corners read exactly K. `run()` now
+builds operands under which each 128-row tile must hold a different
+multiple of K and checks every tile; a wrong product fails the row. See
+[the catalogue, #20](docs/checks_that_pass_by_accident.md).
 
 ```bash
 python tools/compare_matmul_paths.py

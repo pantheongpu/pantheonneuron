@@ -1,0 +1,88 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. tensor_virus coalesced tiling.
+# Raw output. Removed only: ssh/sync status lines, and the traceback of a
+# rate script that crashed on an f-string before running (it was rerun;
+# the rerun is the "rates at 8192^3" block). bf16. NEURON_RT_VISIBLE_CORES=0.
+
+## 1. 4096^3: rates and DMA transfer counts (probe_coalesce.py; all-ones product check)
+=== phase 1: compile + run all four on core 0 ===
+
+graph        TFLOPS   product
+streaming     36.62       1.0
+blocked       38.75       1.0
+coalesced     71.78       1.0
+xla           54.78       1.0
+=== phase 2: count transfers on core 1 ===
+
+graph        transfers        MB   mean KB   >=64KB  TE instr
+streaming      247,017     631.3      2.56        0     15373
+blocked        174,942     248.0      1.42        0     16482
+coalesced       94,190     269.5      2.86        0     16501
+xla             34,031     236.2      6.94      128     18338
+
+coalesced / blocked:  transfers 0.538x   bytes 1.087x   mean size 2.02x
+
+
+## 2. 8192^3: row-distinguishing check (lhs_t[k,m] = (m//128)%7+1, rhs ones), then rates
+=== row check at the pinned 8192^3 ===
+coalesced  row-tiles checked  64  wrong   0  every element exact: True
+=== rates at 8192^3, one session ===
+
+streaming    26.21 TFLOPS  product 1.0  warning None
+blocked      27.85 TFLOPS  product 1.0  warning None
+coalesced    72.05 TFLOPS  product 1.0  warning None
+
+
+## 3. The new run() (row-distinct operands, whole-product check) incl. a planted acc[0] defect
+=== planted acc[0] defect through run(), 4096^3 ===
+coalesced(MUT)   4096   186.82 TFLOPS  corners 0.625  row-tiles wrong 24/32
+    warning: product is 0.625x the expected value -- the GEMM did not compute the pinned problem, so its FLOP count describes work that did not happen
+=== real kernels through the new run(), pinned 8192^3 ===
+streaming    8192    26.45 TFLOPS  corners 1.0  row-tiles wrong 0/64
+    warning: None
+blocked      8192    28.16 TFLOPS  corners 1.0  row-tiles wrong 0/64
+    warning: None
+coalesced    8192    70.42 TFLOPS  corners 1.0  row-tiles wrong 0/64
+    warning: None
+xla          8192    66.25 TFLOPS  product 1.0
+
+
+## 4. Isolating variant: coalesced's 4 accumulators with blocked's narrow lhs loads
+#    (only the lhs load changed: four one-tile nl.loads instead of one four-tile load)
+=== isolating variant: 4 accumulators, narrow loads, 8192^3 ===
+coalesced[pnnarrow]   8192    28.08 TFLOPS  corners 1.0  row-tiles wrong 0/64
+    warning: None
+
+## 5. Harness + neuron-monitor, PANTHEON_NEURON_GEMM_TILING=coalesced, --duration 30 --repeat 3
+#    Before the Percent Of Peak median fix: 75.73% is the last repeat's 71.943 / 95,
+#    beside a published median Score of 71.7968.
+[PANTHEON-NEURON] -> tensor_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    75.73% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 65.0546 to 71.943, median 71.7968, cv 0.0565
+
+## 6. New default (coalesced), whole-product check in run() and pulse_virus, --duration 30 --repeat 3
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> tensor_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    75.58% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 67.5537 to 71.8714, median 71.7972, cv 0.0351
+[PANTHEON-NEURON] report: database/pantheon_neuron_report_20260910_212815.json
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> int_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    3 repeats: 72.0528 to 77.6228, median 77.5873, cv 0.0423
+[PANTHEON-NEURON] report: database/pantheon_neuron_report_20260910_212959.json
+[PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> pulse_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    78.78% of 47.5 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 34.8179 to 37.4194, median 37.4192, cv 0.0411
+[PANTHEON-NEURON] report: database/pantheon_neuron_report_20260910_213214.json
+
+#    Report rows: tensor_virus PASS Detail '' 71.7972 TFLOPS 75.58%; int_virus PASS Detail ''
+#    77.5873 TOPS; pulse_virus PASS Detail '' 37.4192 TFLOPS 78.78%. An empty Detail means the
+#    product was read back and every row-tile was exact -- either failure sets a warning and
+#    fails the row.
