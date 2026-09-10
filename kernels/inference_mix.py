@@ -729,10 +729,16 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         "plan": plan,
         "score_method": "workload",
         "analytic_basis": "requests completed / wall time",
+        # Both batches are ones and both go through `layers` blocks, so
+        # the last one to run leaves 1 + layers * 1.8413 -- 59.92 at the
+        # pinned 32. A scheduler that ran a single block per "request" was
+        # the original defect here, and this is the check that would have
+        # caught it: one block leaves 2.84, not 59.92.
+        "expected_output": transformer_ops.stacked_block_output(layers),
         **_mix_warning(
             steps, period, prefills, decode_steps, decode_requests,
-            transformer_ops.output_check(
-                transformer_ops.read_back(sink), "serving output")),
+            transformer_ops.stack_check(
+                transformer_ops.read_back(sink), layers)),
     }
 
 

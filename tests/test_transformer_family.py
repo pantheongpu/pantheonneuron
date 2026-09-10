@@ -1716,3 +1716,31 @@ def test_the_scale_is_named_once():
     code = sourcecheck.function_code(mix.run_quantized_gemm)
     assert "0.02" not in code
     assert "SCALE" in code
+
+
+def test_serving_mix_checks_its_depth_and_would_have_caught_its_own_defect():
+    """A scheduler running one block per "request" was the defect here.
+
+    One block leaves 2.84 where thirty-two leave 59.92, so the depth
+    check separates them by a factor of twenty -- and the finiteness
+    check that was there could not tell them apart at all.
+    """
+    code = sourcecheck.flat_function_code(inference_mix.run_serving_mix)
+    assert "stack_check ( transformer_ops . read_back ( sink ) , layers )" in code
+    assert '"expected_output"' in code
+
+    one_block = transformer_ops.stacked_block_output(1)
+    full = transformer_ops.stacked_block_output(32)
+    assert full / one_block > 20
+    # And the check rejects the shallow answer against the deep expectation.
+    assert transformer_ops.verify_stack_computed_its_depth(one_block, 32)
+
+
+def test_the_depth_check_takes_layers_not_a_label():
+    """stack_check's second argument is a depth; output_check's was a
+    name. Swapping one for the other without changing the argument would
+    have compared against a string.
+    """
+    import inspect
+    signature = inspect.signature(transformer_ops.stack_check)
+    assert list(signature.parameters) == ["observed", "layers"]

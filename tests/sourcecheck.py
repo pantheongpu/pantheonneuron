@@ -72,6 +72,27 @@ def code_only(source: str) -> str:
     return " ".join(kept)
 
 
+def flat(source: str) -> str:
+    """Collapse all whitespace, so a match cannot depend on line wrapping.
+
+    ``code_only`` joins tokens with single spaces but keeps the newlines
+    the tokenizer emits, so a call split across lines does not match the
+    same call written on one. Four assertions in this suite have broken
+    or passed on that difference -- a check about how code is formatted
+    rather than what it does, which is the thirteenth entry in
+    docs/checks_that_pass_by_accident.md.
+
+    Use this whenever the assertion is about a construct rather than a
+    single identifier.
+    """
+    return " ".join(source.split())
+
+
+def flat_function_code(function) -> str:
+    """``function_code`` with the wrapping flattened out."""
+    return flat(function_code(function))
+
+
 def function_code(function) -> str:
     """``code_only`` over a function's own source.
 

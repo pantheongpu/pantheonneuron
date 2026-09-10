@@ -339,3 +339,21 @@ def test_a_string_operand_is_never_mistaken_for_a_docstring():
     kept = sourcecheck.code_only('x = "value"\nreturn_value = f("arg")\n')
     assert '"value"' in kept
     assert '"arg"' in kept
+
+
+def test_flat_collapses_the_wrapping_a_call_was_split_across():
+    """Four assertions in this suite have broken or passed on wrapping.
+
+    code_only joins tokens with single spaces but keeps the tokenizer's
+    newlines, so a call split across lines does not match the same call
+    written on one -- a check about formatting rather than about code.
+    """
+    wrapped = sourcecheck.code_only(
+        "f(\n    a,\n    b,\n)\n")
+    assert "f ( a , b , )" not in wrapped
+    assert "f ( a , b , )" in sourcecheck.flat(wrapped)
+
+
+def test_flat_leaves_a_single_line_alone():
+    assert sourcecheck.flat("a  b\tc") == "a b c"
+    assert sourcecheck.flat("") == ""
