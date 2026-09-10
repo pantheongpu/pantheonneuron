@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced thirteen of them, and they are collected
+would go. This repo has now produced fourteen of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -221,7 +221,27 @@ Related, and the same root: an ordering assertion over raw source (#5),
 and a status check matching an exact phrase (#7). All three test how
 something is written rather than what it says.
 
-### 13. The check passes because the collection is empty
+### 13. The summary is over a wider scope than it claims
+
+`validate_hardware.sh` ends by printing what the run proved. It built
+that from `glob("database/*.json")` with no date filter, keeping the
+newest row per workload name — so on an instance carrying reports from a
+fortnight earlier it announced **"Workloads run: 26, PASS 26"** for a run
+that ran 24.
+
+Two of the extra three cannot run on a single-device part at all. The
+summary credited the pass with workloads the hardware refuses.
+
+Nothing about it looked wrong. The count was plausible, every row was a
+real row from a real run, and the figure was copied into the README
+before the discrepancy surfaced — in a test written for something else
+entirely, which refused to record `all_reduce` as both passed and never
+run.
+
+An aggregate is a claim about a scope. This one never stated its scope,
+so nothing could check it.
+
+### 14. The check passes because the collection is empty
 
 Not yet caught in the wild here, and guarded against on the way in: a
 coverage check over a directory, a sweep over "every INTERNAL workload",
@@ -245,5 +265,5 @@ So the practice that finds these is the same one that finds kernel
 defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
-is evidence about the checks that exist, not about the code. Four of the
-thirteen above were found by reading what a passing check had filtered out.
+is evidence about the checks that exist, not about the code. Five of the
+fourteen above were found by reading what a passing check had filtered out.
