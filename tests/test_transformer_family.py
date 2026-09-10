@@ -1744,3 +1744,56 @@ def test_the_depth_check_takes_layers_not_a_label():
     import inspect
     signature = inspect.signature(transformer_ops.stack_check)
     assert list(signature.parameters) == ["observed", "layers"]
+
+
+# -- a chain link that could not change the chain ----------------------------
+
+def test_tanh_saturates_so_the_vector_stage_was_invisible():
+    """omni_virus drives four engines in a dependent chain. One link was
+    not dependent.
+
+    Both operands were ones, so the matmul produced `tile` -- 8192 at the
+    pinned shape -- and tanh saturates to exactly 1.0 for any input above
+    about nine. The vector stage's `* 1.0001 + 0.5` therefore changed the
+    output by zero: deleting the line would have given bit-identical
+    results.
+    """
+    saturated = math.tanh(8192.0)
+    with_vector = math.tanh(8192.0 * 1.0001 + 0.5)
+    assert saturated == with_vector == 1.0
+
+
+def test_the_scaled_chain_carries_the_vector_stage():
+    """1.0 in, 1.5001 after the vector stage, and tanh separates them."""
+    scaled = math.tanh(1.0 * 1.0001 + 0.5)
+    without = math.tanh(1.0)
+    assert abs(scaled - without) / without > 0.15
+
+
+def test_the_chain_output_follows_from_the_tile():
+    """0.905166 * tile * (tile + 1) / 2, and nothing else."""
+    for tile in (2048, 4096, 8192):
+        expected = math.tanh(1.5001) * tile * (tile + 1) / 2.0
+        assert omni_virus._chain_output(tile) == pytest.approx(expected)
+
+
+def test_the_bf16_cast_of_the_cumsum_averages_out():
+    """The cumsum runs in fp32 and is cast once; the closing matmul
+    accumulates in fp32. So per-element rounding does not accumulate, and
+    the tolerance is about correctness rather than arithmetic.
+    """
+    def bf16(value):
+        ulp = 2.0 ** (math.floor(math.log2(abs(value))) - 7)
+        return round(value / ulp) * ulp
+
+    tile, per_step = 8192, math.tanh(1.5001)
+    walked = sum(bf16(per_step * j) for j in range(1, tile + 1))
+    assert abs(walked / omni_virus._chain_output(tile) - 1.0) < 1e-4
+
+
+def test_omni_virus_scales_its_left_operand_and_checks_the_answer():
+    code = sourcecheck.flat_function_code(omni_virus.run)
+    assert "torch . full ( ( tile , tile ) , 1.0 / tile" in code
+    assert "lhs = torch . ones (" not in code
+    assert "equals_check" in code
+    assert "output_check" not in code

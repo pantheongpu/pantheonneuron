@@ -979,6 +979,7 @@ _PROVENANCE_KEYS = (
     # than take the PASS on faith.
     "expected_output",
     "expected_loss",
+    "ran_pinned_shape",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",
