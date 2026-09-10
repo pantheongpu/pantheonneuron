@@ -310,6 +310,21 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             detail = "; ".join(filter(None, [detail, window]))
 
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
+
+    # omni_virus exists to load every engine at once, and reported only an
+    # aggregate TFLOPS -- so the one workload whose whole premise is
+    # per-engine behaviour published nothing about any engine.
+    #
+    # omni_virus.engine_activity was written to read exactly these
+    # counters and was never called from anywhere. The counters are on the
+    # monitor's side, not the kernel's, so the call has to be here: the
+    # kernel cannot see them, which is presumably how it came to be
+    # written and left unwired.
+    if workload.name == "omni_virus" and status == "PASS":
+        activity = omni_virus.engine_activity(metrics)
+        if activity:
+            _LAST_RUN.setdefault(workload.name, {})["engine_activity"] = activity
+
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
         status = "FAIL"
         detail = f"{metrics['execution_errors']} Neuron execution error(s)"
@@ -871,6 +886,12 @@ _PROVENANCE_KEYS = (
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",
+    # omni_virus: which engines the monitor actually saw active. The
+    # workload's premise is that it loads all of them, and an aggregate
+    # TFLOPS cannot show whether it did. A counter absent here is a
+    # property of the part -- trn1 exposes 90 counters against inf2's 108
+    # -- not an idle engine, which is why absent and zero stay distinct.
+    "engine_activity",
     # pcie_bandwidth: says whether the row predates the preallocated-buffer
     # fix, which is the difference between two incomparable methodologies.
     "buffers",

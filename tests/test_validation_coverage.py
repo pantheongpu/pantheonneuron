@@ -195,7 +195,30 @@ def test_no_test_module_defines_the_same_name_twice():
     assert not offenders, offenders
 
 
-def test_every_verify_function_is_called_from_production_code():
+# Production functions that legitimately have no production call site,
+# each with the reason it is an exception rather than an oversight.
+#
+# The list is deliberately short and deliberately explicit. Restricting
+# the sweep to names starting with "verify_" would shrink it to nothing
+# and was the first version of this check -- which found two dead
+# functions and missed four more, including two added the same afternoon
+# by the author of the check.
+CALLED_ONLY_BY_TESTS = {
+    # Registry guards. tests/test_score_schema.py walks every pinned
+    # problem and asks whether the engine will run its dtype. That is a
+    # policy assertion about the registry, not a runtime decision, so
+    # there is nothing at runtime for it to gate.
+    "engine_accepts",
+    "refusal",
+    # A property of the pinned inputs, asserted rather than computed: the
+    # inputs are built so every expert receives exactly `capacity` tokens.
+    # Nothing at runtime needs the answer, because the inputs cannot make
+    # it come out otherwise -- and a test proving that is the point.
+    "routing_balance",
+}
+
+
+def test_every_production_function_is_called_from_production_code():
     """Two were not, and both had passing tests.
 
     tensor_virus.verify_against_monitor and
@@ -234,15 +257,17 @@ def test_every_verify_function_is_called_from_production_code():
         for node in ast.parse(text).body:
             if not isinstance(node, ast.FunctionDef):
                 continue
-            if not node.name.startswith(("verify_", "check_")):
+            if node.name.startswith("__"):
+                continue
+            if node.name in CALLED_ONLY_BY_TESTS:
                 continue
             # One occurrence is the definition itself.
             if code.count(node.name) <= 1:
                 unreachable.append(f"{os.path.basename(path)}:{node.name}")
 
     assert not unreachable, (
-        f"defined and never called: {unreachable} -- either wire it in or "
-        "delete it, but a check that does not run is not a check")
+        f"defined and never called: {unreachable} -- either wire it in, "
+        "delete it, or name it in CALLED_ONLY_BY_TESTS with a reason")
 
 
 def test_the_readme_status_table_lists_every_workload():

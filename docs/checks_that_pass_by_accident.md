@@ -168,9 +168,22 @@ real `total_time` and publishes a bandwidth an order of magnitude too
 fast. The inline copy inherited the same gap. Nobody found it because
 nobody ran it, and nobody ran it because the tests passed.
 
-Both are now guarded by a sweep asserting every `verify_*` function in
-production code is called from production code, read through the comment
-filter so a docstring crediting a function does not count as calling it.
+Both are now guarded by a sweep asserting every function in production
+code is called from production code, read through the comment filter so a
+docstring crediting a function does not count as calling it.
+
+**The first version of that sweep was itself one of these.** It restricted
+itself to names starting with `verify_`, which is the shape the two known
+cases happened to have. Widening it to every production function found
+four more — including `tiling.engine_accepts` and `tiling.refusal`, added
+the same afternoon by the author of this document, in the commit that
+added the entry above.
+
+A check written to catch a class of defect, scoped to the instances that
+had already been found, is a check that can only ever confirm what is
+already known. There is now an explicit `CALLED_ONLY_BY_TESTS` allowlist
+naming each legitimate exception with its reason, so the exceptions are
+visible rather than implied by a prefix.
 
 ### 11. The check passes because the collection is empty
 
