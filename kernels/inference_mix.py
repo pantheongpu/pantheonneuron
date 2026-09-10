@@ -79,6 +79,11 @@ def run_fused_attention(problem: typing.Mapping[str, typing.Any],
         "elapsed_s": elapsed,
         "attention_tiles_per_s": tiles / elapsed if elapsed else 0.0,
         "flops_issued": flops,
+        # The rate, not just the total. A tile count cannot be checked
+        # against anything; a TFLOPS figure can be held next to the ~26
+        # this part reaches on a dense matmul, and attention running at
+        # half that is a result rather than a number.
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "attention tiles / wall time",
         **transformer_ops.output_check(
@@ -285,19 +290,28 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
 
     sink = None
     routed = 0
+    passes = 0
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
         sink = route()
         xm.mark_step()
         routed += tokens
+        passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+
+    # One matmul per expert over its capacity of token vectors. Counted so
+    # the routed-token rate has something beside it: a token count says
+    # nothing about whether the dispatch did the arithmetic it should.
+    flops = passes * experts * 2 * capacity * hidden * hidden
 
     return {
         "routed_tokens": routed,
         "elapsed_s": elapsed,
         "routed_tokens_per_s": routed / elapsed if elapsed else 0.0,
+        "flops_issued": flops,
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "experts": experts,
         "top_k": top_k,
         # Slots per expert. The dispatch is one matmul of this many token

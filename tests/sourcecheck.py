@@ -18,7 +18,20 @@ import io
 import tokenize
 import typing
 
-_SEPARATORS = (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT)
+# A docstring is the first statement of a module, class or function, so it
+# follows a *logical* line end or an indent. NL is deliberately absent: it
+# marks a non-logical newline, the kind inside brackets, and treating it as
+# a statement boundary made every dict key on a continuation line look like
+# a docstring and vanish.
+#
+#     {"key": 1,        ->    { : 1 ,
+#      "other": 2}             : 2 }
+#
+# Which silently broke every check written against a dict key -- an `in`
+# assertion could not pass, and worse, a `not in` assertion passed for the
+# wrong reason. Found 2026-09-10 when an assertion about "implied_tflops"
+# failed against source that demonstrably contained it.
+_SEPARATORS = (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT)
 
 
 def code_only(source: str) -> str:

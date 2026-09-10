@@ -985,3 +985,46 @@ def test_serving_mix_warms_both_graph_shapes():
     code = sourcecheck.function_code(inference_mix.run_serving_mix)
     warmup = code[:code.index("while time . perf_counter")]
     assert "for shape in ( decode_batch , prompt_batch )" in warmup
+
+
+# -- a rate with nothing beside it cannot be checked --------------------------
+
+@pytest.mark.parametrize("function", ["run_fused_attention", "run_moe_router"])
+def test_the_attention_and_router_rates_carry_an_implied_flops(function):
+    """A tile or token count says nothing about whether the arithmetic
+    happened. Every defect found in this suite came from one number
+    disagreeing with another, and these two had nothing to disagree with.
+    """
+    code = sourcecheck.function_code(getattr(inference_mix, function))
+    assert '"implied_tflops"' in code
+    assert '"flops_issued"' in code
+
+
+def test_the_router_counts_its_passes():
+    """implied_tflops needs a pass count, and this loop had none."""
+    code = sourcecheck.function_code(inference_mix.run_moe_router)
+    assert "passes = 0" in code
+    assert "passes += 1" in code
+
+
+def test_the_implied_rates_land_where_the_hardware_says_they_should():
+    """Sanity, as arithmetic: both should be a fraction of a dense matmul.
+
+    Measured on trn1.2xlarge: fused_attention 6,036.6 tiles/s and
+    moe_router 254,742.6 routed-tokens/s, against tensor_virus at 26.1
+    TFLOPS dense. Attention is softmax-bound and dispatch is
+    gather-bound, so both being under the dense figure is the expected
+    shape -- and either exceeding it would mean the FLOP count is wrong.
+    """
+    attention = PROBLEMS["fused_attention"]
+    hidden = attention["heads"] * attention["head_dim"]
+    passes = 6036.5837 / attention["heads"]
+    implied = passes * 2 * (2 * attention["seq"] ** 2 * hidden) / 1e12
+    assert 5 < implied < 26.1, implied
+
+    router = PROBLEMS["moe_router"]
+    capacity = inference_mix.expert_capacity(
+        router["tokens"], router["top_k"], router["experts"])
+    passes = 254742.6 / router["tokens"]
+    implied = passes * router["experts"] * 2 * capacity * router["hidden"] ** 2 / 1e12
+    assert 5 < implied < 26.1, implied

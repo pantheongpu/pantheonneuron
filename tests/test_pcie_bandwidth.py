@@ -94,6 +94,25 @@ def test_the_code_only_filter_ignores_comments():
     assert "forbidden" in sourcecheck.code_only("forbidden = 1\n")
 
 
+def test_the_filter_keeps_dict_keys_on_continuation_lines():
+    """It used to eat them, which silently broke every check about one.
+
+    A dict key after a comma sits behind a non-logical newline, and
+    treating that as a statement boundary made it look like a docstring.
+    An `in` assertion could then never pass, and a `not in` assertion
+    passed for entirely the wrong reason.
+    """
+    kept = sourcecheck.code_only('x = {\n    "key": 1,\n    "other": 2,\n}\n')
+    assert '"key"' in kept and '"other"' in kept
+
+
+def test_the_filter_still_drops_real_docstrings():
+    """Module, function and class, which is what it is for."""
+    assert "mod" not in sourcecheck.code_only('"""mod"""\nx = 1\n')
+    assert "doc" not in sourcecheck.code_only('def f():\n    """doc"""\n    return 1\n')
+    assert "cls" not in sourcecheck.code_only('class C:\n    """cls"""\n    x = 1\n')
+
+
 def test_both_legs_copy_into_a_preallocated_destination():
     """The fix, asserted against the source: neither leg may allocate per pass.
 

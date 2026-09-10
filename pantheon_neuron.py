@@ -636,6 +636,10 @@ _PROVENANCE_KEYS = (
     # one after another.
     "concurrent_window_s",
     "worker_span_s",
+    # fused_attention and moe_router report a tile or token rate, which
+    # nothing can check. implied_tflops can be held against the ~26 this
+    # part reaches on a dense matmul.
+    "flops_issued",
     # serving_mix: a request is many scheduler steps, so both rates are
     # wanted, and implied_tflops is what a request count cannot contradict.
     "scheduler_steps_per_s",
