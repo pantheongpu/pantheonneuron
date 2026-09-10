@@ -86,13 +86,18 @@ decimals.
 | `rag_embedding` | ✅ 12-layer encoder | 853.7 vectors/s | workload |
 | `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
 | `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
-| `pcie_bandwidth` | ⚠️ d2h asymmetry unexplained | 3.89 GB/s | workload |
+| `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 3.89 GB/s | workload |
 | `serving_mix` | ⚠️ completes no decode request at 20 s | 0.0312 requests/s | workload |
 | `all_reduce` / `p2p_thrasher` | ❌ **cannot be run** — quota | — | `nccom-test` |
 
-Two rows carry a caveat the Score cannot express on its own. `pcie_bandwidth`
-reproduces a 6× d2h/h2d split on trn1 that is absent on inf2 and survives
-three methodologies; **do not cite the d2h figure as a link property**.
+Two rows carry a caveat the Score cannot express on its own.
+`pcie_bandwidth`'s 6× d2h/h2d split is now explained, and it is not a link
+fault: a size sweep found h2d reaching **11.55 GB/s at 16 MiB** — 72% of
+Gen4 x8, a healthy link — while d2h holds ~2.9 GB/s to 16 MiB and collapses
+to 0.88 by 64 MiB. A one-directional cliff between two sizes is a staging
+buffer. **The pinned 1 GiB sits past it in both directions**, so the Score
+measures large-transfer cost rather than link bandwidth; whether that is the
+question worth pinning is open.
 `serving_mix` needs 32 scheduler steps to finish one decode request and the
 scheduler sustains about one a second, so a 20-second run reports prefills
 only — the row says so, and whether to lengthen the run or shorten the
