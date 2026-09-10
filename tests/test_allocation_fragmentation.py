@@ -153,3 +153,42 @@ def test_the_warm_up_covers_every_shape_the_loop_will_use():
         "allocation_fragmentation"])
     assert len(set(sizes)) == 13
     assert set(sorted(set(sizes))) == set(sizes)
+
+
+def test_the_row_says_which_limit_stopped_the_run():
+    """--duration does not bound this workload, and the row must not imply it did.
+
+    10,000 allocations take under four seconds on trn1, so --duration 30
+    and --duration 60 measure the same four seconds. Measured 2026-09-10:
+    3.69s for a requested 10s, 3.92s for a requested 30s.
+    """
+    from kernels import allocation_fragmentation as af
+
+    short = af.verify_window_is_long_enough(3.8, 30, "allocations")
+    assert short is not None
+    assert "does not lengthen it" in short
+    assert "--repeat" in short
+
+    assert af.verify_window_is_long_enough(30.0, 30, "duration") is None
+
+
+def test_a_duration_bound_run_is_not_flagged_for_being_short():
+    """If the clock stopped it, the clock is what the caller asked for."""
+    from kernels import allocation_fragmentation as af
+    assert af.verify_window_is_long_enough(2.0, 2, "duration") is None
+
+
+def test_the_short_window_explains_the_residual_scatter():
+    """Recorded as arithmetic, because the drift and the scatter are
+    different problems with different fixes.
+
+    The warm-up removed the drift: repeats went from 549-2,750 ordered
+    (cv 0.63) to 2,012-2,708 unordered (cv 0.15). What is left is a rate
+    measured over 3.8 seconds, and --duration cannot lengthen it.
+    """
+    measured_window = 3.8
+    from kernels.allocation_fragmentation import MIN_WINDOW_SECONDS
+
+    assert measured_window < MIN_WINDOW_SECONDS
+    # Before the warm-up the spread was four times worse and ordered.
+    assert 0.63 / 0.15 > 4

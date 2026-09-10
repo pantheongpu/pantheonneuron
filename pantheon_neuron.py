@@ -623,6 +623,10 @@ _PROVENANCE_KEYS = (
     # MoE dispatch: slots per expert, which is what the arithmetic scales
     # with once routing is balanced.
     "capacity",
+    # allocation_fragmentation: which limit stopped the run, and how long
+    # it actually measured. --duration does not bound this one.
+    "bounded_by",
+    "measured_window_s",
     # omni_virus: the shape it actually ran, which may be smaller than the
     # Problem the row advertises.
     "tile",

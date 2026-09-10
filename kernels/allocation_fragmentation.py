@@ -150,6 +150,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
+    # Which limit stopped the run. The pinned allocation count usually
+    # does, long before the clock: 10,000 allocations take under four
+    # seconds on trn1, so --duration 30 and --duration 60 both measure the
+    # same four seconds. That is the documented design -- a fast part
+    # should finish early rather than pad the clock -- but a row that
+    # reports a Score without saying the window was four seconds invites
+    # the reader to assume it was thirty.
+    bounded_by = "allocations" if events >= len(sizes) else "duration"
+
     return {
         "events": events,
         "elapsed_s": elapsed,
@@ -158,6 +167,36 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "live_bytes": live_bytes,
         "score_method": "workload",
         "analytic_basis": "allocation events / wall time",
-        "warning": failure,
+        "warning": failure or verify_window_is_long_enough(
+            elapsed, duration, bounded_by),
         "requested": len(sizes),
+        "bounded_by": bounded_by,
+        "measured_window_s": round(elapsed, 3),
     }
+
+
+# Below this, a rate over the window is dominated by whatever happened to
+# happen in it. Measured on trn1.2xlarge 2026-09-10: the pinned problem
+# runs for about 3.8 seconds however long a duration is asked for, and its
+# repeats sit at a coefficient of variation around 0.15 -- the drift is
+# gone since the warm-up, and this is what is left.
+MIN_WINDOW_SECONDS = 5.0
+
+
+def verify_window_is_long_enough(elapsed: float, duration: int,
+                                 bounded_by: str) -> typing.Optional[str]:
+    """Say so when the run measured far less time than was asked for.
+
+    The allocation count bounds this workload, not the clock, so
+    ``--duration`` mostly does not do what a reader expects. Raising it
+    changes nothing; the way to a steadier number here is ``--repeat``, or
+    a larger pinned count.
+    """
+    if bounded_by != "allocations" or elapsed >= MIN_WINDOW_SECONDS:
+        return None
+    return (
+        f"measured {elapsed:.1f}s of a requested {duration}s: the pinned "
+        "allocation count bounds this run, not the clock, so --duration "
+        "does not lengthen it. A window this short is why the repeats "
+        "scatter; use --repeat, or pin more allocations"
+    )
