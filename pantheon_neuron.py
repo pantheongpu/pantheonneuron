@@ -342,11 +342,34 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
               if isinstance(r.get("Score"), (int, float))]
     row["Repeats"] = _spread(scores, len(rows))
     if scores and row["Status"] == "PASS":
-        row["Score"] = round(statistics.median(scores), 4)
+        published = statistics.median(scores)
+        row["Score"] = round(published, 4)
+        # The row must describe the run it publishes. `row` started as the
+        # last repeat, so its Measurement -- which NEFF was captured, how
+        # many candidates were searched, what coverage -- belonged to
+        # whichever repeat happened to run last, while the Score belonged
+        # to the median one. Two different runs, one row, and nothing said
+        # so.
+        row["Measurement"] = _median_provenance(rows, scores, published)
         unstable = _unstable(row["Repeats"])
         if unstable:
             row["Detail"] = "; ".join(filter(None, [row.get("Detail"), unstable]))
     return row
+
+
+def _median_provenance(rows, scores, published):
+    """The Measurement belonging to the repeat that produced the Score.
+
+    With an even number of repeats the median is an average of two runs and
+    belongs to neither, so the row reports none rather than picking one --
+    provenance that describes a different execution is worse than absent.
+    """
+    if len(scores) % 2 == 0:
+        return None
+    for candidate in rows:
+        if candidate.get("Score") == published:
+            return candidate.get("Measurement")
+    return None
 
 
 # Above this, repeats of the same pinned problem disagree enough that the

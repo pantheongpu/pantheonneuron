@@ -247,3 +247,60 @@ def test_no_flops_reported_is_not_a_thin_sample():
     """Absent is a different thing from thin, and monitor_score handles it."""
     assert pantheon_neuron.thin_monitor_sample({}) is None
     assert pantheon_neuron.thin_monitor_sample({"effective_flops": {}}) is None
+
+
+# -- the row must describe the run it publishes ------------------------------
+
+def _scripted(monkeypatch, scores, provenances):
+    values, provs = iter(scores), iter(provenances)
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"] = next(values)
+        row["Measurement"] = next(provs)
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+
+
+def test_measurement_belongs_to_the_repeat_that_set_the_score(monkeypatch):
+    """The Score is the median; the Measurement used to be the last run.
+
+    Two different executions in one row, with nothing saying so -- a reader
+    checking which NEFF was captured, or at what coverage, would be reading
+    provenance for a run whose number was discarded.
+    """
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, [10.0, 20.0, 30.0],
+              [{"from": 1}, {"from": 2}, {"from": 3}])
+
+    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    assert row["Score"] == 20.0
+    assert row["Measurement"] == {"from": 2}, "not the last repeat"
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_an_even_median_belongs_to_no_repeat(monkeypatch):
+    """It is an average of two runs, so no single Measurement describes it.
+
+    Reporting one anyway would attach provenance to an execution that did
+    not produce the number, which is worse than none.
+    """
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, [10.0, 20.0], [{"from": 1}, {"from": 2}])
+
+    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=2)
+    assert row["Score"] == 15.0
+    assert row["Measurement"] is None
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_a_single_run_keeps_its_own_measurement(monkeypatch):
+    """No repeats, no ambiguity -- the row is that one run."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, [42.0], [{"from": 1}])
+
+    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01)
+    assert row["Measurement"] == {"from": 1}
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
