@@ -434,6 +434,19 @@ class NeuronMonitor:
                 core_id: {
                     "mean": int(statistics.fmean(values)),
                     "peak": int(max(values)),
+                    # How many samples the mean is over. The declared
+                    # formula is mean(effective_flops), and the monitor
+                    # samples across the whole run -- compile included,
+                    # where the counter reads nothing and the sample is
+                    # dropped. A short run therefore averages a handful of
+                    # samples, and one caught mid-ramp moves the mean a
+                    # long way.
+                    #
+                    # Measured on trn1.2xlarge 2026-09-10 at DURATION=10:
+                    # tensor_virus repeated 17.74, 26.14, 26.13 TFLOPS.
+                    # The low one is not a slow run, it is a mean over
+                    # fewer good samples.
+                    "samples": len(values),
                 }
                 for core_id, values in sorted(flops.items())
             }
