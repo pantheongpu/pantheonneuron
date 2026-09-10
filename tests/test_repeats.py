@@ -485,3 +485,47 @@ def test_every_declared_numerator_is_a_key_some_kernel_returns():
     assert not missing, (
         f"declared numerators no kernel returns: {missing} -- "
         "score_resolution answers None for these forever")
+
+
+def test_percent_of_peak_describes_the_published_score_not_the_last_repeat(monkeypatch):
+    """trn1.2xlarge 2026-09-10: Score 71.7968 (median) published beside
+    75.73%, which was the last repeat's 71.943 over 95. The column held
+    against the Score beside it, and it disagreed."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    scores = iter([65.0546, 71.7968, 71.943])
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"] = next(scores)
+        row["Peak"] = {"peak": 95.0}
+        row["Percent Of Peak"] = pantheon_neuron.percent_of_peak(row["Score"], row["Peak"])
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+
+    assert row["Score"] == 71.7968
+    assert row["Percent Of Peak"] == 75.58, row["Percent Of Peak"]
+    assert row["Percent Of Peak"] != 75.73, "the last repeat's figure"
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_the_peak_comes_from_the_median_repeat(monkeypatch):
+    """A duty-scaled ceiling can differ between repeats; the percentage must
+    use the ceiling of the run whose Score it divides."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    runs = iter([(10.0, 40.0), (20.0, 50.0), (100.0, 400.0)])
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"], peak = next(runs)
+        row["Peak"] = {"peak": peak}
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+    assert row["Peak"] == {"peak": 50.0}
+    assert row["Percent Of Peak"] == 40.0
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)

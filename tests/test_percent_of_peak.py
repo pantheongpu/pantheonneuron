@@ -494,3 +494,61 @@ def test_missing_telemetry_falls_back_to_the_visible_mask(monkeypatch):
 def test_the_row_passes_its_telemetry_to_the_share():
     code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
     assert "peak_share ( workload , devices , metrics )" in code
+
+
+# -- a Score above the ceiling is not a measurement --------------------------
+
+def test_a_score_twice_the_core_peak_is_named_impossible():
+    """The planted coalesced defect: 186.82 TFLOPS on one 95 TFLOPS core."""
+    why = pantheon_neuron.beyond_the_ceiling(186.82, {"peak": 95.0}, "TFLOPS")
+    assert why and "1.97x" in why and "95 TFLOPS" in why
+
+
+def test_the_best_real_kernel_is_well_inside_the_ceiling():
+    """coalesced's measured monitor Score, 71.80 of 95. The guard must not
+    fire on the fastest real result this part has produced."""
+    assert pantheon_neuron.beyond_the_ceiling(71.7968, {"peak": 95.0}, "TFLOPS") is None
+
+
+def test_the_tolerance_is_a_margin_not_a_loophole():
+    peak = {"peak": 100.0}
+    assert pantheon_neuron.beyond_the_ceiling(104.9, peak, "GB/s") is None
+    assert pantheon_neuron.beyond_the_ceiling(105.1, peak, "GB/s")
+
+
+def test_no_ceiling_means_no_verdict():
+    assert pantheon_neuron.beyond_the_ceiling(1e9, None, "ops/s") is None
+    assert pantheon_neuron.beyond_the_ceiling(None, {"peak": 95.0}, "TFLOPS") is None
+
+
+def test_a_row_beyond_the_ceiling_fails_and_keeps_the_figure(monkeypatch):
+    """Fails rather than publishing, and the Detail still carries the
+    number -- over-100% being visible, not clamped, is what exposed the
+    123% memory_read_agg figure, so it must stay readable.
+
+    Under the mask the hardware run used -- core 0 to the workload, core 1
+    reserved for neuron-profile -- which is what makes the ceiling 95.
+    With both cores visible and no telemetry the ceiling is 190 and
+    186.8 would sit under it: the guard is only as tight as the ceiling.
+    """
+    monkeypatch.setenv("NEURON_RT_VISIBLE_CORES", "0")
+    workload = _named("tensor_virus")
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 186.82)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name,
+                        {"elapsed_s": 20.0, "analytic_tflops": 186.82})
+    row = pantheon_neuron._measure_once(workload, TRN1, 1, 0.5)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "186.8" in row["Detail"] and "physically reach" in row["Detail"]
+
+
+def test_a_real_score_through_the_same_path_passes(monkeypatch):
+    """The control, so the test above cannot pass by failing everything."""
+    monkeypatch.setenv("NEURON_RT_VISIBLE_CORES", "0")
+    workload = _named("tensor_virus")
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 70.42)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name,
+                        {"elapsed_s": 20.0, "analytic_tflops": 70.42})
+    row = pantheon_neuron._measure_once(workload, TRN1, 1, 0.5)
+    assert row["Status"] == "PASS", row["Detail"]
+    assert row["Score"] == 70.42

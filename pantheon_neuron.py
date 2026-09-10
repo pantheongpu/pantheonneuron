@@ -378,6 +378,10 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     # records the pinned shape/dtype, because a Score is only comparable if
     # both platforms ran the same problem.
     _peak_share = peak_share(workload, devices, metrics)
+    beyond = beyond_the_ceiling(score, _peak_share, workload.unit)
+    if beyond and status == "PASS":
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [detail, beyond]))
     return {
         "Test Name": workload.name,
         "Suite": workload.suite,
@@ -462,6 +466,15 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
         # to the median one. Two different runs, one row, and nothing said
         # so.
         row["Measurement"] = _median_provenance(rows, scores, published)
+        # The same defect again, in a column added after the fix above.
+        # Percent Of Peak was the last repeat's: on trn1.2xlarge 2026-09-10
+        # tensor_virus published Score 71.7968 (the median) beside 75.73%,
+        # which is 71.943 -- the last repeat -- over 95. The Peak is taken
+        # from the median repeat too, since a duty-scaled ceiling can
+        # differ between repeats.
+        median_row = _median_row(rows, published) or row
+        row["Peak"] = median_row.get("Peak")
+        row["Percent Of Peak"] = percent_of_peak(published, row["Peak"])
         unstable = _unstable(row["Repeats"])
         if unstable:
             row["Detail"] = "; ".join(filter(None, [row.get("Detail"), unstable]))
@@ -475,6 +488,15 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
                 row["Detail"] = "; ".join(
                     filter(None, [row.get("Detail"), quantised]))
     return row
+
+
+def _median_row(rows, published):
+    """The repeat whose Score is the published median, or None when the
+    median is an average of two repeats and belongs to neither."""
+    for candidate in rows:
+        if candidate.get("Score") == published:
+            return candidate
+    return None
 
 
 def _median_provenance(rows, scores, published):
@@ -775,6 +797,41 @@ def percent_of_peak(score, share) -> typing.Optional[float]:
     if score <= 0 or share.get("peak", 0) <= 0:
         return None
     return round(100.0 * score / share["peak"], 2)
+
+
+# Headroom over the published peak before a Score is called impossible.
+# The peaks are the vendor's own round numbers and a monitor average can
+# land a little high on a short window; a real kernel does not reach 100%
+# on this part (the best measured is 76%), so 5% over is not a close call.
+CEILING_TOLERANCE = 1.05
+
+
+def beyond_the_ceiling(score, share, unit) -> typing.Optional[str]:
+    """Why a Score above the physical peak of what ran it is not a result.
+
+    A planted defect in tensor_virus's coalesced tiling, run through
+    ``run()`` on trn1.2xlarge 2026-09-10, posted **186.8 TFLOPS on one
+    NeuronCore whose bf16 peak is 95**: the compiler deleted three matmul
+    chains whose outputs were never stored, and the analytic rate counted
+    their FLOPs anyway. The product check caught that one. This catches
+    the class -- any Score twice what the silicon can do is a count of
+    work that did not happen, or a ceiling computed for the wrong cores,
+    and either way the number is not a measurement.
+
+    None when there is no ceiling to hold it against, which is most of the
+    suite.
+    """
+    if share is None or not isinstance(score, (int, float)):
+        return None
+    peak = share.get("peak") or 0
+    if peak <= 0 or score <= peak * CEILING_TOLERANCE:
+        return None
+    return (
+        f"Score {score:.4g} {unit} is {score / peak:.2f}x the {peak:g} {unit} "
+        "this configuration can physically reach -- it counts work that did "
+        "not happen, or the ceiling was computed for the wrong cores; not "
+        "published"
+    )
 
 
 def score_resolution(workload, result) -> typing.Optional[float]:
