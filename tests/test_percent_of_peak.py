@@ -262,3 +262,59 @@ def test_a_verified_peak_would_drop_the_caveat():
     datasheet, rather than needing a second edit to remove."""
     source = sourcecheck.flat_function_code(pantheon_neuron.main)
     assert 'if share . get ( "peak_verified" )' in source
+
+
+# -- a workload that idles by design -----------------------------------------
+
+def test_a_duty_cycled_workload_is_measured_against_its_duty():
+    """pulse_virus idles half its run by design and its Score is averaged
+    over the whole run, idle halves included.
+
+    Against the full ceiling it read 7.29% of peak where tensor_virus
+    read 13.74% -- exactly half, while running the same kernel at the
+    same rate during its loaded halves. The column would have told a
+    reader the pulsed kernel is half as efficient, which is the opposite
+    of what the two numbers show.
+    """
+    share = pantheon_neuron.peak_share(_named("pulse_virus"), TRN1)
+    full = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    duty = _named("pulse_virus").problem["duty_cycle"]
+    assert share["peak"] == pytest.approx(full["peak"] * duty)
+    assert share["duty_cycle"] == duty
+
+
+def test_the_pulsed_and_sustained_kernels_now_agree():
+    """The check that the correction is right rather than merely applied.
+
+    Same kernel, same rate while loaded, so once each is read against
+    what it could reach they should land together. Measured on
+    trn1.2xlarge 2026-09-10: pulse_virus 13.85 TFLOPS, tensor_virus
+    26.1.
+    """
+    pulsed = pantheon_neuron.percent_of_peak(
+        13.85, pantheon_neuron.peak_share(_named("pulse_virus"), TRN1))
+    sustained = pantheon_neuron.percent_of_peak(
+        26.1, pantheon_neuron.peak_share(_named("tensor_virus"), TRN1))
+    assert abs(pulsed - sustained) < 2.0, (pulsed, sustained)
+
+
+def test_a_workload_with_no_duty_cycle_gets_the_full_ceiling():
+    share = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    assert share["duty_cycle"] is None
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["bf16_tflops"])
+
+
+# -- units the docs do not give a ceiling for --------------------------------
+
+def test_an_integer_workload_gets_no_percentage_and_that_is_deliberate():
+    """int_virus reports TOPS for uint8, and the architecture docs quote
+    FP16/BF16/cFP8/TF32 and FP32 only.
+
+    Borrowing the bf16 figure for uint8 would divide by a number the
+    vendor never claimed for that dtype. An empty column is the honest
+    answer until a uint8 figure is published, and this test is what
+    stops someone filling it in by analogy.
+    """
+    assert "TOPS" not in registry.PEAK_FOR_UNIT
+    assert pantheon_neuron.peak_share(_named("int_virus"), TRN1) is None

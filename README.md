@@ -857,6 +857,7 @@ how many chips an instance carries.
 | `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
 | `torch.matmul` (not a workload) | 66.3 TFLOPS | 2 of 2 | 34.9% |
 | `transformer_virus` | 53.2 TFLOPS | 2 of 2 | 28.0% |
+| `pulse_virus` | 13.85 TFLOPS | 2 of 2, 50% duty | 14.6% |
 | `tensor_virus` | 26.1 TFLOPS | 2 of 2 | **13.7%** |
 
 **The denominator is the whole point of the column**, and getting it
@@ -865,6 +866,12 @@ before the figures were checked:
 
 - **Units.** The doc says 820 **GiB**/s and every Score is decimal GB/s
   (bytes ÷ 1e9). Treating them as interchangeable is a silent 7% error.
+- **Duty cycle.** `pulse_virus` idles half its run by design and its
+  Score is averaged over the whole run, so its ceiling is the peak times
+  its duty. Against the full ceiling it read 7.3% — half of
+  `tensor_virus`'s 13.7%, while running the same kernel at the same rate
+  when loaded. Corrected, the two land within a point of each other,
+  which is the check the correction is right.
 - **Core share.** A workload declaring `cores: 1` gets one NeuronCore of
   a two-core part, so its ceiling is half the chip's. `memory_read` and
   `memory_read_agg` measure the same thing on the same silicon and differ

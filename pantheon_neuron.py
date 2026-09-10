@@ -656,6 +656,20 @@ def peak_share(workload, devices) -> typing.Optional[dict]:
     devices_span = len(devices)
     ceiling = per_device * devices_span * (
         cores_used / float(total_cores))
+
+    # A duty-cycled workload idles for part of its run by design, and its
+    # Score is averaged over the whole run -- idle halves included. So the
+    # most it could ever report is the peak times the duty.
+    #
+    # Without this, pulse_virus read 7.29% of peak against tensor_virus's
+    # 13.74%: exactly half, because it idles half the time, while running
+    # the same kernel at the same rate during its loaded halves. The
+    # column would have told a reader the pulsed kernel is half as
+    # efficient, which is the opposite of what the two numbers show.
+    duty = (workload.problem or {}).get("duty_cycle")
+    if isinstance(duty, (int, float)) and 0 < duty < 1:
+        ceiling *= duty
+
     if ceiling <= 0:
         return None
 
@@ -666,6 +680,9 @@ def peak_share(workload, devices) -> typing.Optional[dict]:
         "peak_verified": bool(peak.get("verified")),
         "cores_used": cores_used,
         "cores_available": total_cores,
+        # Recorded so a reader can see why this ceiling is lower than the
+        # part's, rather than having to find it in the problem.
+        "duty_cycle": duty if isinstance(duty, (int, float)) else None,
     }
 
 
@@ -1107,6 +1124,7 @@ _PROVENANCE_KEYS = (
     "peak_verified",
     "cores_used",
     "cores_available",
+    "duty_cycle",
     # pulse_virus: what fraction of the run was actually loaded. The row
     # carried loaded_s, elapsed_s and the requested duty and never
     # compared them, so a run that stopped idling was indistinguishable
