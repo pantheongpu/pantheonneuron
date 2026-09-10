@@ -706,6 +706,75 @@ The lesson for the table above: **a short run is not a cheap run.** Ten
 seconds is long enough for every workload to pass and too short for six of
 them to mean anything.
 
+### Four workloads produced outputs that could not depend on their own arithmetic
+
+Found by deriving what each kernel must produce rather than by reading it.
+These all run constant inputs through weights, so every value is
+analytically determined — and three of them were producing numbers that
+no check on the output could ever have judged.
+
+| workload | what its output was | why nothing could see the arithmetic |
+|---|---|---|
+| `vision_encoder` | `588.0`, exactly | unscaled patch projection put it where bf16's ulp is 4.0; a block adds 1.84, so **twelve blocks moved it by 0.0** |
+| `speculative_decode` | `~1.1e15` | unscaled draft chain grew as `1024^draft_len`; a block's 1.84 is **nine orders below the resolution** |
+| `rag_embedding` | `1/sqrt(dim)` | L2 normalisation is scale-invariant, so the vector is `0.03125` whether twelve blocks ran or none |
+| `llm_prefill` | `NaN` | the same defect at the other end — unscaled weights grew the residual out of bf16's range. **This one was loud, which is why it was found first.** |
+
+The first three were silent. The arithmetic ran in all of them — the FLOPs
+were issued and the throughput was real — but the published output did not
+depend on it, so a working kernel and a broken one produced the same
+number.
+
+`vision_encoder` and `speculative_decode` are fixed by scaling their
+weights by `1/fan_in`, the same fix `transformer_ops.weights` already
+carried. `rag_embedding` is not a bug — L2 normalising is what a retrieval
+embedder does — so it keeps the stack's pre-pool output aside and checks
+that instead.
+
+**Confirmed on hardware, 2026-09-10.** The prediction was that scaling
+changes the values and *not* the throughput, since the shapes, the graph
+and the FLOP count are untouched:
+
+| workload | before | after | change |
+|---|--:|--:|--:|
+| `vision_encoder` | 58,118.5 | 57,222.0 image-tiles/s | −1.5% |
+| `rag_embedding` | 853.9 | 854.4 vectors/s | +0.06% |
+| `speculative_decode` | 73.96 | 73.79 verified-tokens/s | −0.2% |
+
+### Seven workloads now check the answer, not just that there is one
+
+Every kernel in the family feeds `torch.ones` through weights scaled by
+`1/fan_in`, and each block then adds exactly `1 + gelu(1) = 1.8413`
+whatever the depth — pre-norm makes the branch contributions independent
+of the residual. So the answer is known before the run:
+
+| workload | must produce | measured |
+|---|--:|---|
+| `fused_attention` | 1.0 | ✅ |
+| `transformer_virus` | 2.8413 | ✅ |
+| `rag_embedding` (stack) | 23.0961 | ✅ |
+| `vision_encoder` | 23.0961 | ✅ |
+| `llm_prefill` | 59.9230 | ✅ |
+| `llm_decode` | 59.9230 | ✅ |
+| `speculative_decode` | 59.9230 | ✅ |
+
+All seven previously checked only that the output was readable and not
+NaN, which admits a saturated softmax, a transposed head reshape, a
+dropped residual, a lost normalisation — and **a stack that ran the wrong
+number of layers**. Nothing else in the suite verifies the layer count:
+`flops_issued` multiplies by `layers` whether or not that many ran, so a
+stack executing half its depth reports the full arithmetic at twice the
+throughput and reads as good news.
+
+Two independent routes agree on 1.8413: the derivation, and `rms_norm`'s
+existing docstring saying the residual grows "about 2 per block".
+
+The 10% tolerance is measured, not guessed — simulating the residual walk
+in bf16 gives −1.96% drift at 32 layers, so it has ~5× headroom. That
+matters because these set `score_invalid`: a wrong derivation turns a
+working run into a FAIL. One was wrong, and was caught before hardware
+saw it — `rag_embedding`'s, above.
+
 ### A full pass at a duration long enough to mean something
 
 `DURATION=30 REPEAT=3`, trn1.2xlarge, 2026-09-10. **26 PASS, 0 FAIL**, and
