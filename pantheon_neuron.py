@@ -870,6 +870,11 @@ _PROVENANCE_KEYS = (
     # is a footprint figure and reads as an acceleration without this.
     "ratio_to_bf16",
     "reference_bf16_tops",
+    # rag_embedding: the value its L2 normalisation erased. The published
+    # vector is 1/sqrt(dim) whether twelve blocks ran or none did, so this
+    # is the only figure in the row that can see the encoder.
+    "embedding_element",
+    "expected_embedding_element",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",

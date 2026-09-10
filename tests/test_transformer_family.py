@@ -1484,3 +1484,39 @@ def test_an_infinite_output_is_a_message_not_an_exception():
 
     assert transformer_ops.ulp(float("inf")) == float("inf")
     assert not transformer_ops.increment_is_observable(float("inf"), 1.8413)
+
+
+# -- an output that its own normalisation erased -----------------------------
+
+def test_l2_normalisation_makes_the_embedding_independent_of_the_stack():
+    """rag_embedding's published output cannot see its own encoder.
+
+    Every element of the returned vector is 1/sqrt(dim), and it is
+    1/sqrt(dim) whether twelve blocks ran, one ran, or none did --
+    because L2 normalisation is scale-invariant and every element of the
+    stack output is identical over constant inputs.
+
+    Fourth workload found producing an output that does not depend on its
+    own arithmetic, after vision_encoder, speculative_decode and, from
+    the other end, llm_prefill. Unlike those three it is not a bug: L2
+    normalising is what a retrieval embedder does. The answer is to check
+    the value the normalisation erased.
+    """
+    dim = 1024
+    for layers in (0, 1, 12):
+        stack_value = transformer_ops.stacked_block_output(layers)
+        # mean over a sequence of identical values, then L2 over dim of them
+        pooled = stack_value
+        norm = math.sqrt(dim * pooled * pooled)
+        assert pooled / norm == pytest.approx(1.0 / math.sqrt(dim)), layers
+
+    assert 1.0 / math.sqrt(dim) == 0.03125
+
+
+def test_rag_embedding_checks_the_stack_and_not_only_the_vector():
+    code = sourcecheck.function_code(encoders.run_rag_embedding)
+    assert "stack_output" in code
+    assert '"expected_embedding_element"' in code
+    # The depth check must read the stack, not the normalised vector.
+    assert "stack_check (\n" not in code
+    assert 'read_back ( stack_output . get ( "state" ) )' in code

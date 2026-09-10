@@ -22,6 +22,7 @@ STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
 58,118.5 image-tiles/s on the 2026-09-10 pass.
 """
 
+import math
 import time
 import typing
 
@@ -54,10 +55,15 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
     params = transformer_ops.weights(dim, dtype, device, heads=16)
     xm.mark_step()
 
+    # The stack's own output, kept out of the returned vector so it can be
+    # verified. See the check at the bottom of this function for why.
+    stack_output = {}
+
     def embed():
         state = tokens
         for _ in range(layers):
             state = transformer_ops.block(state, params)
+        stack_output["state"] = state
         # Mean-pool over the sequence, then L2 normalise in fp32. Every
         # vector store expects unit vectors, and doing it in bf16 would
         # both misreport the cost and lose enough precision that the norm
@@ -100,9 +106,26 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "vectors embedded / wall time",
-        # 12 blocks over ones -> 23.10. See transformer_ops.stack_check.
+        # Two values, because one of them cannot see the stack.
+        #
+        # The returned vector is L2-normalised, and L2 normalisation is
+        # scale-invariant: every element comes out at 1/sqrt(dim) = 0.03125
+        # at the pinned dim of 1024, and it comes out at 0.03125 whether
+        # twelve blocks ran, one ran, or none did. So checking the
+        # published output verifies the normalisation and says nothing
+        # whatever about the encoder -- the fourth workload in this suite
+        # found to produce an output that does not depend on its own
+        # arithmetic, after vision_encoder, speculative_decode and (from
+        # the other end, loudly) llm_prefill.
+        #
+        # Unlike those three this is not a bug to fix: L2 normalising is
+        # what a retrieval embedder does, and removing it would measure a
+        # different thing. The answer is to check the value the
+        # normalisation erased, which the stack kept aside.
+        "embedding_element": transformer_ops.read_back(sink),
+        "expected_embedding_element": 1.0 / math.sqrt(dim),
         **transformer_ops.stack_check(
-            transformer_ops.read_back(sink), layers),
+            transformer_ops.read_back(stack_output.get("state")), layers),
     }
 
 
