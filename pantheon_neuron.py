@@ -854,9 +854,20 @@ _PROVENANCE_KEYS = (
     "implied_tflops",
     # serving_mix: a request is many scheduler steps, so both rates are
     # wanted, and implied_tflops is what a request count cannot contradict.
+    # It listed implied_tflops a second time here, which is harmless and
+    # was still worth noticing -- a whitelist nobody checks is a whitelist
+    # that drifts, and there is now a test for duplicates.
     "scheduler_steps_per_s",
     "blocks_executed",
-    "implied_tflops",
+    # How coarse the Score is. serving_mix's cv of 0.0001 was the counter's
+    # resolution rather than the workload's stability, and a reader cannot
+    # tell those apart without this beside it.
+    "steps_per_request",
+    "score_resolution",
+    # quantized_gemm: int8 runs at 0.254x bf16 on this part, so the Score
+    # is a footprint figure and reads as an acceleration without this.
+    "ratio_to_bf16",
+    "reference_bf16_tops",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",

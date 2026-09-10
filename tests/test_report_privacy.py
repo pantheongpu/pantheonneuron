@@ -231,3 +231,45 @@ def test_provenance_is_absent_rather_than_empty():
                     if w.name == "baseline_metrics")
     pantheon_neuron._LAST_RUN.pop(workload.name, None)
     assert pantheon_neuron._provenance(workload) is None
+
+
+def test_the_provenance_whitelist_has_no_duplicates():
+    """It listed implied_tflops twice.
+
+    Harmless -- it is used as a membership test -- and still worth a
+    check: a whitelist nobody reads is a whitelist that drifts, and the
+    duplicate was the visible symptom of nobody reading it.
+    """
+    keys = pantheon_neuron._PROVENANCE_KEYS
+    duplicates = sorted({k for k in keys if list(keys).count(k) > 1})
+    assert not duplicates, duplicates
+
+
+def test_every_whitelisted_key_is_something_a_kernel_reports():
+    """A key no kernel produces is dead whitelist entry, and the list is
+    the only thing standing between a report and a leaked path.
+
+    Read through the comment filter so a key mentioned only in prose does
+    not count -- the same way two dead verify_ functions hid behind
+    docstrings that credited them.
+    """
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ""
+    for name in sorted(os.listdir(os.path.join(root, "kernels"))):
+        if name.endswith(".py"):
+            with open(os.path.join(root, "kernels", name),
+                      encoding="utf-8") as handle:
+                code += sourcecheck.code_only(handle.read())
+    with open(os.path.join(root, "pantheon_neuron.py"),
+              encoding="utf-8") as handle:
+        orchestrator = sourcecheck.code_only(handle.read())
+
+    assert code, "no kernel source read -- the sweep is broken"
+
+    orphans = [key for key in pantheon_neuron._PROVENANCE_KEYS
+               if f'"{key}"' not in code
+               and f'"{key}"' not in orchestrator.replace(
+                   "_PROVENANCE_KEYS", "")]
+    assert not orphans, orphans
