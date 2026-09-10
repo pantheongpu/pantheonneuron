@@ -1206,6 +1206,11 @@ _PROVENANCE_KEYS = (
     "profiler_total_time_s",
     # The cross-check the profiler figure is meant to be compared against.
     "analytic_gbps",
+    # memory_read: which side set the rate -- the loads or the reduction
+    # that consumes them. A heavier consumer halved the bandwidth on
+    # trn1.2xlarge 2026-09-10 with every byte still read; only these said so.
+    "consumer_engine_active",
+    "dma_active",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,

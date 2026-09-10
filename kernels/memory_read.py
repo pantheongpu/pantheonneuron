@@ -28,6 +28,36 @@ the wrong graph and verify_profile_covers_plan correctly refused it
 The reservation is not free: it is off for any selection containing a
 `cores: "all"` workload, which includes --test all and --test memory. See
 docs/workload_counter_map.md.
+
+**What sets the rate, measured rather than assumed** (trn1.2xlarge
+2026-09-10, 2 GiB bf16, one core, each variant in its own process, every
+product exact):
+
+    variant                          GB/s   vector   DMA
+    this kernel: 2048 wide, cast+sum 269.5   0.55   0.79
+    8192 wide (1/4 the loads)        269.8
+     512 wide (4x the loads)         208.4
+    sum as fp32, no explicit cast    269.4   0.55   0.79   (same code emitted)
+    cast + t*t + sum                 136.8   0.88   0.50
+    torch.sum through neuronx-cc     174.2                 (122.4 at 8192 wide)
+
+- **The loads set it, not the reduction.** The vector engine is busy 55%
+  of the execution and wider loads change nothing. At the pinned 8 GiB,
+  through the harness, DMA is active 0.94 and vector 0.65 (256.10 GB/s by
+  neuron-profile), so the DMA side is close to saturated. The two-core
+  aggregate reads exactly 2x (541 GB/s), which also points at a per-core
+  limit on the DMA side, not at HBM.
+- **The kernel is not a floor.** The compiler's own reduction over the
+  same bytes is 1.55x slower. That is the opposite of tensor_virus, where
+  torch.matmul was 2.53x the hand-written kernel.
+- **The consumer has about 1.5x headroom at the pinned size (0.65), and
+  crossing it is silent.**
+  Doubling its work halved the "bandwidth" with coverage still 1.000000
+  and the product still exact. verify_consumer_not_binding reads the
+  vector engine's share from the profile this kernel already captures,
+  and warns past CONSUMER_BOUND. Loads narrower than ~2 KiB per
+  partition row cost throughput too (208 at 1 KiB), which matches what
+  tensor_virus's coalesced tiling found.
 """
 
 import os
@@ -235,12 +265,63 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         # from a capture we cannot attribute.
         if _touched_the_whole_plan(result.get("read_verified_ratio")):
             result["profiler_gbps"] = None
+            # And its engine counters, which describe the same foreign
+            # graph. On trn1.2xlarge 2026-09-10 two trees sharing a
+            # compile workdir left the selector holding a planted
+            # heavy-consumer kernel's NEFF: the Score correctly fell back
+            # to analytic, and the row still reported vector 0.97 --
+            # the other kernel's reading, beside a Score that disowned it.
+            result["consumer_engine_active"] = None
+            result["dma_active"] = None
             result["score_method"] = "analytic"
             result["analytic_basis"] = (
                 "bytes moved / wall time; the profiled graph could not be "
                 "attributed to this kernel"
             )
+        return result
+
+    bound = verify_consumer_not_binding(result.get("consumer_engine_active"))
+    if bound:
+        result["warning"] = bound
     return result
+
+
+# The reduction that keeps the loads alive runs on the vector engine, and
+# past this fraction of the execution it is the reduction's speed the
+# bandwidth measures. Measured on trn1.2xlarge 2026-09-10, 2 GiB bf16 on
+# one core, each variant its own process:
+#
+#     consumer              vector   DMA    GB/s
+#     cast + sum (this)      0.55   0.79   269.5
+#     cast + t*t + sum       0.88   0.50   136.8
+#
+# At the pinned 8 GiB through the harness: this kernel vector 0.65 / DMA
+# 0.94, the heavier consumer vector 0.97 at 133.2 GB/s.
+#
+# Both products exact, both coverage 1.000000. The heavier consumer halved
+# the "bandwidth" without moving one byte fewer -- a correct-looking wrong
+# measurement that nothing in the row could see. The threshold sits
+# between the readings -- above 0.65, below 0.88.
+CONSUMER_BOUND = 0.8
+
+
+def verify_consumer_not_binding(vector_active) -> typing.Optional[str]:
+    """Flag a read whose rate is set by its consumer rather than by HBM.
+
+    ``vector_active`` is neuron-profile's ``vector_engine_active_time_percent``
+    for the captured graph -- a 0-1 fraction, like every ``_percent``
+    counter (docs/neuron_counters.md). None when there was no profile,
+    which says nothing either way.
+    """
+    if not isinstance(vector_active, (int, float)):
+        return None
+    if vector_active < CONSUMER_BOUND:
+        return None
+    return (
+        f"the vector engine was active {vector_active:.0%} of the execution: "
+        "the reduction that consumes the loads is setting the rate, so this "
+        "is the reduction's throughput rather than HBM's"
+    )
 
 
 def _touched_the_whole_plan(ratio, tolerance: float = 0.01) -> bool:
@@ -276,6 +357,10 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         "score_method": registry.PROFILER,
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        # Which side of the kernel set the rate: the loads (DMA) or the
+        # reduction that consumes them (vector). See CONSUMER_BOUND.
+        "consumer_engine_active": counters.get("vector_engine_active_time_percent"),
+        "dma_active": counters.get("dma_active_time_percent"),
         # What the search had to do to find it. A run that needed the
         # fourth candidate is telling us mtime ranking is worth revisiting.
         "profiler_neff": os.path.basename(found["neff"]),

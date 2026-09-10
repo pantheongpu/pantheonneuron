@@ -1,0 +1,66 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. What sets memory_read's rate?
+# Raw output; host paths removed. Probe: variants of the memory_read kernel, 2 GiB bf16
+# all-ones, 20 s each, each in its own process on core 0 (NEURON_RT_VISIBLE_CORES=0);
+# engine profiles captured on core 1. _percent counters are 0-1 fractions.
+#   A sum free 2048 (the shipped kernel)   B sum free 8192   E sum free 512
+#   D sumsq free 2048 (cast + t*t + sum)   F/G sum as fp32 without an explicit cast
+# PREDICTED: vector-bound -> D << A, B ~= A ~= E, vector ~1.0;
+#            DMA-bound    -> D ~= A, vector well below 1.0.
+
+## 1. Round one
+=== rates (core 0, 2 GiB, 20 s each) ===
+A  sum   free  2048  loads/pass   4096    269.5 GB/s  coverage 1.000000  (compile 15s, 2512 passes)
+B  sum   free  8192  loads/pass   1024    269.8 GB/s  coverage 1.000000  (compile 2s, 2516 passes)
+E  sum   free   512  loads/pass  16384    208.4 GB/s  coverage 1.000000  (compile 208s, 1944 passes)
+D  sumsq free  2048  loads/pass   4096    136.8 GB/s  coverage 1.000000  (compile 16s, 1277 passes)
+=== engine profile (core 1) ===
+A  vector_engine=0.5473468135612415  dma=0.7908765278418421  scalar_engine=3.447562013855357e-05  gpsimd_engine=0.0023093460493422958  hbm_read_bytes=2147483648  total_time=0.009965419001  -> 215.5 GB/s by profile
+D  vector_engine=0.8818895283777322  dma=0.5008791278976011  scalar_engine=1.9424016775039544e-05  gpsimd_engine=0.0011120603385964146  hbm_read_bytes=2147483648  total_time=0.017687433242  -> 121.4 GB/s by profile
+
+
+## 2. Lighter consumer (F, G) and a same-session control (A)
+F  sum1  free  2048  loads/pass   4096    269.4 GB/s  coverage 1.000000  (compile 15s, 2512 passes)
+G  sum1  free  8192  loads/pass   1024    269.5 GB/s  coverage 1.000000  (compile 2s, 2512 passes)
+A  sum   free  2048  loads/pass   4096    269.6 GB/s  coverage 1.000000  (compile 0s, 2513 passes)
+F  vector_engine=0.5483417638150307  dma=0.7910961561962091  scalar_engine=3.46819041498112e-05  gpsimd_engine=0.002297409996293766  hbm_read_bytes=2147483648  total_time=0.009947262368  -> 215.9 GB/s by profile
+
+
+## 3. The compiler's read: torch.sum(src, dim=1, dtype=float32).sum() over the same 2 GiB
+X  xla   free  2048    174.2 GB/s  coverage 1.000000  (1625 passes)
+X  xla   free  8192    122.4 GB/s  coverage 1.000000  (1143 passes)
+
+
+## 4. Harness, --test memory_read --duration 20: the shipped kernel, then a copy with the
+##    heavy consumer planted (cast + t*t + sum). Before the provenance keys were added.
+=== pn: --test memory_read --duration 20 ===
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    58.18% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] report: pn/database/pantheon_neuron_report_20260910_233940.json
+   Score 256.1256 neuron-profile
+   Measurement {'consumer_engine_active': None, 'dma_active': None, 'profiler_plan_coverage': 1.0}
+=== pnheavy: --test memory_read --duration 20 ===
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS (the vector engine was active 97% of the execution: the reduction that consumes the loads is setting the rate, so this is the reduction's throughput rather than HBM's)
+[PANTHEON-NEURON]    30.25% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] report: pnheavy/database/pantheon_neuron_report_20260910_234450.json
+   Score 133.197 neuron-profile
+   Measurement {'consumer_engine_active': None, 'dma_active': None, 'profiler_plan_coverage': 1.0}
+
+
+## 5. Rerun after 4, with both trees having compiled into the shared /tmp/pantheon_ccwork:
+##    the selector held the heavy kernel's NEFF. Score correctly fell back to analytic;
+##    the row still carried the foreign graph's vector 0.97 (fixed next).
+   Score 271.7354 analytic ...the profiled graph could not be attributed to this kernel
+   Detail: profiler 133.2 GB/s and analytic 271.7 GB/s differ by more than 50% (ratio 0.49)
+   Measurement {'consumer_engine_active': 0.9672300295550046, 'dma_active': 0.5495342825884373, 'profiler_plan_coverage': 1.0}
+
+## 6. With the engine counters dropped for an unattributed profile; then the workdir cleared
+=== 1. workdir still holding the heavy kernel NEFF ===
+   Score 271.7519 | analytic (bytes moved / wall time; the p | Detail: 'profiler 133.2 GB/s and analytic 271.8 GB/s differ by more than 50% (ratio 0.49)'
+   Measurement {'consumer_engine_active': None, 'dma_active': None, 'profiler_plan_coverage': 1.0}
+=== 2. workdir cleared ===
+/tmp/pantheon_ccwork
+   Score 256.0952 | neuron-profile | Detail: ''
+   Measurement {'consumer_engine_active': 0.6504165339446807, 'dma_active': 0.9379895971571509, 'profiler_plan_coverage': 1.0}
+
