@@ -307,9 +307,30 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
     device = xm.xla_device()
     # Per layer, as a real cache is. Writing one layer's worth per step was
     # what first made this workload measure the runtime instead of memory.
-    cache_k = torch.ones((layers, context, hidden), dtype=dtype, device=device)
-    cache_v = torch.ones((layers, context, hidden), dtype=dtype, device=device)
-    entry = torch.ones((layers, tokens, hidden), dtype=dtype, device=device)
+    # The entry is deliberately NOT the same value as the cache.
+    #
+    # Both were ones, so every write copied ones into ones and the cache
+    # was bit-identical whether the write landed or not. The only check on
+    # this kernel reads an element back, and that element read 1.0 for a
+    # working ring, a ring that never wrote, and a graph the compiler had
+    # elided entirely.
+    #
+    # Which matters more here than anywhere else in this suite: this is
+    # the workload that established XLA has no in-place write, after the
+    # index_copy_ version cost 455 ms to move 32 MiB on trn1.2xlarge
+    # 2026-09-08. The whole finding is about whether the write reaches the
+    # cache, and nothing verified that it does.
+    #
+    # 2.0 rather than ones costs nothing: same shapes, same graph, same
+    # bytes moved. What changes is that a cache still reading 1.0 at the
+    # end is now a run whose writes did not land.
+    CACHE_FILL, ENTRY_FILL = 1.0, 2.0
+    cache_k = torch.full((layers, context, hidden), CACHE_FILL,
+                         dtype=dtype, device=device)
+    cache_v = torch.full((layers, context, hidden), CACHE_FILL,
+                         dtype=dtype, device=device)
+    entry = torch.full((layers, tokens, hidden), ENTRY_FILL,
+                       dtype=dtype, device=device)
     xm.mark_step()
     xm.wait_device_ops()
 
@@ -371,8 +392,27 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
         "score_method": "workload",
         "analytic_basis": "cache entries written / wall time",
         "plan": plan,
+        "cache_fill": CACHE_FILL,
+        "entry_fill": ENTRY_FILL,
+        "cache_element": observed,
         **transformer_ops.output_check(observed, "cache"),
     }
+
+    # Slot 0 is written on the first step and on every `slots`-th step
+    # after, and read_back samples element zero, so a completed run must
+    # find the entry's value there. Finding the cache's own fill means the
+    # writes never reached it.
+    if observed is not None and observed == CACHE_FILL:
+        # Joined, not assigned. output_check may already have said the
+        # cache was NaN, and replacing that message would trade the more
+        # serious finding for the more specific one.
+        result["warning"] = "; ".join(part for part in (
+            result.get("warning"),
+            f"the cache still reads {CACHE_FILL:g} after {steps} steps, "
+            f"where a landed write leaves {ENTRY_FILL:g} -- the ring "
+            "wrote nothing the device kept",
+        ) if part)
+        result["score_invalid"] = True
 
     # An unreadable or NaN cache still fails the row; a dispatch-bound run
     # is a warning, because the number is real, it just is not the number

@@ -967,6 +967,13 @@ _PROVENANCE_KEYS = (
     "parameter_before",
     "parameter_after",
     "parameter_moved",
+    # kv_cache_churn: the cache and entry fills, and what was read back.
+    # Both were ones, so the readback was 1.0 whether the write landed or
+    # not -- in the workload whose entire finding is that the write reaches
+    # the cache.
+    "cache_fill",
+    "entry_fill",
+    "cache_element",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",

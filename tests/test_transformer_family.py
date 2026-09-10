@@ -1586,3 +1586,53 @@ def test_the_train_step_samples_a_parameter_before_and_after():
     # Sampled before the warm-up step, or the first update would be missed.
     assert code.index("before = transformer_ops . read_back") < code.index(
         "warm = one_step ( )")
+
+
+# -- a cache write that could not be seen ------------------------------------
+
+def test_the_cache_and_the_entry_are_different_values():
+    """They were both ones, so every write copied ones into ones.
+
+    The only check on this kernel reads an element back, and that element
+    read 1.0 for a working ring, a ring that never wrote, and a graph the
+    compiler had elided entirely.
+
+    Which matters more here than anywhere else: this is the workload that
+    established XLA has no in-place write, after the index_copy_ version
+    cost 455 ms to move 32 MiB. The whole finding is about whether the
+    write reaches the cache, and nothing verified that it does.
+    """
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
+    assert "CACHE_FILL , ENTRY_FILL = 1.0 , 2.0" in code
+    assert "cache_k = torch . ones (" not in code
+    assert "entry = torch . ones (" not in code
+
+
+def test_a_cache_still_holding_its_own_fill_invalidates_the_score():
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
+    assert "observed == CACHE_FILL" in code
+    assert '"score_invalid" ] = True' in code
+    assert "wrote nothing the device kept" in code
+
+
+def test_the_write_check_does_not_replace_a_nan_message():
+    """Replacing it would trade the more serious finding for the more
+    specific one."""
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
+    marker = code.index("observed == CACHE_FILL")
+    after = code[marker:marker + 400]
+    # The existing message has to be an input to the new one. Matching the
+    # separator literal is what the first version did -- and it looked for
+    # `" ; " . join`, spacing the tokenizer does not insert inside a string
+    # literal. A check about what the code does, not how it is spaced.
+    assert ". join (" in after, "the message is assigned, not joined"
+    assert 'result . get ( "warning" )' in after, (
+        "the existing message is not an input to the joined one")
+
+
+def test_the_bandwidth_warning_still_yields_to_it():
+    """A run that wrote nothing should not also be lectured about
+    bandwidth -- the bytes it reports were never written."""
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
+    assert code.index("observed == CACHE_FILL") < code.index(
+        "verify_memory_bound ( bytes_per_s )")
