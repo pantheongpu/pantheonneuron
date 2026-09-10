@@ -83,6 +83,29 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     events = 0
     failure = None
 
+    # Warm every distinct size before the clock starts. Each is its own
+    # graph shape, so the first pass over the sequence compiles all of
+    # them, and without this the compile lands inside the measurement.
+    #
+    # Measured on trn1.2xlarge 2026-09-10: three repeats read 549, then
+    # 2,646, then 2,750 allocation-events/s -- monotonically rising, which
+    # is warm-up, not noise. The first repeat was paying for thirteen
+    # compiles and the later ones were hitting the cache.
+    #
+    # The same defect serving_mix had, and memory_read documents: a
+    # measurement that includes its own compile is measuring the compiler.
+    for size in sorted(set(sizes)):
+        try:
+            warm = torch.ones(max(size // 2, 1), dtype=torch.bfloat16,
+                              device=device)
+            xm.mark_step()
+            del warm
+        except RuntimeError:
+            # A size that cannot be allocated at all is the run's own
+            # business to discover and report; warming is best effort.
+            break
+    xm.wait_device_ops()
+
     started = time.perf_counter()
     deadline = started + duration
 

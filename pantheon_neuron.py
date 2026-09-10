@@ -402,11 +402,17 @@ def _spread(scores, attempted: int) -> dict:
 def _trend(scores) -> typing.Optional[str]:
     """Monotonic repeats are drift, not scatter.
 
-    Repeats run in one process, so a workload that leaves device memory
-    allocated makes every later repeat measure a fuller device. Measured on
-    trn1.2xlarge 2026-09-10: allocation_fragmentation's three repeats spanned
-    0.91 to 2,511.80 allocation-events/s -- a factor of 2,700, and ordered.
-    Noise does not do that.
+    Repeats run in one process, so whatever state one leaves behind reaches
+    the next. Measured on trn1.2xlarge 2026-09-10:
+    allocation_fragmentation's repeats read 549, 2,646 and 2,750
+    allocation-events/s -- ordered, and rising. Noise does not do that.
+
+    *Rising* is the informative part, and it corrected a wrong guess. A
+    workload accumulating device memory would get slower; this got faster,
+    which is warm-up -- the first repeat was compiling a graph for each of
+    thirteen distinct allocation sizes and the later ones hit the cache.
+    The direction is what distinguishes the two, which is why it is
+    reported rather than just the spread.
 
     Weak evidence on its own at three repeats, where a third of orderings
     are monotonic by chance. It is reported beside the coefficient of
@@ -438,7 +444,8 @@ def _unstable(spread: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
         message += (
             f"; and they are monotonically {trend}, which is drift rather "
             "than scatter -- repeats share a process, so state one leaves "
-            "behind reaches the next"
+            "behind reaches the next. Rising usually means the first repeat "
+            "paid a compile the others did not"
         )
     return message
 

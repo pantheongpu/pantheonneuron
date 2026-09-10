@@ -125,3 +125,31 @@ def test_the_drift_the_old_accounting_produced():
 
     assert tracked_new == held_new, "the fixed tally matches what is held"
     assert abs(held_old - tracked_old) > 10 * 1024**2, "the old one drifts"
+
+
+def test_every_distinct_size_is_warmed_before_the_clock():
+    """Each size is its own graph shape, and there are thirteen of them.
+
+    Without a warm-up the first pass compiles all thirteen inside the
+    measurement. Measured on trn1.2xlarge 2026-09-10: three repeats read
+    549, 2,646 and 2,750 allocation-events/s -- monotonically rising, which
+    is warm-up rather than noise.
+    """
+    import sourcecheck
+    from kernels import allocation_fragmentation as af
+
+    code = sourcecheck.function_code(af.run)
+    warmup = code[:code.index("started = time . perf_counter ( )")]
+    assert "for size in sorted ( set ( sizes ) )" in warmup
+    assert "xm . wait_device_ops ( )" in warmup
+
+
+def test_the_warm_up_covers_every_shape_the_loop_will_use():
+    """sorted(set(sizes)) is exactly the distinct shapes, no more."""
+    from kernels import registry
+    from kernels.allocation_fragmentation import size_sequence
+
+    sizes = size_sequence({w.name: w.problem for w in registry.WORKLOADS}[
+        "allocation_fragmentation"])
+    assert len(set(sizes)) == 13
+    assert set(sorted(set(sizes))) == set(sizes)
