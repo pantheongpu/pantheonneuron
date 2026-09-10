@@ -254,3 +254,20 @@ def test_the_score_is_declared_incomparable_across_pins():
     # incomparability visible to a reader rather than a footnote.
     pinned = {w.name: w for w in registry.WORKLOADS}
     assert "allocations" in pinned["allocation_fragmentation"].problem
+
+
+def test_the_repin_prediction_is_recorded_as_falsified():
+    """A sweep said cv 0.038 at 40,000 allocations; the orchestrated run
+    said 0.14 and monotonically rising.
+
+    The docstring keeps the falsification rather than the prediction,
+    including why the sweep disagreed: it ran 10,000 before 40,000 in the
+    same process, so it measured a warm allocator three times where the
+    orchestrator measures a cold one once and a warm one twice. A control
+    that runs its conditions in order is not measuring them
+    independently.
+    """
+    doc = fragmentation.__doc__
+    assert "falsified" in doc
+    assert "0.14" in doc and "monotonically rising" in doc
+    assert "warm allocator three times" in doc

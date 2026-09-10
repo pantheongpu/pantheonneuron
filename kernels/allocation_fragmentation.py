@@ -17,6 +17,33 @@ device tensors, so nothing in this file depends on a compiled kernel.
 
 STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
 
+**A prediction about this workload was falsified on 2026-09-10 and the
+result is recorded here rather than quietly dropped.**
+
+A sweep suggested the repeats would settle once the window was long
+enough: three repeats at 40,000 allocations gave cv 0.038 against 0.083 at
+10,000. Repinned to 40,000 on that basis. The orchestrated run at
+``--repeat 3`` then reported:
+
+    1694.09 to 2236.99 events/s, cv 0.14, monotonically rising
+
+The window did lengthen -- about 17 seconds against 4 -- and the scatter
+did not go with it. The rise is the tell: repeats share a process, and
+whatever the first one leaves behind makes the next one faster. The
+allocator caching freed device buffers would do that, and so would a
+compile the first repeat paid, and this run does not distinguish them.
+
+Why the sweep disagreed is itself informative. It ran 10,000 allocations
+before it ran 40,000, in the same process, so by the time the 40,000 case
+was measured whatever warms up had already warmed. **The sweep measured a
+warm allocator three times; the orchestrator measures a cold one once and
+a warm one twice.** A control that runs its conditions in order is not
+measuring them independently.
+
+So: the pin is better and the drift is unexplained. ``--repeat`` assumes
+repeats are independent samples and for this workload they are not, which
+the row says out loud rather than averaging away.
+
 The pinned 10,000 allocations bound the run at about four seconds
 whatever ``--duration`` says, and the kernel reports ``bounded_by`` so a
 reader is not left believing they chose the window. A sweep on
