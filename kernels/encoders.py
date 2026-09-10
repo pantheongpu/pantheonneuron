@@ -92,6 +92,12 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
         "elapsed_s": elapsed,
         "embedding_vectors_per_s": vectors / elapsed if elapsed else 0.0,
         "flops_issued": flops,
+        # A vector count says nothing about whether the encoder ran. This
+        # is the quantity that can disagree with something: it has to land
+        # under what this part reaches on a dense matmul, and well under,
+        # because a 128-token sequence leaves the Tensor Engine idle
+        # between short bursts of work.
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "vectors embedded / wall time",
         **transformer_ops.output_check(
@@ -188,6 +194,8 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         tiles += plan["batch"] * plan["patches"]
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    flops = images * layers * transformer_ops.block_flops(
+        hidden, plan["patches"])
 
     return {
         "image_tiles": tiles,
@@ -195,8 +203,9 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         "elapsed_s": elapsed,
         "image_tiles_per_s": tiles / elapsed if elapsed else 0.0,
         "encoder_layers": layers,
-        "flops_issued": images * layers * transformer_ops.block_flops(
-            hidden, plan["patches"]),
+        "flops_issued": flops,
+        # As above: a tile count is not evidence of arithmetic.
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "patches_per_image": plan["patches"],
         "score_method": "workload",
         "analytic_basis": "image tiles / wall time",

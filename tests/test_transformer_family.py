@@ -1040,3 +1040,47 @@ def test_the_implied_rates_land_where_the_hardware_says_they_should():
     implied = passes * router["experts"] * 2 * capacity * router["hidden"] ** 2 / 1e12
     assert implied == pytest.approx(17.132105142551666, rel=1e-6)
     assert implied < 26.1
+
+
+# -- a vector or tile count is not evidence of arithmetic --------------------
+
+@pytest.mark.parametrize("function", ["run_rag_embedding",
+                                      "run_vision_encoder"])
+def test_the_encoder_rates_carry_an_implied_flops(function):
+    """Same gap fused_attention and moe_router had, in the same shape.
+
+    A kernel that skips the encoder still produces vectors and still
+    produces tiles. Every defect found in this suite came from one number
+    disagreeing with another, and neither of these had anything to
+    disagree with.
+    """
+    code = sourcecheck.function_code(getattr(encoders, function))
+    assert '"implied_tflops"' in code
+    assert '"flops_issued"' in code
+
+
+def test_the_vision_flop_count_is_computed_once():
+    """It was inline in the dict, which is why adding a rate needed it out.
+
+    A figure computed twice is a figure that can be changed in one place.
+    """
+    code = sourcecheck.function_code(encoders.run_vision_encoder)
+    assert code.count("block_flops") == 1
+
+
+def test_speculative_decode_reports_a_total_not_only_a_per_cycle_cost():
+    """A constant cannot disagree with a measurement.
+
+    ``verify_flops_per_cycle`` was already reported and is the same number
+    on every run -- it describes the pinned problem, not the execution. A
+    run that never reached the target model produces an identical cycle
+    count and an identical per-cycle cost; only the total and the rate
+    move.
+    """
+    code = sourcecheck.function_code(inference_mix.run_speculative_decode)
+    assert '"flops_issued"' in code
+    assert '"implied_tflops"' in code
+    assert '"verify_flops_per_cycle"' in code
+    # And computed once, so the total and the per-cycle figure cannot drift
+    # apart.
+    assert code.count("block_flops") == 1

@@ -421,6 +421,7 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         verified += draft_len
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    verify_flops = layers * transformer_ops.block_flops(hidden, draft_len)
 
     return {
         "verified_tokens": verified,
@@ -431,10 +432,17 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         # amortising. A cycle count alone cannot show whether the target
         # model was actually run.
         "verify_blocks_per_cycle": layers,
-        "verify_flops_per_cycle": layers * transformer_ops.block_flops(
-            hidden, draft_len),
+        "verify_flops_per_cycle": verify_flops,
         "elapsed_s": elapsed,
         "verified_tokens_per_s": verified / elapsed if elapsed else 0.0,
+        # Per-cycle cost was already here and is not a rate: it is the same
+        # number every run, so it cannot disagree with a measurement. The
+        # total and the rate can, which is the point -- a run that skipped
+        # the target model produces the same cycle count and a very
+        # different implied_tflops.
+        "flops_issued": cycles * verify_flops,
+        "implied_tflops": (cycles * verify_flops / elapsed / 1e12
+                           if elapsed else 0.0),
         "score_method": "workload",
         # Every drafted token is verified here; acceptance rate is a
         # property of a real model's agreement with its draft, which a
