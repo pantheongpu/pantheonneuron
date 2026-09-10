@@ -262,3 +262,49 @@ def test_a_warning_without_invalidation_still_passes(monkeypatch):
     assert row["Status"] == "PASS"
     assert row["Score"] == 1234.5
     assert "19%" in row["Detail"]
+
+
+# -- workers that need cores run before this process holds them --------------
+
+def _names(workloads):
+    return [w.name for w in workloads]
+
+
+def test_aggregates_run_before_any_in_process_workload():
+    """--test all ran tensor_virus first, the runtime held both cores, and
+    both memory_*_agg workers aborted -6 on trn1.2xlarge 2026-09-10."""
+    ordered = _names(pantheon_neuron.run_order(registry.resolve("all")))
+    first_in_process = min(
+        i for i, name in enumerate(ordered)
+        if name not in ("baseline_metrics", "memory_read_agg", "memory_write_agg"))
+    assert ordered.index("memory_read_agg") < first_in_process
+    assert ordered.index("memory_write_agg") < first_in_process
+
+
+def test_baseline_telemetry_stays_first():
+    assert _names(pantheon_neuron.run_order(registry.resolve("all")))[0] == "baseline_metrics"
+
+
+def test_ordering_neither_drops_nor_duplicates():
+    selected = registry.resolve("all")
+    ordered = pantheon_neuron.run_order(selected)
+    assert sorted(_names(ordered)) == sorted(_names(selected))
+    assert len(ordered) == len(selected) > 0
+
+
+def test_the_memory_suite_runs_its_aggregates_first():
+    """The cheaper reproduction: --test memory put memory_read ahead of
+    the aggregates, which is the same hazard with fewer workloads."""
+    ordered = _names(pantheon_neuron.run_order(registry.resolve("memory")))
+    assert ordered[:2] == ["memory_read_agg", "memory_write_agg"], ordered
+
+
+def test_a_selection_without_aggregates_keeps_registry_order():
+    selected = registry.resolve("core")
+    assert _names(pantheon_neuron.run_order(selected)) == _names(selected)
+
+
+def test_main_runs_the_ordered_selection():
+    code = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert code.index("workloads = run_order ( workloads )") < code.index(
+        "for workload in workloads")

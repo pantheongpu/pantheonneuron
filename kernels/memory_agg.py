@@ -280,7 +280,17 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         # something; it just is not what the name says, and the row saying
         # so is the honest response. Only "no overlapping window" makes the
         # number mean nothing at all.
-        "score_invalid": _no_overlap_at_all(results, span),
+        #
+        # A missing worker is the same case, and the check above could not
+        # see it: _no_overlap_at_all needs two results to compare, so when
+        # every worker died it returned False. On trn1.2xlarge 2026-09-10
+        # both workers of memory_read_agg and memory_write_agg exited -6
+        # and both rows published PASS with a Score of 0.0 GB/s -- the
+        # failures in the Detail, and nothing acting on them. One survivor
+        # of two is not an aggregate either: its bandwidth under this name
+        # would read as the whole part's.
+        "score_invalid": (bool(failures) or len(results) < core_count
+                          or _no_overlap_at_all(results, span)),
         "bytes_moved": total_bytes,
         "elapsed_s": elapsed,
         "worker_span_s": span,

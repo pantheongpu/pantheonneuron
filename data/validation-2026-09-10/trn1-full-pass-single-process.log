@@ -1,0 +1,73 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. python pantheon_neuron.py --test all --duration 10
+# One process, at commit 58bfc87 (coalesced default). Console lines filtered to
+# workload / status / percent-of-peak / report; nothing else removed.
+#
+# READ WITH: the memory_read_agg and memory_write_agg PASS rows are the defect, not a
+# verification. Both workers of each aborted (-6) and the rows published PASS with a
+# Score of 0.0 GB/s. memory_agg.summarise now invalidates a missing worker, and
+# run_order puts the aggregates ahead of the in-process workloads whose runtime held
+# the cores. memory_read and memory_write fell back to analytic Scores because a
+# cores:"all" workload in the selection turns the profiler reservation off -- the
+# documented limitation in README 'What --test all cannot measure'.
+
+[PANTHEON-NEURON] -> baseline_metrics
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> tensor_virus
+[PANTHEON-NEURON]    PASS (effective_flops averaged over 2 sample(s); a mean over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-monitor floors around 2s per sample whatever --monitor-period asks for)
+[PANTHEON-NEURON]    67.48% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> int_virus
+[PANTHEON-NEURON]    PASS (effective_flops averaged over 2 sample(s); a mean over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-monitor floors around 2s per sample whatever --monitor-period asks for)
+[PANTHEON-NEURON] -> pulse_virus
+[PANTHEON-NEURON]    PASS (effective_flops averaged over 2 sample(s); a mean over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-monitor floors around 2s per sample whatever --monitor-period asks for)
+[PANTHEON-NEURON]    78.93% of 47.5 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> transformer_virus
+[PANTHEON-NEURON]    PASS (effective_flops averaged over 2 sample(s); a mean over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-monitor floors around 2s per sample whatever --monitor-period asks for)
+[PANTHEON-NEURON]    49.65% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> omni_virus
+[PANTHEON-NEURON]    PASS (effective_flops averaged over 2 sample(s); a mean over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-monitor floors around 2s per sample whatever --monitor-period asks for)
+[PANTHEON-NEURON]    41.66% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 3 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:10.945928  8303:8306  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z); model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:11.168693  8315:8317  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z); model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:11.388872  8327:8333  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z))
+[PANTHEON-NEURON]    61.72% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 7 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:29.128574  8480:8480  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z); model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:29.323434  8492:8500  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z); model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:29.520710  8504:8508  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z); model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 21:43:29.715442  8516:8516  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 Available:0 Logical Core size 1 | neuron-profile exited with an error.neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19T00:00:38Z))
+[PANTHEON-NEURON]    58.46% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS (core 0 exited -6:     @     0x5c0d041867d2  (unknown); core 1 exited -6:     @     0x5d4d2f0357d2  (unknown))
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS (core 0 exited -6:     @     0x5da5085e77d2  (unknown); core 1 exited -6:     @     0x64ca056e47d2  (unknown))
+[PANTHEON-NEURON] -> all_reduce
+[PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+[PANTHEON-NEURON] -> p2p_thrasher
+[PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 5.9 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-09-08 split was a per-pass host allocation, not the link), then the negotiated link width)
+[PANTHEON-NEURON]    0.38% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> llm_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> llm_prefill
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> kv_cache_churn
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> fused_attention
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> quantized_gemm
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> serving_mix
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> speculative_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> moe_router
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> transformer_train_step
+[PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and the model never updates. The Score still measures what a training step costs; it does not measure training)
+[PANTHEON-NEURON] -> allocation_fragmentation
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> graph_replay
+[PANTHEON-NEURON]    PASS (the completion counter reports 1506 where the kernel counted 3001, a factor of 2 -- the Score is the former and the two are not measuring the same thing; the completion counter moved across 3 sample(s); a rate over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-monitor floors around 2s per sample whatever --monitor-period asks for)
+[PANTHEON-NEURON] -> rag_embedding
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> vision_encoder
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: database/pantheon_neuron_report_20260910_213443.json
+

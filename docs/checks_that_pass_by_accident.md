@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty of them, and they are collected
+would go. This repo has now produced twenty-one of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -353,11 +353,20 @@ the sentence summarising them inverted them.
 
 ### 19. The check passes because the collection is empty
 
-Not yet caught in the wild here, and guarded against on the way in: a
-coverage check over a directory, a sweep over "every INTERNAL workload",
-a parse that finds no matches — all pass silently when they find nothing.
-Every such test in this suite now asserts the collection is non-empty
-before asserting anything about its contents.
+Guarded against in the tests on the way in: a coverage check over a
+directory, a sweep over "every INTERNAL workload", a parse that finds no
+matches — all pass silently when they find nothing. Every such test in
+this suite now asserts the collection is non-empty before asserting
+anything about its contents.
+
+**Then caught in production code, where no test was looking.**
+`memory_agg` invalidates an aggregate whose workers shared no window, and
+the overlap check needs two results to compare. On trn1.2xlarge
+2026-09-10, `--test all` left both workers of `memory_read_agg` and
+`memory_write_agg` aborting with -6. That left no results, so there was
+nothing to compare, the check returned False, and both rows published
+**PASS with a Score of 0.0 GB/s**. The check was right about every case
+with at least two results. The case with none was the one that happened.
 
 ### 20. Every element has the same right answer
 
@@ -398,6 +407,23 @@ wrong answers that produce a different output.** Uniform inputs collapse
 that set. Before trusting a check against a change, plant the defect the
 change could plausibly introduce and watch the check fail.
 
+### 21. The test checks the message, not the consequence
+
+Twice in one day. `memory_agg`'s test for failed workers asserted the
+failure text reached the row's warning, and it did. Nothing asserted that
+anything acted on it, and nothing did: the row passed. `tensor_virus`
+computed a verified-wrong product, put it in the warning, and never set
+`score_invalid`, so a GEMM that produced the wrong matrix would have
+reported PASS with its FLOP rate. Both were the shape of the 2026-09-08
+`llm_prefill` NaNs, which this repo had already fixed once: a check
+fires, its message reaches the Detail, and the Score is published anyway.
+
+A warning is where a finding goes to be read. A Score is where it goes to
+be used. A test that stops at the warning has tested the first and
+assumed the second. The tests now assert the row's Status and Score for
+each failure. Reverting either fix fails them, which was checked by
+reverting it.
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -418,4 +444,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty above were found by reading what a passing check had filtered out.
+twenty-one above were found by reading what a passing check had filtered out.

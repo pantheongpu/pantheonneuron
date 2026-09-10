@@ -1108,6 +1108,26 @@ python pantheon_neuron.py --test memory_read --duration 60
 The run says which it did — the console names the workloads that are paying,
 and each row's `Score Method` records the method actually used.
 
+**The aggregates themselves run first.** The Neuron runtime in the
+orchestrator's process starts at the first in-process NKI workload and
+holds every visible core until the process exits. With the reservation
+off, that is both cores, so an aggregate running later spawns its
+per-core workers into a device with no cores free. Measured on
+trn1.2xlarge 2026-09-10 with `--test memory --duration 30`, two trees
+differing only in the order:
+
+| order | `memory_read_agg` | `memory_write_agg` |
+|---|---|---|
+| registry (`memory_read` first) | FAIL — both workers aborted (-6) | FAIL — both aborted |
+| aggregates first | **PASS, 541.2 GB/s** | **PASS, 506.4 GB/s** |
+
+Before the fix, those aborted rows were published as **PASS with a
+Score of 0.0 GB/s**. The workers' failures reached the Detail and nothing
+acted on them. A missing worker now invalidates the aggregate. At
+`--duration 10` the two workers' compile times can differ by more than
+their timed loops, and the row fails for no overlap. Use 30 or more for
+a selection that includes them.
+
 ## Running without hardware
 
 The full orchestrator, telemetry and reporting path runs on any machine via a

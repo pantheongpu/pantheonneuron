@@ -103,6 +103,30 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
 
 # --- Execution --------------------------------------------------------------
 
+def run_order(workloads) -> list:
+    """The selection, with workloads that spawn per-core workers moved ahead
+    of every workload that runs in this process.
+
+    The Neuron runtime in this process starts at the first in-process NKI
+    workload and holds every visible core until the process exits. Under a
+    selection with a ``cores: "all"`` workload the reservation is off, so
+    that is every core on the part -- and an aggregate that runs later
+    spawns one worker per core into a device with none free. On
+    trn1.2xlarge 2026-09-10, ``--test all`` ran tensor_virus first and both
+    workers of memory_read_agg and memory_write_agg aborted (-6); run in
+    a process of their own, the same workers ran.
+
+    Baseline telemetry stays first: it measures the part before any load,
+    and it opens no runtime. Otherwise the order within each group is the
+    registry's.
+    """
+    baseline = [w for w in workloads if w.suite == "baseline"]
+    spawning = [w for w in workloads
+                if w not in baseline and (w.problem or {}).get("cores") == "all"]
+    rest = [w for w in workloads if w not in baseline and w not in spawning]
+    return baseline + spawning + rest
+
+
 def reservation_cost(workloads) -> typing.Tuple[typing.List[str], typing.List[str]]:
     """What a selection costs the profiler: (aggregate names, workloads billed).
 
@@ -1592,6 +1616,7 @@ def main(argv=None) -> int:
     )
 
     reserve_profiler_core(devices, workloads)
+    workloads = run_order(workloads)
 
     snapshot = get_system_snapshot(devices)
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

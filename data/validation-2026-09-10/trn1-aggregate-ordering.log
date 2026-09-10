@@ -1,0 +1,44 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. python pantheon_neuron.py --test memory --duration 30
+# Two trees, identical except one line: pn_before has main()'s 'workloads =
+# run_order(workloads)' replaced by 'pass', so the selection runs in registry order
+# (memory_read, memory_write in-process first). The grep lines count 'run_order(workloads)'
+# in each tree: 1 = the def only, 2 = def and call. Both trees carry the
+# memory_agg.summarise fix, which is why the before rows say FAIL rather than PASS 0.0.
+#
+# PREDICTED before the run: before -> both aggregates abort -6; after -> both run and
+# PASS near the 541 / 506 GB/s they read in processes of their own.
+
+pn_before/pantheon_neuron.py:1
+pn/pantheon_neuron.py:2
+=== pn_before: --test memory --duration 30 ===
+[PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 22:18:53.339955 12334:12334 ERROR   NRT:nrt_allocate_neuron_
+[PANTHEON-NEURON]    61.73% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 22:19:27.953973 12544:12552 ERROR   NRT:nrt_allocate_neuron_
+[PANTHEON-NEURON]    58.49% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    FAIL (core 0 exited -6:     @     0x5d3e5824d7d2  (unknown); core 1 exited -6:     @     0x60867d0f87d2  (unknown))
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    FAIL (core 0 exited -6:     @     0x597364aac7d2  (unknown); core 1 exited -6:     @     0x57e6253287d2  (unknown))
+=== pn: --test memory --duration 30 ===
+[PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    61.47% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    57.51% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 22:30:03.445197 14201:14208 ERROR   NRT:nrt_allocate_neuron_
+[PANTHEON-NEURON]    61.58% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 22:30:38.082674 14411:14414 ERROR   NRT:nrt_allocate_neuron_
+[PANTHEON-NEURON]    58.38% of 440.25 GB/s across 1 of 2 core(s)
+
+
+# Before this, the same two aggregates run alone in a fresh process, --duration 10:
+# memory_read_agg FAIL (workers reported no overlapping window) -- no abort, the workers
+# ran; at 10 s their compile skew exceeds the loop. memory_read alone: PASS 58.2% of
+# 440.25 GB/s from neuron-profile (256.2 GB/s), the declared source.

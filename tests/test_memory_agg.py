@@ -9,6 +9,9 @@ bandwidth as the whole part's.
 import pantheon_neuron
 import sourcecheck
 from kernels import cores, memory_agg, registry
+from neuron_device import NeuronDevice
+
+_TRN1 = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
 
 
 def _workload(name):
@@ -70,6 +73,52 @@ def test_a_missing_core_is_flagged():
 def test_worker_failures_are_reported():
     summary = memory_agg.summarise([], ["core 1 exited 1: boom"], 2.0, 2, "read")
     assert "core 1 exited 1" in summary["warning"]
+
+
+def test_every_worker_dying_invalidates_the_score():
+    """trn1.2xlarge 2026-09-10: both workers exited -6 and both agg rows
+    published PASS with 0.0 GB/s. The test above checked the failure
+    reached the warning -- it did -- and nothing checked anything acted on
+    it. The zero-overlap check needs two results, so it could not fire."""
+    failures = ["core 0 exited -6: @ 0x5c0d041867d2 (unknown)",
+                "core 1 exited -6: @ 0x5d4d2f0357d2 (unknown)"]
+    summary = memory_agg.summarise([], failures, 12.0, 2, "read")
+    assert summary["analytic_gbps"] == 0.0
+    assert summary["score_invalid"] is True
+
+
+def test_one_survivor_of_two_is_not_an_aggregate():
+    workers = [_worker(0, 270.0, "bytes_requested", 2_700_000_000, 10.0)]
+    summary = memory_agg.summarise(workers, ["core 1 exited -6: x"], 11.0, 2, "read")
+    assert summary["score_invalid"] is True
+
+
+def test_a_missing_core_without_a_failure_message_still_invalidates():
+    """Invalidation must not depend on a worker explaining itself."""
+    workers = [_worker(i, 1.0, "bytes_requested", 1_000_000_000, 1.0)
+               for i in range(3)]
+    assert memory_agg.summarise(workers, [], 2.0, 4, "read")["score_invalid"] is True
+
+
+def test_every_worker_reporting_and_overlapping_is_valid():
+    """The control, so the three above cannot pass by invalidating all."""
+    workers = [dict(_worker(i, 270.0, "bytes_requested", 2_700_000_000, 10.0),
+                    finished_at=100.0) for i in range(2)]
+    assert memory_agg.summarise(workers, [], 11.0, 2, "read")["score_invalid"] is False
+
+
+def test_a_dead_aggregate_fails_its_row(monkeypatch):
+    """End to end: the summary's invalidation reaches the row."""
+    workload = _workload("memory_read_agg")
+    summary = memory_agg.summarise(
+        [], ["core 0 exited -6: x", "core 1 exited -6: y"], 12.0, 2, "read")
+    monkeypatch.setattr(pantheon_neuron, "_execute",
+                        lambda *a, **k: summary["analytic_gbps"])
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name, summary)
+    row = pantheon_neuron._measure_once(workload, _TRN1, 1, 0.5)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "exited -6" in row["Detail"]
 
 
 def test_uneven_cores_are_flagged():
