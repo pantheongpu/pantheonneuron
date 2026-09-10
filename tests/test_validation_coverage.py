@@ -133,3 +133,32 @@ def test_the_summary_prints_the_spread():
     text = _script()
     assert "repeats:" in text
     assert "cv" in text
+
+
+# -- a finding nobody can find is not a finding ------------------------------
+
+def test_every_doc_is_reachable_from_the_readme():
+    """Six documents existed and the README linked to none of them.
+
+    Each records a measurement that cost a hardware run to establish, and
+    an unlinked file is one nobody reads before repeating the work. The
+    check is against the whole directory rather than a list, so a new
+    document cannot be orphaned by forgetting to add it here.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        readme = handle.read()
+    docs = sorted(name for name in os.listdir(os.path.join(root, "docs"))
+                  if name.endswith(".md"))
+    assert docs, "the check would pass vacuously with no documents"
+    unlinked = [name for name in docs if f"docs/{name}" not in readme]
+    assert not unlinked, unlinked
+
+
+def test_the_records_are_named_where_a_reader_will_look():
+    """data/hardware_runs.json is the answer to "has this actually run"."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        readme = handle.read()
+    assert "data/hardware_runs.json" in readme
+    assert "data/baselines.json" in readme

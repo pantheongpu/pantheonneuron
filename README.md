@@ -49,8 +49,24 @@ one of them is worth filing a case about.
 ## Kernel status
 
 Every workload in the registry now has an implementation: **26 of 26**, and
-**24 of 26 have run on hardware**. The last full pass was 23 PASS, 0 FAIL,
-with 8 Scores from a declared hardware source (trn1.2xlarge, 2026-09-08).
+**24 of 26 have run on hardware** — `data/hardware_runs.json` records which,
+on which part, and cites the log. The two that have not are `all_reduce` and
+`p2p_thrasher`, and neither is untested so much as unreachable: both need a
+part with 2+ devices, and this account's Trn quota is 64 vCPU against the
+128 the smallest such shape needs.
+
+The last full passes were **23 PASS, 0 FAIL** on trn1.2xlarge, 2026-09-08
+and 2026-09-10.
+
+**Scores from a declared hardware source: 7 or 8 of 23**, and which it is
+varies between runs of the same code. That is not a rounding detail — it is
+`graph_replay`, whose declared source is the monitor's completion counter.
+It produced a Score on 2026-09-08 and degraded to the analytic fallback on
+2026-09-10, and the two figures are four times apart because they count
+different things: one what the device finished, the other what the loop
+asked for. Quoting a single number here would hide a live problem, so the
+range is quoted instead. See `neuron_monitor.execution_rate`, which now
+names which of three reasons the rate was absent.
 
 **Figures are single runs unless the Repeats column says otherwise.** The one
 quantity ever measured repeatedly disagreed with itself by 2× until its cause
@@ -493,6 +509,30 @@ kernel's returned output, which is what keeps the stores alive.
 It ran for the first time on inf2.xlarge 2026-09-07 and its destination
 check passed exactly, at 4 GiB (255.1 GB/s) and 6 GiB (162.5 GB/s). The
 pinned 8 GiB does not fit; see the bring-up notes above.
+
+## Findings
+
+Each of these started as a number that disagreed with another number. None
+of them could have been found by a workload reporting one rate and passing.
+
+| Document | What it establishes |
+|---|---|
+| [The headline number is the kernel, not the part](docs/the_headline_number_is_the_kernel.md) | `torch.matmul` reaches 2.53× `tensor_virus` at a matched shape, so the suite's compute figure is a floor rather than a capability |
+| [A dtype the engine refuses](docs/a_dtype_the_engine_refuses.md) | int8 is the slowest arithmetic on this part, fp8 is refused outright, and NKI and XLA do not accept the same operand set |
+| [XLA has no in-place write](docs/xla_has_no_in_place_write.md) | `cache[:, a:b, :] = entry` lowers to dynamic-update-slice and produces a new tensor — three wrong diagnoses before this one |
+| [Cross-platform comparability](docs/cross_platform_comparability.md) | Which workloads share a name with a pantheongpu row and must not be compared to it |
+| [Workload reference](docs/workload_counter_map.md) | Generated from the registry: units, Score sources, pinned problems, counters |
+| [Neuron counters](docs/neuron_counters.md) | The raw `neuron-profile` and `neuron-monitor` output the readers parse |
+
+Two records back them:
+
+- **`data/hardware_runs.json`** — which workloads ran on which part, with
+  the log that proves each. `tests/test_hardware_status.py` holds every
+  kernel's `STATUS:` line against it, so a docstring cannot claim untested
+  after a pass or claim verified without one.
+- **`data/baselines.json`** — what each counter read during the probes.
+  Observations, not benchmark results: the probe load was an untuned matmul
+  at 0.0049% MFU.
 
 ## Requirements
 
