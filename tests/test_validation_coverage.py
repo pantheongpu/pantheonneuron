@@ -455,3 +455,63 @@ def test_the_validation_summary_only_counts_this_run():
     # ignoring reports would trade one wrong number for a missing one.
     assert "os.path.getmtime(p) >= started" in script
     assert "from earlier runs on this machine ignored" in script
+
+
+def test_no_test_parametrises_only_over_gitignored_paths():
+    """An empty parameter set is a skip, and a skip is not a check.
+
+    test_committed_reports_are_clean parametrised over `database/*.json`.
+    database/ is in .gitignore, so a fresh checkout has none, pytest
+    reported "got empty parameter set" and skipped -- in the job
+    deliberately split out of the matrix so a single green check could
+    not hide the privacy guard.
+
+    This looks for the shape rather than that one case: a glob rooted at
+    a directory the repository does not track cannot find anything in CI.
+    """
+    import ast
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, ".gitignore"), encoding="utf-8") as handle:
+        ignored = {line.strip().rstrip("/") for line in handle
+                   if line.strip() and not line.startswith("#")}
+    assert ignored, "no .gitignore entries parsed -- the shape changed"
+
+    offenders = []
+    for name in sorted(os.listdir(os.path.dirname(os.path.abspath(__file__)))):
+        if not name.startswith("test_") or not name.endswith(".py"):
+            continue
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        tree = ast.parse(source, filename=name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            target = getattr(node.func, "attr", None)
+            if target != "glob":
+                continue
+            literals = [n.value for n in ast.walk(node)
+                        if isinstance(n, ast.Constant)
+                        and isinstance(n.value, str)]
+            for literal in literals:
+                if literal.rstrip("/") in ignored:
+                    # Only a finding if it is the *sole* source of cases.
+                    offenders.append(f"{name}:{node.lineno} globs {literal!r}")
+
+    # database/ is still globbed on purpose, by a test that says so and is
+    # backed by one which generates its own report. Anything else is new.
+    unexpected = [o for o in offenders
+                  if "test_report_privacy.py" not in o]
+    assert not unexpected, unexpected
+
+
+def test_the_privacy_guard_does_not_depend_on_finding_a_file():
+    """The version that runs in CI has to make its own evidence."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(root, "test_report_privacy.py"),
+              encoding="utf-8") as handle:
+        source = handle.read()
+    assert "def test_a_freshly_written_report_is_clean" in source
+    assert "write_report(" in source
+    assert "the run wrote no report, so nothing was checked" in source
