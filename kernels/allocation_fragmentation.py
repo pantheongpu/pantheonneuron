@@ -171,7 +171,12 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     bounded_by = "allocations" if events >= len(sizes) else "duration"
 
     return {
-        "events": events,
+        # Named to match the registry's declared formula,
+        # `allocation_events / elapsed_s`. It was "events", so the counter
+        # the formula divides did not exist in the result and the Score
+        # could not be recomputed from the report -- which is the whole
+        # point of publishing the counters beside it.
+        "allocation_events": events,
         "elapsed_s": elapsed,
         "allocation_events_per_s": events / elapsed if elapsed else 0.0,
         "retained_blocks": len(retained),

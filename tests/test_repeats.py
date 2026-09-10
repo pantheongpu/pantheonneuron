@@ -432,3 +432,49 @@ def test_every_internal_workload_either_resolves_or_says_why():
         resolution = pantheon_neuron.score_resolution(
             _named(name), {numerator: 100})
         assert resolution == pytest.approx(0.01), (name, numerator)
+
+
+def test_every_declared_numerator_is_a_key_some_kernel_returns():
+    """The parse being right is not the same as the counter existing.
+
+    test_every_internal_workload_either_resolves_or_says_why feeds a
+    synthetic {numerator: 100} and checks the arithmetic. It would pass
+    just as well for a numerator no kernel has ever returned, and
+    score_resolution would then quietly return None for that workload
+    forever -- a check present, running, and answering nothing, which is
+    the twelfth shape in docs/checks_that_pass_by_accident.md.
+
+    Read through the comment filter, so a counter named only in the
+    registry's own formula string does not vouch for itself.
+    """
+    import os
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ""
+    for name in sorted(os.listdir(os.path.join(root, "kernels"))):
+        if name.endswith(".py") and name != "registry.py":
+            with open(os.path.join(root, "kernels", name),
+                      encoding="utf-8") as handle:
+                code += sourcecheck.code_only(handle.read())
+    with open(os.path.join(root, "pantheon_neuron.py"),
+              encoding="utf-8") as handle:
+        code += sourcecheck.code_only(handle.read())
+
+    assert code, "no kernel source read -- the sweep is broken"
+
+    missing = []
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if not source or source.source != registry.INTERNAL:
+            continue
+        numerator, _, denominator = (source.formula or "").partition("/")
+        if denominator.split("#")[0].strip() != "elapsed_s":
+            continue
+        numerator = numerator.strip()
+        if f'"{numerator}"' not in code:
+            missing.append(f"{workload.name}: {numerator}")
+
+    assert not missing, (
+        f"declared numerators no kernel returns: {missing} -- "
+        "score_resolution answers None for these forever")

@@ -820,6 +820,7 @@ _PROVENANCE_KEYS = (
     "profiler_candidates_available",
     # The counters the declared formula divides, so a Score can be
     # recomputed from the report rather than trusted.
+    "allocation_events",
     "hbm_read_bytes",
     "hbm_write_bytes",
     "profiler_total_time_s",
