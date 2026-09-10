@@ -873,32 +873,29 @@ arithmetic is right: `tensor_virus` and `pulse_virus` run one kernel and
 land 1.7 points apart; `memory_read` and `memory_read_agg` run one memory
 path on one and two cores and land 3.3 points apart.
 
-**One gap this does not close.** Under `--test all` the reservation is
-off, so every workload sees both cores and is measured against the whole
-chip. A torch-xla kernel without explicit sharding runs on one XLA device
-— one NeuronCore — whether or not a second is visible, so in that
-selection its percentage is probably halved again. The column knows what
-the run *exposed*; it cannot know what the kernel *used*, and that needs
-a counter rather than an assumption.
+**The gap that closed.** Under `--test all` the reservation is off, so
+every workload sees both cores. The question was whether a kernel then
+uses both, and neuron-monitor answered it, trn1.2xlarge 2026-09-10:
 
-**The denominator is the whole point of the column**, and getting it
-wrong is easy in the flattering direction. Two traps, both hit here
-before the figures were checked:
+| visible | workload | core 0 | core 1 |
+|---|---|--:|--:|
+| both | `tensor_virus` | 20.03% | **0.0%** |
+| core 0 | `tensor_virus` | 28.74% | 0.0% |
+| both | `transformer_virus` | 24.35% | **0.0%** |
+| core 0 | `transformer_virus` | 29.85% | 0.0% |
 
-- **Units.** The doc says 820 **GiB**/s and every Score is decimal GB/s
-  (bytes ÷ 1e9). Treating them as interchangeable is a silent 7% error.
-- **Duty cycle.** `pulse_virus` idles half its run by design and its
-  Score is averaged over the whole run, so its ceiling is the peak times
-  its duty. Against the full ceiling it read 7.3% — half of
-  `tensor_virus`'s 13.7%, while running the same kernel at the same rate
-  when loaded. Corrected, the two land within a point of each other,
-  which is the check the correction is right.
-- **Core share.** A workload declaring `cores: 1` gets one NeuronCore of
-  a two-core part, so its ceiling is half the chip's. `memory_read` and
-  `memory_read_agg` measure the same thing on the same silicon and differ
-  only in how much of it they are allowed; read against their own shares
-  they land within four points of each other, which is the check that the
-  arithmetic is right rather than merely plausible.
+Core 1 did nothing in any case, for the hand-written NKI kernel and the
+torch-lowered one alike: neither is sharded, and one XLA device is one
+NeuronCore. The prediction, written into the probe before it ran, was
+exactly that.
+
+So a visible idle core was being credited, and both kernels read at half
+their share with both cores exposed. For an arithmetic Score the fix is
+exact rather than heuristic: the Score *is* `mean(effective_flops)` over
+the cores that reported it, so those are the cores that count. Memory
+Scores are left alone, because a DMA-bound kernel can saturate HBM with
+the compute engines near idle and counting cores by arithmetic activity
+would call a saturated memory path unused.
 
 It also separates the two kinds of gap. The bandwidth kernels reach
 51–62% of HBM — ordinary for a streaming benchmark, and a figure worth

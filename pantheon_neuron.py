@@ -377,7 +377,7 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     # cross-platform comparison can join on (Test Name, Unit). "Problem"
     # records the pinned shape/dtype, because a Score is only comparable if
     # both platforms ran the same problem.
-    _peak_share = peak_share(workload, devices)
+    _peak_share = peak_share(workload, devices, metrics)
     return {
         "Test Name": workload.name,
         "Suite": workload.suite,
@@ -635,7 +635,7 @@ def visible_core_count(value: typing.Optional[str]) -> typing.Optional[int]:
     return count or None
 
 
-def peak_share(workload, devices) -> typing.Optional[dict]:
+def peak_share(workload, devices, telemetry=None) -> typing.Optional[dict]:
     """The peak this workload's Score should be measured against.
 
     Not the device's peak. A workload declaring ``cores: 1`` gets one
@@ -703,6 +703,29 @@ def peak_share(workload, devices) -> typing.Optional[dict]:
         visible = visible_core_count(os.environ.get(cores.VISIBLE_CORES))
         if visible is not None:
             cores_used = min(cores_used, visible)
+
+    # What the kernel actually *used*, which the visible mask cannot say.
+    #
+    # Measured on trn1.2xlarge 2026-09-10 with both cores exposed
+    # (NEURON_RT_VISIBLE_CORES=0-1): tensor_virus left core 1 at 0.0%
+    # utilisation and no effective_flops, and so did transformer_virus.
+    # Neither kernel is sharded, one XLA device is one NeuronCore, and a
+    # visible second core simply sits there. The column credited it, and
+    # reported both kernels at half their share -- 11.88% and 25.17%
+    # where the same kernels under the reservation read 26.51% and 53.29%.
+    #
+    # For an arithmetic Score the fix is exact rather than heuristic: the
+    # Score *is* mean(effective_flops) over the cores that reported it, so
+    # the cores that count are precisely those. Only for TFLOPS -- a
+    # memory kernel is DMA-bound and can move bytes at full rate with the
+    # compute engines near idle, so counting cores by arithmetic activity
+    # there would call a saturated HBM path unused.
+    if field == "bf16_tflops" and telemetry:
+        flops = telemetry.get("effective_flops") or {}
+        active = sum(1 for core in flops.values()
+                     if isinstance(core, dict) and core.get("mean"))
+        if active:
+            cores_used = min(cores_used, active)
 
     if not total_cores or not cores_used:
         return None

@@ -407,3 +407,90 @@ def test_under_the_reservation_the_suite_is_internally_consistent(
     assert abs(shares["tensor_virus"] - shares["pulse_virus"]) < 3
     # Same memory path, one core and two.
     assert abs(shares["memory_read"] - shares["memory_read_agg"]) < 5
+
+
+# -- the cores the kernel used, not the cores it could see -------------------
+#
+# Measured on trn1.2xlarge 2026-09-10, each case its own process because
+# NEURON_RT_VISIBLE_CORES is read once at runtime init:
+#
+#   both visible  tensor_virus       core0 20.03%  core1 0.0%   22.57 TFLOPS
+#   reserved      tensor_virus       core0 28.74%  core1 0.0%   25.19
+#   both visible  transformer_virus  core0 24.35%  core1 0.0%   47.82
+#   reserved      transformer_virus  core0 29.85%  core1 0.0%   50.62
+#
+# Core 1 did nothing in any case. The prediction, written into the probe
+# before it ran, was that neither kernel is sharded so core 1 stays near
+# zero -- confirmed for both the NKI kernel and the torch-lowered one.
+
+_ONE_CORE_BUSY = {
+    "effective_flops": {"0": {"mean": 22573710261761, "samples": 7}},
+    "neuroncore_utilization": {"0": {"mean": 20.03}, "1": {"mean": 0.0}},
+}
+
+
+def test_a_visible_idle_core_is_not_counted_for_an_arithmetic_score(
+        monkeypatch):
+    """With both cores exposed the column credited two and reported
+    tensor_virus at 11.88% -- half its share, for a core that sat idle.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0-1")
+    share = pantheon_neuron.peak_share(
+        _named("tensor_virus"), TRN1, _ONE_CORE_BUSY)
+    assert share["cores_used"] == 1
+    assert pantheon_neuron.percent_of_peak(22.5737, share) == pytest.approx(
+        23.76, abs=0.05)
+
+
+def test_both_visibilities_now_describe_the_same_kernel(monkeypatch):
+    """The check the fix is right: one kernel, two ways of running it,
+    and the percentages should differ only by what the runs measured.
+
+    22.57 against 25.19 TFLOPS is a real difference between the runs;
+    the column should carry exactly that ratio and no more. Before the
+    fix it carried a further factor of two.
+    """
+    from kernels import cores
+    reserved = {"effective_flops": {"0": {"mean": 25185946432717}}}
+
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0-1")
+    visible = pantheon_neuron.percent_of_peak(
+        22.5737, pantheon_neuron.peak_share(
+            _named("tensor_virus"), TRN1, _ONE_CORE_BUSY))
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    only_zero = pantheon_neuron.percent_of_peak(
+        25.1859, pantheon_neuron.peak_share(
+            _named("tensor_virus"), TRN1, reserved))
+
+    assert visible / only_zero == pytest.approx(22.5737 / 25.1859, rel=1e-3)
+
+
+def test_the_flops_count_is_not_applied_to_a_memory_score():
+    """A memory kernel is DMA-bound and can saturate HBM with the compute
+    engines near idle. Counting cores by arithmetic activity would call a
+    saturated memory path unused -- so memory_read_agg keeps both cores
+    even when the telemetry shows no flops at all.
+    """
+    no_flops = {"effective_flops": {},
+                "neuroncore_utilization": {"0": {"mean": 0.5},
+                                           "1": {"mean": 0.4}}}
+    share = pantheon_neuron.peak_share(
+        _named("memory_read_agg"), TRN1, no_flops)
+    assert share["cores_used"] == 2
+
+
+def test_missing_telemetry_falls_back_to_the_visible_mask(monkeypatch):
+    """Mock runs and disabled telemetry carry no per-core counters. That
+    is not evidence that zero cores were used, so nothing is capped."""
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0-1")
+    for absent in (None, {}, {"effective_flops": {}}):
+        share = pantheon_neuron.peak_share(
+            _named("tensor_virus"), TRN1, absent)
+        assert share["cores_used"] == 2, absent
+
+
+def test_the_row_passes_its_telemetry_to_the_share():
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    assert "peak_share ( workload , devices , metrics )" in code
