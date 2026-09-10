@@ -247,9 +247,33 @@ def test_pinning_is_reported_false_when_it_did_not_happen():
     assert '"host_source_pinned": pinned_source' in source
 
 
-def test_the_docstring_records_which_explanations_are_eliminated():
-    """Two down, one untestable. A reader should not re-test the first two."""
+def test_the_docstring_records_what_the_sweep_settled():
+    """The asymmetry is explained; a reader should not re-derive it.
+
+    Three explanations failed one at a time before a size sweep showed the
+    question was wrong: everything had assumed a constant rate, and the
+    rate is not constant.
+    """
     doc = pcie_bandwidth.__doc__
-    assert "Per-pass allocation" in doc and "not move" in doc
-    assert "cached identical copy" in doc and "not it either" in doc
-    assert "Pageable host memory" in doc and "not testable here" in doc
+    assert "the link is healthy" in doc
+    assert "bandwidth-bound, not overhead-bound" in doc
+    assert "signature of a staging" in doc  # wrapped in the docstring
+    # And that the pinned size sits in the degraded regime.
+    assert "pinned 1 GiB measures the degraded regime" in doc
+
+
+def test_the_pinned_size_is_known_to_be_past_the_cliff():
+    """Recorded as arithmetic so the registry decision is informed.
+
+    d2h holds ~2.9 GB/s to 16 MiB and collapses to 0.88 by 64 MiB, and the
+    pinned problem is 1024 MiB -- past the cliff in both directions.
+    """
+    problem = {w.name: w.problem for w in registry.WORKLOADS}["pcie_bandwidth"]
+    pinned_mib = problem["bytes"] // 1024**2
+    assert pinned_mib == 1024
+
+    # Measured on trn1.2xlarge 2026-09-10.
+    d2h_small, d2h_large = 2.83, 1.09      # 16 MiB, 1024 MiB
+    h2d_peak, h2d_pinned = 11.55, 7.37
+    assert d2h_small > 2.5 * d2h_large, "the cliff is real"
+    assert h2d_pinned < h2d_peak, "h2d is past its peak at the pin too"

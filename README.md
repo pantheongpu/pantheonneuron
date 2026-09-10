@@ -31,11 +31,20 @@ counters on inf2 and 90 on trn1, and `throttle_active_nc0_time_ns` is
 present on Inferentia but `None` on Trainium. A kernel must not assume a
 counter exists because the other chip had it.
 
-Still unverified:
+Still unverified, and each for a different reason worth stating:
 
-- Device-to-device NeuronLink. The Trn quota was granted at 64 vCPUs;
-  `trn1.32xlarge` needs 128, so multi-device remains out of reach.
-- `trn1n` and `trn2`.
+- **Device-to-device NeuronLink.** `trn1.32xlarge` is the smallest shape with
+  it, at 128 vCPUs against a granted 64. Quota.
+- **`trn1n`.** Not quota alone: us-east-1 offers no small `trn1n` shape at
+  all. The only one is `trn1n.32xlarge`, also 128 vCPUs, so the same request
+  that unblocks NeuronLink unblocks this.
+- **`trn2`.** `trn2.48xlarge` is not offered in us-east-1, which is the only
+  region this account has Neuron quota in. A region with capacity would be
+  needed before a quota increase would help.
+
+Checked 2026-09-10 against `describe-instance-types`, because "we need more
+quota" and "the shape does not exist here" are different problems and only
+one of them is worth filing a case about.
 
 ## Kernel status
 
@@ -43,9 +52,24 @@ Every workload in the registry now has an implementation: **26 of 26**, and
 **24 of 26 have run on hardware**. The last full pass was 23 PASS, 0 FAIL,
 with 8 Scores from a declared hardware source (trn1.2xlarge, 2026-09-08).
 
-Figures are single runs unless stated. The one quantity measured repeatedly
-turned out not to be reproducible until its cause was found, so treat a lone
-number as provisional and use `--repeat`.
+**Figures are single runs unless the Repeats column says otherwise.** The one
+quantity ever measured repeatedly disagreed with itself by 2× until its cause
+was found, and a single pass could never have shown that. `--repeat N` gives
+a row the range and coefficient of variation; `REPEAT=3 bash
+tools/validate_hardware.sh` does it for a whole pass.
+
+So far only two figures have been repeated, and they differ by seventy times
+in stability:
+
+| Workload | Repeats | Range | cv |
+|---|--:|---|--:|
+| `memory_read` | 3 | 255.966 – 256.175 GB/s | **0.0004** |
+| `tensor_virus` | 3 | 24.776 – 26.095 TFLOPS | **0.0289** |
+
+A `neuron-profile` Score is a single deterministic NEFF replay; a
+`neuron-monitor` Score is an average over a sampled counter stream. That
+difference is worth remembering before quoting a monitor figure to three
+decimals.
 
 | Workload | Status | Measured | Score source |
 |---|---|--:|---|
@@ -71,13 +95,18 @@ number as provisional and use `--repeat`.
 | `rag_embedding` | ✅ 12-layer encoder | 853.7 vectors/s | workload |
 | `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
 | `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
-| `pcie_bandwidth` | ⚠️ d2h asymmetry unexplained | 3.89 GB/s | workload |
+| `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 3.89 GB/s | workload |
 | `serving_mix` | ⚠️ completes no decode request at 20 s | 0.0312 requests/s | workload |
 | `all_reduce` / `p2p_thrasher` | ❌ **cannot be run** — quota | — | `nccom-test` |
 
-Two rows carry a caveat the Score cannot express on its own. `pcie_bandwidth`
-reproduces a 6× d2h/h2d split on trn1 that is absent on inf2 and survives
-three methodologies; **do not cite the d2h figure as a link property**.
+Two rows carry a caveat the Score cannot express on its own.
+`pcie_bandwidth`'s 6× d2h/h2d split is now explained, and it is not a link
+fault: a size sweep found h2d reaching **11.55 GB/s at 16 MiB** — 72% of
+Gen4 x8, a healthy link — while d2h holds ~2.9 GB/s to 16 MiB and collapses
+to 0.88 by 64 MiB. A one-directional cliff between two sizes is a staging
+buffer. **The pinned 1 GiB sits past it in both directions**, so the Score
+measures large-transfer cost rather than link bandwidth; whether that is the
+question worth pinning is open.
 `serving_mix` needs 32 scheduler steps to finish one decode request and the
 scheduler sustains about one a second, so a 20-second run reports prefills
 only — the row says so, and whether to lengthen the run or shorten the
@@ -586,6 +615,46 @@ copy rather than the slice, because counting the slice would report a
 sixteenth of what the hardware moves.
 
 **Unverified at this size.** The 2 GiB version never finished compiling.
+
+### What repeating the whole pass found
+
+`DURATION=10 REPEAT=3` across every workload, trn1.2xlarge, 2026-09-10. 23
+PASS, 0 FAIL — and **six Scores flagged themselves as irreproducible**:
+
+| Workload | Range | cv | source |
+|---|---|--:|---|
+| `allocation_fragmentation` | 0.91 – 2,511.80 events/s | 0.98 | workload |
+| `graph_replay` | 613 – 3,064 graph-steps/s | 0.63 | analytic fallback |
+| `tensor_virus` | 17.74 – 26.14 TFLOPS | 0.21 | monitor |
+| `transformer_virus` | 35.73 – 53.07 TFLOPS | 0.21 | monitor |
+| `int_virus` | 23.83 – 31.53 TOPS | 0.15 | monitor |
+| `omni_virus` | 43.79 – 53.85 TFLOPS | 0.11 | monitor |
+
+Two distinct causes, and the guards separate them.
+
+**Four are monitor-sourced and all have the same shape** — one low reading
+among two that agree. That is not a slow run: the declared formula is
+`mean(effective_flops)`, the monitor drops samples taken while the workload
+compiles, and a ten-second run averages a handful. One sample caught
+mid-ramp moves the mean a long way. The row now reports how many samples the
+mean is over and says so below five, because a rate cannot show this about
+itself and the spread only shows it if somebody runs repeats.
+
+**`allocation_fragmentation` spans a factor of 2,700, and its repeats are
+ordered.** Noise does not do that. Repeats run in one process, so a workload
+that leaves device memory allocated makes every later repeat measure a
+fuller device — the same contamination that made a diagnostic script read
+0.9 events/s where a clean process reads 1,371. Monotonic repeats are now
+reported as drift rather than scatter.
+
+**`memory_write_agg` also flagged**: workers overlapped for 1.9 s of a 10 s
+span, 19%. That is the concurrency guard doing its job — at this duration
+the aggregate is not measuring cores contending, and the row says so instead
+of reporting a bandwidth.
+
+The lesson for the table above: **a short run is not a cheap run.** Ten
+seconds is long enough for every workload to pass and too short for six of
+them to mean anything.
 
 ### Repeats
 

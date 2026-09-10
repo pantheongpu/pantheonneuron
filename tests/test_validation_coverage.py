@@ -110,3 +110,26 @@ def test_the_pass_exercises_the_neff_search_against_a_warm_cache():
     assert "--test memory_read" in search, (
         "the warm-cache pass must run a profiler-sourced workload"
     )
+
+
+def test_the_pass_can_repeat_every_workload():
+    """One run is a sample, not a measurement.
+
+    memory_read's declared Score read 256.17, 178.7 and 119.19 GB/s on
+    three runs of the same problem before its cause was found, and a
+    single-pass harness could never have shown that. The default stays 1 --
+    repeats multiply an already hour-long pass -- but a pass whose numbers
+    will be quoted should set REPEAT.
+    """
+    text = _script()
+    assert "REPEAT=${REPEAT:-1}" in text
+    assert '--repeat "$REPEAT"' in text
+    # Every orchestrated invocation carries it, not just the first.
+    assert text.count('--repeat "$REPEAT"') >= 2
+
+
+def test_the_summary_prints_the_spread():
+    """A repeated run whose spread is invisible is a repeated run wasted."""
+    text = _script()
+    assert "repeats:" in text
+    assert "cv" in text

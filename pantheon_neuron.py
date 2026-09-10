@@ -260,6 +260,9 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
             )
+            thin = thin_monitor_sample(metrics)
+            if thin:
+                detail = "; ".join(filter(None, [detail, thin]))
         elif score is None and (_wants_monitor_score(workload)
                                 or _wants_execution_rate(workload)):
             counter = ("effective_flops" if _wants_monitor_score(workload)
@@ -366,10 +369,35 @@ def _spread(scores, attempted: int) -> dict:
         mean = statistics.fmean(scores)
         deviation = statistics.stdev(scores)
         summary["stdev"] = round(deviation, 4)
-        # Relative, because these Scores span GB/s and tokens/s and a
+        # Relative, because these Scores span GB/s and tokens/s and an
         # absolute threshold would mean something different for each.
         summary["cv"] = round(deviation / mean, 4) if mean else None
+        summary["trend"] = _trend(scores)
     return summary
+
+
+def _trend(scores) -> typing.Optional[str]:
+    """Monotonic repeats are drift, not scatter.
+
+    Repeats run in one process, so a workload that leaves device memory
+    allocated makes every later repeat measure a fuller device. Measured on
+    trn1.2xlarge 2026-09-10: allocation_fragmentation's three repeats spanned
+    0.91 to 2,511.80 allocation-events/s -- a factor of 2,700, and ordered.
+    Noise does not do that.
+
+    Weak evidence on its own at three repeats, where a third of orderings
+    are monotonic by chance. It is reported beside the coefficient of
+    variation rather than instead of it, because the pair distinguishes a
+    noisy measurement from a drifting one and neither number does that
+    alone.
+    """
+    if len(scores) < 3:
+        return None
+    if all(b < a for a, b in zip(scores, scores[1:])):
+        return "falling"
+    if all(b > a for a, b in zip(scores, scores[1:])):
+        return "rising"
+    return None
 
 
 def _unstable(spread: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
@@ -377,11 +405,19 @@ def _unstable(spread: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
     cv = spread.get("cv")
     if not isinstance(cv, (int, float)) or cv <= UNSTABLE_CV:
         return None
-    return (
+    message = (
         f"repeats disagree: {spread['min']} to {spread['max']} "
         f"(cv {cv:.2f} over {spread['scored']} runs), so the median is a "
         "summary of unlike numbers rather than a measurement"
     )
+    trend = spread.get("trend")
+    if trend:
+        message += (
+            f"; and they are monotonically {trend}, which is drift rather "
+            "than scatter -- repeats share a process, so state one leaves "
+            "behind reaches the next"
+        )
+    return message
 
 
 # Workloads whose Score does not yet come from the source the registry
@@ -468,6 +504,35 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     if not means:
         return None
     return sum(means) / len(means) / 1e12
+
+
+# Below this many samples, a mean over effective_flops is not stable. The
+# monitor samples across the whole run and drops the ones taken while the
+# workload is compiling, so a short run averages a handful -- and one caught
+# mid-ramp moves it a long way. Measured on trn1.2xlarge 2026-09-10 at
+# DURATION=10: tensor_virus repeated 17.74, 26.14 and 26.13 TFLOPS, and the
+# low figure is a mean over fewer good samples rather than a slow run.
+MIN_FLOPS_SAMPLES = 5
+
+
+def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any]
+                        ) -> typing.Optional[str]:
+    """Say so when a monitor Score averages too few samples to be stable.
+
+    A rate cannot show this about itself, and the spread across repeats
+    only shows it if somebody runs repeats. The sample count is the
+    quantity that makes a single run self-describing.
+    """
+    flops = metrics.get("effective_flops") or {}
+    counts = [core["samples"] for core in flops.values()
+              if isinstance(core, dict) and isinstance(core.get("samples"), int)]
+    if not counts or min(counts) >= MIN_FLOPS_SAMPLES:
+        return None
+    return (
+        f"effective_flops averaged over {min(counts)} sample(s); a mean over "
+        f"fewer than {MIN_FLOPS_SAMPLES} moves with any one of them, so run "
+        "longer or with a shorter --monitor-period before quoting this"
+    )
 
 
 def _score_method(workload, score) -> typing.Optional[str]:

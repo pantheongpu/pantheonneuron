@@ -23,6 +23,17 @@ export PATH="$VENV/bin:/opt/aws/neuron/bin:$PATH"
 export PANTHEON_NEURON_WORKDIR=${PANTHEON_NEURON_WORKDIR:-/tmp/pantheon_ccwork}
 DURATION=${DURATION:-30}
 
+# How many times each workload runs. One is a sample, not a measurement --
+# the only quantity this suite ever measured twice turned out to disagree
+# with itself by 2x until the cause was found, and nothing would have shown
+# that from a single pass.
+#
+# The default stays 1 because repeats multiply an already hour-long pass,
+# and a bring-up wants coverage before it wants error bars. Set REPEAT=3
+# for a pass whose numbers are going to be quoted: the row then carries the
+# range and coefficient of variation, and says so when they disagree.
+REPEAT=${REPEAT:-1}
+
 # The GEMM workloads pin 8192^3, which unrolls to 65,536 matmul calls and
 # has never compiled -- four times the graph that already took about seven
 # minutes. They are exercised at reduced shapes through the kernel instead,
@@ -77,7 +88,7 @@ WORKLOAD_TIMEOUT=${WORKLOAD_TIMEOUT:-2400}
 for workload in $ORCHESTRATED; do
   hr "orchestrated: $workload (pinned problem)"
   timeout "$WORKLOAD_TIMEOUT" $PY pantheon_neuron.py \
-      --test "$workload" --duration "$DURATION" 2>&1 \
+      --test "$workload" --duration "$DURATION" --repeat "$REPEAT" 2>&1 \
     | grep -vE 'CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc' \
     | tail -6
   status=${PIPESTATUS[0]}
@@ -104,7 +115,7 @@ echo "NEFFs now on this machine:"
 find "$PANTHEON_NEURON_WORKDIR" /tmp/no-user/neuroncc_compile_workdir \
      /var/tmp/neuron-compile-cache -name '*.neff' 2>/dev/null | wc -l
 timeout "$WORKLOAD_TIMEOUT" $PY pantheon_neuron.py \
-    --test memory_read --duration "$DURATION" 2>&1 \
+    --test memory_read --duration "$DURATION" --repeat "$REPEAT" 2>&1 \
   | grep -vE 'CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc' | tail -4
 
 # ---------------------------------------------------------------------------
@@ -177,6 +188,10 @@ for path in reports:
                   f"{measured.get('profiler_candidates_available')}, "
                   f"coverage {measured.get('profiler_plan_coverage')}, "
                   f"graph {measured.get('profiler_neff')}")
+        spread = row.get("Repeats") or {}
+        if spread.get("scored", 0) > 1:
+            print(f"    {spread['scored']} repeats: {spread['min']} to "
+                  f"{spread['max']}, cv {spread.get('cv')}")
         detail = (row.get("Detail") or "").strip()
         if detail:
             print(f"    {detail[:200]}")

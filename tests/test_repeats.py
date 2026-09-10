@@ -185,3 +185,65 @@ def test_the_cli_accepts_repeat():
     args = pantheon_neuron.build_parser().parse_args(["--repeat", "5"])
     assert args.repeat == 5
     assert pantheon_neuron.build_parser().parse_args([]).repeat == 1
+
+
+# -- drift is not scatter ----------------------------------------------------
+#
+# Repeats run in one process, so a workload that leaves device memory
+# allocated makes every later repeat measure a fuller device. Measured on
+# trn1.2xlarge 2026-09-10: allocation_fragmentation's three repeats spanned
+# 0.91 to 2,511.80 allocation-events/s, ordered. Noise does not do that.
+
+def test_monotonic_repeats_are_reported_as_drift():
+    falling = pantheon_neuron._spread([2511.8, 100.0, 0.9088], attempted=3)
+    assert falling["trend"] == "falling"
+    assert "drift rather than scatter" in pantheon_neuron._unstable(falling)
+
+    rising = pantheon_neuron._spread([10.0, 20.0, 30.0], attempted=3)
+    assert rising["trend"] == "rising"
+
+
+def test_scattered_repeats_are_not_called_drift():
+    """The tensor_virus shape: one low reading among two that agree."""
+    scattered = pantheon_neuron._spread([26.1, 17.7, 26.0], attempted=3)
+    assert scattered["trend"] is None
+    message = pantheon_neuron._unstable(scattered)
+    assert message is not None and "drift" not in message
+
+
+def test_two_repeats_cannot_show_a_trend():
+    """Every pair is monotonic; it means nothing until there are three."""
+    assert pantheon_neuron._spread([1.0, 2.0], attempted=2)["trend"] is None
+
+
+# -- a thin monitor mean says so ---------------------------------------------
+
+def test_a_mean_over_too_few_samples_is_flagged():
+    """The declared formula is mean(effective_flops), and the monitor drops
+    samples taken while the workload compiles. A short run averages a
+    handful, and one caught mid-ramp moves it a long way.
+
+    trn1.2xlarge 2026-09-10 at DURATION=10: tensor_virus repeated 17.74,
+    26.14, 26.13 TFLOPS. The low one is a mean over fewer good samples.
+    """
+    thin = pantheon_neuron.thin_monitor_sample(
+        {"effective_flops": {"0": {"mean": 2e13, "samples": 2}}})
+    assert thin is not None and "2 sample(s)" in thin
+
+    assert pantheon_neuron.thin_monitor_sample(
+        {"effective_flops": {"0": {"mean": 2e13, "samples": 40}}}) is None
+
+
+def test_the_worst_core_decides():
+    """One core starved of samples makes the mean over cores unstable too."""
+    mixed = pantheon_neuron.thin_monitor_sample({"effective_flops": {
+        "0": {"mean": 2e13, "samples": 40},
+        "1": {"mean": 2e13, "samples": 1},
+    }})
+    assert mixed is not None and "1 sample(s)" in mixed
+
+
+def test_no_flops_reported_is_not_a_thin_sample():
+    """Absent is a different thing from thin, and monitor_score handles it."""
+    assert pantheon_neuron.thin_monitor_sample({}) is None
+    assert pantheon_neuron.thin_monitor_sample({"effective_flops": {}}) is None

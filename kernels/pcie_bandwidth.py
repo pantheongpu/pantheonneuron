@@ -16,33 +16,39 @@ asymmetry, and the asymmetry is usually where the fault is -- reads back
 from the device commonly run slower than writes to it, so averaging them
 turns a one-sided regression into a smaller two-sided one.
 
-**The d2h asymmetry is real, reproducible, and still unexplained** -- but
-the list of candidate explanations is now shorter by two.
+**The d2h asymmetry is explained, and the link is healthy.** A size sweep
+on trn1.2xlarge, 2026-09-10:
 
-trn1.2xlarge measured d2h 1.0 GB/s against h2d 6.0 on 2026-09-08 and the
-guard fired. inf2.xlarge ran the same code in the same window and the
-guard did not fire at all, so it is a property of that part rather than of
-this code. Three explanations have been tested:
+    MiB     h2d      d2h    d2h ms/pass
+      1    5.57     2.92           0.36
+     16   11.55     2.83           5.94
+     64   11.22     0.88          76.20
+    256   10.09     1.01         264.68
+   1024    7.37     1.09         988.20
 
-- **Per-pass allocation.** The d2h leg called ``.cpu()``, which returns a
-  new host tensor every pass, while h2d reused one buffer. Real defect,
-  fixed, and the number did not move: 1.1 against 6.4.
-- **A cached identical copy.** If the runtime could serve a repeated
-  identical h2d copy without moving bytes, the 6.x would be inflated
-  rather than the 1.x depressed. The h2d leg now alternates between two
-  sources with different contents. Measured 2026-09-08 with the
-  alternation confirmed active: d2h 1.13 against h2d 6.52. Unchanged, so
-  this is not it either.
-- **Pageable host memory.** Untested, and not testable here:
-  ``pin_memory()`` is a CUDA-shaped API and returned unpinned buffers on
-  this stack. The row records ``host_source_pinned`` and
-  ``host_landing_pinned``, both False in every run so far, so the
-  bounce-buffer explanation remains open by default rather than by
-  choice.
+Three things fall out of it, none of which a single 1 GiB transfer could
+have shown:
 
-Until one of them lands, **the d2h figure should not be cited as a link
-property.** What is established: it reproduces on trn1 across three
-methodologies, it is absent on inf2, and it is not the harness.
+- **The link is fine.** h2d reaches 11.55 GB/s at 16 MiB against roughly
+  16 GB/s theoretical for the Gen4 x8 the probes recorded -- 72%, which is
+  what a healthy link does.
+- **d2h is bandwidth-bound, not overhead-bound.** Fitting time = overhead
+  + bytes/BW across the sweep gives 1.09 GB/s and an overhead of about
+  zero. Every earlier explanation assumed this without being able to check
+  it.
+- **The rate is not constant, and that is the actual finding.** d2h holds
+  ~2.9 GB/s to 16 MiB and collapses to 0.88 by 64 MiB. A cliff in one
+  direction between two transfer sizes is the signature of a staging
+  buffer: transfers that fit go fast, larger ones are chunked through it.
+  That is the bounce-buffer explanation ``pin_memory()`` could not test
+  directly -- it returned unpinned buffers on this stack -- arriving from
+  the other side.
+
+**So the pinned 1 GiB measures the degraded regime for both directions.**
+h2d is past its own peak there too (7.37 against 11.55). The size is a
+registry decision and is left open: 16 MiB measures the link, 1 GiB
+measures what a large transfer actually costs, and those are different
+questions. What is no longer true is that the number is unexplained.
 
 STATUS: verified on both parts 2026-09-08; the pinning and alternating-
 source controls are UNTESTED. No NKI: this is torch tensor movement, so it
