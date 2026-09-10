@@ -309,3 +309,33 @@ def test_the_readme_status_table_lists_every_workload():
     known = {workload.name for workload in registry.WORKLOADS}
     assert not known - listed, f"missing from the status table: {known - listed}"
     assert not listed - known, f"in the table but not the registry: {listed - known}"
+
+
+def test_the_accident_catalogue_numbering_matches_its_own_count():
+    """A document that miscounts its own list is a small joke at its own
+    expense, and this file is where it would land.
+
+    The intro and the closing line both quote a total. Deriving it from
+    the headings means adding an entry cannot leave either stale -- which
+    has already happened once, in the commit that added the eleventh.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "docs", "checks_that_pass_by_accident.md")
+    with open(path, encoding="utf-8") as handle:
+        doc = handle.read()
+
+    numbered = re.findall(r"^### (\d+)\. ", doc, re.MULTILINE)
+    assert numbered, "no numbered entries found -- the heading shape changed"
+
+    # Numbered from 1 with no gaps, so a renumber cannot silently collide.
+    assert [int(n) for n in numbered] == list(range(1, len(numbered) + 1)), \
+        numbered
+
+    words = {10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
+             14: "fourteen", 15: "fifteen", 16: "sixteen"}
+    total = words.get(len(numbered))
+    assert total, f"add {len(numbered)} to the words map"
+    assert f"produced {total} of them" in doc, (
+        f"the intro does not say 'produced {total} of them'")
+    assert f"{total} above were found" in doc, (
+        f"the closing line does not say '{total} above were found'")
