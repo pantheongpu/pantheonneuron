@@ -212,3 +212,47 @@ def test_a_passing_run_without_the_counter_says_so(monkeypatch):
     assert row["Status"] == "PASS"
     assert row["Score"] is None
     assert "effective_flops" in row["Detail"]
+
+
+# -- the number the declared Score replaced ----------------------------------
+
+def test_close_figures_say_nothing():
+    """tensor_virus: 26.19 issued against 26.06 counted. Either would do."""
+    assert pantheon_neuron.override_disagreement(
+        26.19, 26.06, "effective_flops") is None
+
+
+def test_a_factor_of_four_is_reported():
+    """graph_replay: 3051.2 submitted against 729.3 completed.
+
+    The dispatch source already called this "worth seeing rather than
+    smoothing" and then nothing reported it -- the reader got one number
+    and never learned the other existed.
+    """
+    message = pantheon_neuron.override_disagreement(
+        3051.206, 729.3231, "the completion counter")
+    assert message is not None
+    assert "729.3" in message and "3051" in message
+    assert "4.2" in message
+
+
+def test_it_fires_in_both_directions():
+    """Which figure is larger is not the question."""
+    assert pantheon_neuron.override_disagreement(10.0, 100.0, "c") is not None
+    assert pantheon_neuron.override_disagreement(100.0, 10.0, "c") is not None
+
+
+def test_a_missing_or_zero_figure_is_not_a_disagreement():
+    for bad in (None, 0, -1.0, "n/a"):
+        assert pantheon_neuron.override_disagreement(bad, 5.0, "c") is None
+        assert pantheon_neuron.override_disagreement(5.0, bad, "c") is None
+
+
+def test_the_threshold_is_wide_on_purpose():
+    """The two quantities are genuinely different; only a large gap says
+    something a reader can act on."""
+    assert pantheon_neuron.OVERRIDE_DISAGREEMENT >= 1.5
+    just_under = pantheon_neuron.OVERRIDE_DISAGREEMENT - 0.01
+    assert pantheon_neuron.override_disagreement(1.0, just_under, "c") is None
+    just_over = pantheon_neuron.OVERRIDE_DISAGREEMENT + 0.01
+    assert pantheon_neuron.override_disagreement(1.0, just_over, "c") is not None

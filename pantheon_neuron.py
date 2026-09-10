@@ -310,6 +310,12 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     if status == "PASS":
         declared = monitor_score(workload, metrics)
         if declared is not None:
+            # Before the kernel's own figure is discarded, compare them.
+            counter = ("effective_flops" if _wants_monitor_score(workload)
+                       else "the completion counter")
+            disagreement = override_disagreement(score, declared, counter)
+            if disagreement:
+                detail = "; ".join(filter(None, [detail, disagreement]))
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
@@ -440,6 +446,47 @@ def _median_provenance(rows, scores, published):
         if candidate.get("Score") == published:
             return candidate.get("Measurement")
     return None
+
+
+# How far a monitor-sourced Score may sit from the kernel's own figure
+# before the row says so. Wide, because the two quantities are genuinely
+# different -- one is what the device's counters saw, the other what the
+# kernel issued -- and small disagreements are expected. It is the factor
+# of four that needs saying.
+OVERRIDE_DISAGREEMENT = 1.5
+
+
+def override_disagreement(analytic, declared,
+                          counter: str) -> typing.Optional[str]:
+    """Say so when the declared Score replaces a very different number.
+
+    A monitor-sourced Score overrides whatever the kernel computed, and
+    the kernel's figure then vanishes from the row. For the compute family
+    that is unremarkable: ``tensor_virus`` issued 26.19 TFLOPS by its own
+    count against 26.06 from the monitor, and either would do.
+
+    ``graph_replay`` is the reason this exists. Its analytic figure counts
+    replays submitted, its declared Score counts executions the device
+    finished, and they have been seen at 3051.2 and 729.3 graph-steps/s --
+    a factor of 4.2. The dispatch source already says the disagreement is
+    "worth seeing rather than smoothing", and then nothing reported it:
+    the reader got one number and never learned the other existed.
+
+    Which is right is not decided here. A row that publishes one of two
+    numbers differing by 4x should say that it did.
+    """
+    if not isinstance(analytic, (int, float)) or analytic <= 0:
+        return None
+    if not isinstance(declared, (int, float)) or declared <= 0:
+        return None
+    ratio = max(analytic, declared) / min(analytic, declared)
+    if ratio < OVERRIDE_DISAGREEMENT:
+        return None
+    return (
+        f"{counter} reports {declared:.4g} where the kernel counted "
+        f"{analytic:.4g}, a factor of {ratio:.2g} -- the Score is the "
+        "former and the two are not measuring the same thing"
+    )
 
 
 def score_resolution(workload, result) -> typing.Optional[float]:
