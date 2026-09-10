@@ -199,18 +199,33 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
         # forward, the backward and the step all executed and the Score
         # correctly measures what they cost. It is the *name* that
         # misleads, so it warns.
-        **_train_step_check(observed, before, after),
+        "expected_loss": transformer_ops.stacked_block_output(layers),
+        **_train_step_check(observed, before, after, layers),
     }
 
 
-def _train_step_check(observed, before, after):
+def _train_step_check(observed, before, after, layers):
     """Pair the loss verdict with the did-it-train verdict.
 
-    Order matters. A NaN loss invalidates the Score and is reported
-    first; an unmoved model does not invalidate anything and is appended,
-    so a run with both says the more serious thing first.
+    The loss is derivable, and the two verdicts constrain each other.
+    Inputs are ones and parameters are 1/fan_in, so a forward pass through
+    ``layers`` blocks produces ``stacked_block_output(layers)`` and the
+    loss is its mean over identical elements -- 8.3654 at the pinned four
+    layers.
+
+    That is the value on the *first* step. On later steps it holds only if
+    the parameters have not moved, which is exactly what the other verdict
+    reports. So a run where the loss stays at 8.3654 and the parameter is
+    unchanged is internally consistent, and a run where one moves without
+    the other is not: **either both or neither**, and a row showing one
+    alone means one of the two checks is measuring the wrong thing.
+
+    Order matters. A NaN or wrong loss invalidates the Score and is
+    reported first; an unmoved model does not invalidate anything and is
+    appended, so a run with both says the more serious thing first.
     """
-    result = transformer_ops.output_check(observed, "loss")
+    expected = transformer_ops.stacked_block_output(layers)
+    result = transformer_ops.equals_check(observed, expected, "loss")
     moved = transformer_ops.verify_optimiser_moved_the_model(before, after)
     if moved:
         result["warning"] = "; ".join(

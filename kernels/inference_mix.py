@@ -103,6 +103,13 @@ def run_fused_attention(problem: typing.Mapping[str, typing.Any],
     }
 
 
+# The per-tensor dequantisation factor. Named so the kernel's expected
+# output can be derived from it rather than from a literal repeated in two
+# places -- an all-ones GEMM over K terms reaches K, and this takes it to
+# K * SCALE.
+SCALE = 0.02
+
+
 def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
                        duration: int) -> dict:
     """int8 GEMM with a dequantisation scale, counting quantised ops."""
@@ -120,7 +127,7 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
     # matters: a bare int8 matmul without dequantisation is not a path any
     # deployed model takes, and it would skip the conversion this workload
     # exists to measure.
-    scale = torch.ones((1,), dtype=torch.float32, device=device) * 0.02
+    scale = torch.ones((1,), dtype=torch.float32, device=device) * SCALE
     xm.mark_step()
 
     def gemm():
@@ -187,8 +194,16 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
         "reference_bf16_tops": tiling.OPERAND_RATES_4096["bf16"],
         "score_method": "workload",
         "analytic_basis": "quantised ops / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "quantised output"),
+        # The answer is exact. lhs and rhs are all-ones int8 over K
+        # terms, so the int32 product is K, and the dequantisation scale
+        # takes it to K * scale -- 4096 * 0.02 = 81.92 at the pinned
+        # problem. A saturated accumulator, a dropped scale, a wrong
+        # contraction, or a matmul the compiler folded away each produce a
+        # finite number that is not that.
+        "expected_output": k * float(SCALE),
+        **transformer_ops.equals_check(
+            transformer_ops.read_back(sink), k * float(SCALE),
+            "quantised output"),
     }
 
 

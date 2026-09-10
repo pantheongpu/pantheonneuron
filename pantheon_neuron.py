@@ -974,6 +974,11 @@ _PROVENANCE_KEYS = (
     "cache_fill",
     "entry_fill",
     "cache_element",
+    # Values the pinned problem determines exactly, published beside what
+    # was observed so a reader can check the Score's arithmetic rather
+    # than take the PASS on faith.
+    "expected_output",
+    "expected_loss",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",

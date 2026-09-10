@@ -1567,14 +1567,15 @@ def test_it_warns_rather_than_invalidating():
     """The Score is right: forward, backward and step all executed and
     the cost is real. It is the name that misleads, so this is a warning.
     """
-    paired = transformer_compute._train_step_check(1.0, 5.0, 5.0)
+    correct = transformer_ops.stacked_block_output(4)
+    paired = transformer_compute._train_step_check(correct, 5.0, 5.0, 4)
     assert paired["warning"] is not None
     assert paired["score_invalid"] is False
 
 
 def test_a_nan_loss_still_invalidates_and_is_reported_first():
     """A run with both problems says the more serious one first."""
-    paired = transformer_compute._train_step_check(float("nan"), 5.0, 5.0)
+    paired = transformer_compute._train_step_check(float("nan"), 5.0, 5.0, 4)
     assert paired["score_invalid"] is True
     assert paired["warning"].index("NaN") < paired["warning"].index("unchanged")
 
@@ -1669,3 +1670,49 @@ def test_moe_router_uses_the_scatter_check():
     code = sourcecheck.function_code(inference_mix.run_moe_router)
     assert "scatter_check" in code
     assert "output_check" not in code
+
+
+def test_the_loss_and_the_parameter_verdict_constrain_each_other():
+    """Either both move or neither does, and a row showing one alone
+    means one of the two checks is measuring the wrong thing.
+
+    Inputs are ones and parameters are 1/fan_in, so a forward pass
+    through `layers` blocks gives stacked_block_output(layers) and the
+    loss is its mean over identical elements. That is the value on the
+    first step; it holds on later steps only if the parameters have not
+    moved -- which is exactly what the other verdict reports.
+    """
+    expected = transformer_ops.stacked_block_output(4)
+
+    # Consistent: nothing moved, and the loss is where a static model
+    # leaves it.
+    steady = transformer_compute._train_step_check(expected, 5.0, 5.0, 4)
+    assert steady["score_invalid"] is False
+    assert "unchanged" in steady["warning"]
+
+    # Consistent the other way: the model moved and the loss moved with
+    # it, so neither verdict fires.
+    trained = transformer_compute._train_step_check(
+        expected * 0.5, 5.0, 5.1, 4)
+    assert trained["score_invalid"] is True   # the loss check, correctly
+    assert "unchanged" not in (trained["warning"] or "")
+
+
+def test_the_quantized_answer_follows_from_K_and_the_scale():
+    """4096 terms of all-ones int8, dequantised by 0.02, is 81.92."""
+    from kernels import inference_mix as mix
+    problem = PROBLEMS["quantized_gemm"]
+    k = problem["shape"][2]
+    assert k * mix.SCALE == pytest.approx(81.92)
+    assert transformer_ops.verify_equals(81.92, k * mix.SCALE, "q") is None
+    for wrong in (0.0, 4096.0, 81.92 * 4, 40.96):
+        assert transformer_ops.verify_equals(wrong, k * mix.SCALE, "q")
+
+
+def test_the_scale_is_named_once():
+    """It was a literal in the kernel and would have been a second
+    literal in the expected value -- two places to change one number."""
+    from kernels import inference_mix as mix
+    code = sourcecheck.function_code(mix.run_quantized_gemm)
+    assert "0.02" not in code
+    assert "SCALE" in code

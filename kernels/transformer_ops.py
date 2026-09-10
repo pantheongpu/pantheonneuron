@@ -376,6 +376,38 @@ def stack_check(observed: typing.Optional[float],
     return {"warning": message, "score_invalid": message is not None}
 
 
+def verify_equals(observed: typing.Optional[float],
+                  expected: float,
+                  what: str,
+                  tolerance: float = 0.01) -> typing.Optional[str]:
+    """Check a value against one the pinned problem determines exactly.
+
+    For the cases where the answer is a single number rather than a
+    stack's depth: an all-ones GEMM over K terms reaches K, and scaling
+    it by a dequantisation factor gives K * scale. No search, no
+    accumulation, nothing to drift -- so the tolerance is tight.
+    """
+    if observed is None:
+        return f"{what} could not be read back to verify"
+    if observed != observed:
+        return f"{what} is NaN"
+    if not (abs(observed - expected) <= tolerance * max(1.0, abs(expected))):
+        return (
+            f"{what} is {observed:.6g} where the pinned problem determines "
+            f"{expected:.6g} -- the arithmetic ran and produced the wrong "
+            "number"
+        )
+    return None
+
+
+def equals_check(observed: typing.Optional[float],
+                 expected: float,
+                 what: str) -> typing.Dict[str, typing.Any]:
+    """The paired form, for the same reason ``output_check`` is paired."""
+    message = verify_equals(observed, expected, what)
+    return {"warning": message, "score_invalid": message is not None}
+
+
 def verify_scatter_landed(observed: typing.Optional[float],
                           what: str = "output") -> typing.Optional[str]:
     """Check a scattered output is not still the zeros it started as.
