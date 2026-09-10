@@ -656,6 +656,74 @@ The lesson for the table above: **a short run is not a cheap run.** Ten
 seconds is long enough for every workload to pass and too short for six of
 them to mean anything.
 
+### "Quantized" is the slowest arithmetic on this part
+
+trn1.2xlarge, 2026-09-10. Five dtypes at 4096³ in one process, so nothing
+differs but the operand type. Every product verified exact against
+all-ones arithmetic.
+
+| path | T-ops/s | vs bf16 |
+|---|--:|--:|
+| `int8 -> int32` | 18.46 | 0.26× |
+| `int8` direct | 18.45 | 0.26× |
+| `uint8 -> int32` | 72.78 | 1.03× |
+| `bf16` | 70.38 | 1.00× |
+| `fp8_e4m3` | refused by `neuronx-cc` | — |
+
+`quantized_gemm` was described as "INT8/FP8 quantized GEMM paths" and
+both halves of that were aspirational. There is no FP8 path —
+`neuronx-cc` refuses the type outright (`NCC_ESPP047`) — and the INT8
+path is **the slowest arithmetic measured on the device**, not an
+acceleration. Its Score is a footprint-and-accuracy figure and the row
+now says so, alongside `ratio_to_bf16`.
+
+`int8 direct` and `int8 -> int32` agreeing to three digits is worth its
+own line: the kernel converted both operands to int32 with a comment
+explaining that int8 accumulators overflow at K far below 4096. True,
+and irrelevant — XLA had already inserted the widening, so the call is a
+no-op. The conversion stays, because it states the accumulator width the
+kernel's correctness rests on; the claim that it prevents anything is
+gone.
+
+**No output check could have caught any of this.** Every row of that
+table computes the correct product, including the two that are 3.8×
+slower than their neighbour. Correctness says the matmul happened; it
+says nothing about which path ran it. What caught it was measuring five
+dtypes side by side — the fifth defect in this repo found by one number
+disagreeing with another.
+
+### Two paths to the engine, two different answers
+
+`nc_matmul` rejects int8 outright (`does not support
+stationary.dtype=int8`, 2026-09-08) and that is why `int_virus` pins
+uint8. `neuronx-cc` accepts int8 and rejects fp8_e4m3. **The two paths do
+not accept the same set**, so "this part supports int8" is not a claim
+that can be checked without saying which path asked.
+
+`kernels/tiling.py` carries `NKI_OPERANDS` and `XLA_OPERANDS` separately
+for that reason, with `OPERAND_REFUSALS` keyed by `(path, dtype)` and
+every refusal carrying the date it was measured.
+
+The first version of that table had one set, transcribed from a prose
+comment rather than run, listing fp8_e4m3 as accepted. A probe falsified
+it the same afternoon — which is the argument for measuring rather than
+transcribing, turned on the person making it.
+
+### `--duration` does not bound every workload
+
+`allocation_fragmentation` pins an allocation count. Ten thousand
+allocations finish in about four seconds on trn1 whatever `--duration`
+says, so `--duration 30` and `--duration 60` measured the same
+four-second window, and every attempt to steady its cv-0.98 scatter by
+raising the duration changed nothing — the flag was not connected to the
+thing it was raised to lengthen.
+
+The orchestrator now compares each kernel's own `elapsed_s` against the
+requested duration and says so when the two diverge. That is one check
+covering all 23 workloads rather than a field each kernel has to
+remember to report, and a new kernel cannot forget a check it does not
+have to write.
+
 ### Repeats
 
 Most Scores in this README are from a single run, and the one quantity that

@@ -253,3 +253,77 @@ def test_the_register_does_not_change_what_joins():
                   if name not in registry.NOT_COMPARABLE_WITH_GPU}
     assert set(registry.SAME_UNIT_DIFFERENT_QUANTITY) <= comparable
     assert len(comparable) >= 12
+
+
+# -- a pinned dtype is a claim that the engine will run it --------------------
+#
+# The first version of this asserted against a single table transcribed from
+# a prose comment, and a probe falsified it the same afternoon: it had
+# fp8_e4m3 as an accepted operand, and neuronx-cc refuses it outright. The
+# tables now record what was measured, split by the path that measured it,
+# because NKI and XLA do not accept the same set -- int8 runs through XLA
+# and nc_matmul rejects it.
+
+# Every workload with a pinned dtype except int_virus reaches the engine
+# through XLA. int_virus is the NKI kernel, and it is why the split exists.
+_NKI_WORKLOADS = frozenset({"tensor_virus", "int_virus", "pulse_virus",
+                            "omni_virus", "transformer_virus",
+                            "memory_read", "memory_write",
+                            "memory_read_agg", "memory_write_agg"})
+
+
+def _path(name):
+    return "nki" if name in _NKI_WORKLOADS else "xla"
+
+
+def test_no_pinned_problem_names_a_dtype_its_path_refuses():
+    offenders = []
+    for workload in registry.WORKLOADS:
+        dtype = (workload.problem or {}).get("dtype")
+        if dtype is None:
+            continue
+        path = _path(workload.name)
+        if not tiling.engine_accepts(dtype, path):
+            why = tiling.refusal(dtype, path) or "not an operand on this path"
+            offenders.append(f"{workload.name} pins {dtype} on {path}: {why}")
+    assert not offenders, "; ".join(offenders)
+
+
+def test_the_two_paths_do_not_accept_the_same_set():
+    """Collapsing them is what made the first version of this wrong."""
+    assert tiling.NKI_OPERANDS != tiling.XLA_OPERANDS
+    assert "int8" in tiling.XLA_OPERANDS
+    assert "int8" not in tiling.NKI_OPERANDS
+    assert tiling.engine_accepts("int8", "xla")
+    assert not tiling.engine_accepts("int8", "nki")
+
+
+def test_fp8_is_not_claimed_as_an_operand_on_either_path():
+    """It was, on the strength of a comment. neuronx-cc says otherwise."""
+    assert "fp8_e4m3" not in tiling.XLA_OPERANDS
+    assert "fp8_e4m3" not in tiling.NKI_OPERANDS
+    assert "NCC_ESPP047" in tiling.refusal("fp8_e4m3", "xla")
+
+
+def test_every_refusal_is_keyed_by_the_path_that_refused():
+    for key, why in tiling.OPERAND_REFUSALS.items():
+        path, dtype = key
+        assert path in ("nki", "xla"), key
+        assert not tiling.engine_accepts(dtype, path), key
+        # A refusal without a date is a claim, not a measurement.
+        assert "2026-" in why, key
+
+
+def test_eight_bit_is_not_a_throughput_win_on_this_part():
+    """The assumption a workload named "quantized" invites, measured.
+
+    int8 through XLA is the slowest path on the part -- 18.46 T-ops/s
+    against bf16's 70.38 at the same 4096^3 shape in the same process --
+    and uint8 only matches bf16. Anyone reading quantized_gemm's Score as
+    an acceleration figure is reading it backwards, so the relationship
+    is pinned here rather than left in a comment.
+    """
+    rates = tiling.OPERAND_RATES_4096
+    assert rates["int8"] < rates["bf16"], rates
+    assert rates["int8"] / rates["bf16"] < 0.3, rates
+    assert 0.95 < rates["uint8"] / rates["bf16"] < 1.1, rates

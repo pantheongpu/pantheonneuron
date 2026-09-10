@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "_purpose": [
+    "Which workloads have run on which part, and the log that proves it.",
+    "",
+    "Eleven kernel modules carried 'STATUS: UNTESTED ON HARDWARE' in their",
+    "docstrings on 2026-09-10, and every one of them had run on a",
+    "trn1.2xlarge -- some of them a fortnight earlier. A status line that",
+    "nothing checks is not a status, and in a repo whose rule is 'never",
+    "claim a kernel works without a hardware run behind it', the inverse",
+    "error matters just as much: a stale UNTESTED label makes verified",
+    "work look unverified, and leaves a reader unable to tell which of",
+    "the eleven were genuinely untested.",
+    "",
+    "So the record moves out of prose and into here, where",
+    "tests/test_hardware_status.py can hold the docstrings against it.",
+    "",
+    "A workload is listed only if a run produced a PASS or a SKIP for it.",
+    "A FAIL is not a hardware verification -- it is evidence the kernel",
+    "reached the device, which is a different and lesser claim -- so",
+    "moe_router and transformer_train_step are recorded under the pass",
+    "that fixed them, not the one that found them."
+  ],
+  "parts": {
+    "trn1.2xlarge": {
+      "cores": 2,
+      "arch": "trn1",
+      "runs": [
+        {
+          "date": "2026-09-08",
+          "evidence": "data/validation-2026-09-08/trn1-full-coverage.log",
+          "passed": [
+            "allocation_fragmentation", "fused_attention", "graph_replay",
+            "int_virus", "kv_cache_churn", "llm_decode", "llm_prefill",
+            "memory_read", "memory_read_agg", "memory_write",
+            "memory_write_agg", "omni_virus", "pcie_bandwidth",
+            "pulse_virus", "quantized_gemm", "rag_embedding",
+            "serving_mix", "speculative_decode", "tensor_virus",
+            "transformer_virus", "vision_encoder"
+          ],
+          "failed": ["moe_router", "transformer_train_step"],
+          "skipped": ["all_reduce", "p2p_thrasher"]
+        },
+        {
+          "date": "2026-09-10",
+          "evidence": "README.md#what-repeating-the-whole-pass-found",
+          "note": "DURATION=10 REPEAT=3 full pass: 23 PASS, 0 FAIL. The two 2026-09-08 failures are fixed and verified here.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention", "graph_replay",
+            "int_virus", "kv_cache_churn", "llm_decode", "llm_prefill",
+            "memory_read", "memory_read_agg", "memory_write",
+            "memory_write_agg", "moe_router", "omni_virus",
+            "pcie_bandwidth", "pulse_virus", "quantized_gemm",
+            "rag_embedding", "serving_mix", "speculative_decode",
+            "tensor_virus", "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": ["all_reduce", "p2p_thrasher"]
+        }
+      ]
+    },
+    "inf2.xlarge": {
+      "cores": 2,
+      "arch": "inf2",
+      "runs": [
+        {
+          "date": "2026-09-08",
+          "evidence": "data/validation-2026-09-08/inf2.log",
+          "passed": ["memory_read", "memory_write", "tensor_virus"],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher", "transformer_train_step"
+          ]
+        }
+      ]
+    }
+  },
+  "never_run_anywhere": {
+    "all_reduce": "Needs 2+ devices for NeuronLink. Skipped on every single-device part probed. Trn quota is 64 vCPU and trn1.32xlarge needs 128, so no multi-device part has been reached.",
+    "p2p_thrasher": "Same: needs 2+ devices for a NeuronLink peer, and the same 64 vCPU Trn quota blocks every multi-device part."
+  }
+}

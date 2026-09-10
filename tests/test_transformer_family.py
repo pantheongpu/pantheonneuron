@@ -1008,23 +1008,35 @@ def test_the_router_counts_its_passes():
 
 
 def test_the_implied_rates_land_where_the_hardware_says_they_should():
-    """Sanity, as arithmetic: both should be a fraction of a dense matmul.
+    """The arithmetic here, checked against what the kernel computed there.
 
-    Measured on trn1.2xlarge: fused_attention 6,036.6 tiles/s and
-    moe_router 254,742.6 routed-tokens/s, against tensor_virus at 26.1
-    TFLOPS dense. Attention is softmax-bound and dispatch is
-    gather-bound, so both being under the dense figure is the expected
-    shape -- and either exceeding it would mean the FLOP count is wrong.
+    Measured on trn1.2xlarge 2026-09-10, 30s each:
+
+        fused_attention  6043.18 tiles/s          implied_tflops 12.978
+        moe_router     255288.26 routed-tokens/s  implied_tflops 17.132
+
+    against tensor_virus at 26.1 TFLOPS dense on the same part. Attention
+    is softmax-bound and dispatch is gather-bound, so both landing under
+    the dense figure is the expected shape -- and either exceeding it
+    would mean the FLOP count is wrong.
+
+    Recomputing both from the published rate is the point: it is the
+    off-hardware arithmetic held against the on-hardware arithmetic, and
+    the two agreeing is what makes implied_tflops a check rather than
+    another number nothing can contradict.
     """
     attention = PROBLEMS["fused_attention"]
     hidden = attention["heads"] * attention["head_dim"]
-    passes = 6036.5837 / attention["heads"]
+    passes = 6043.176933016786 / attention["heads"]
     implied = passes * 2 * (2 * attention["seq"] ** 2 * hidden) / 1e12
-    assert 5 < implied < 26.1, implied
+    assert implied == pytest.approx(12.97762364562434, rel=1e-6)
+    assert implied < 26.1
 
     router = PROBLEMS["moe_router"]
     capacity = inference_mix.expert_capacity(
         router["tokens"], router["top_k"], router["experts"])
-    passes = 254742.6 / router["tokens"]
+    assert capacity == 1024, capacity
+    passes = 255288.26031910875 / router["tokens"]
     implied = passes * router["experts"] * 2 * capacity * router["hidden"] ** 2 / 1e12
-    assert 5 < implied < 26.1, implied
+    assert implied == pytest.approx(17.132105142551666, rel=1e-6)
+    assert implied < 26.1

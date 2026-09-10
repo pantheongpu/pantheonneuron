@@ -25,9 +25,13 @@ from the analytic figure, which for this workload is honest -- each worker
 counts the bytes it moved, and the bytes are real whether or not a profiler
 watched them.
 
-STATUS: UNTESTED ON HARDWARE. The multi-process launch is the untested part;
-the kernel each worker runs is memory_read's or memory_write's, both
-verified on inf2.xlarge 2026-09-07.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10:
+543.2 GB/s read and 505.8 GB/s write aggregated across cores.
+
+The concurrency guard is doing real work at short durations. On the
+2026-09-10 ten-second pass the workers overlapped for only 1.9s of the
+10s span -- 19% -- and the row says so rather than reporting a summed
+bandwidth that was never a measurement of cores contending.
 """
 
 import json

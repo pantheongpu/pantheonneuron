@@ -25,7 +25,13 @@ What separates them, since sharing a module is not sharing a measurement:
                         run, which is what a real server does and what makes
                         it a distinct test.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-10, all five
+workloads. ``moe_router`` failed on 2026-09-08 (``Expected an array
+shape. Got (bf16[1024], u32[1024])`` from ``torch.topk``) and is fixed.
+
+``quantized_gemm``'s figure is the one to read carefully: int8 runs at
+0.254x bf16 on this part, so it is a footprint number rather than a
+throughput win. See docs/a_dtype_the_engine_refuses.md.
 """
 
 import time
@@ -112,8 +118,17 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
     xm.mark_step()
 
     def gemm():
-        # int32 accumulation, then scaled back. int8 accumulators overflow
-        # at K far below 4096.
+        # int32 accumulation, then scaled back. An int8 accumulator would
+        # overflow at K far below 4096, so the width has to be widened --
+        # but **XLA has already widened it**, and this call is a no-op.
+        # Measured trn1.2xlarge 2026-09-10 at 4096^3: with the conversion
+        # 18.46 T-ops/s, without it 18.45. Identical to three digits.
+        #
+        # It is kept because it states the accumulator width the
+        # correctness of this kernel depends on, at the point that
+        # depends on it. What is not kept is the claim that it prevents
+        # anything: it does not, and a comment that says otherwise would
+        # have a reader believe the overflow is guarded here.
         product = torch.matmul(lhs.to(torch.int32), rhs.to(torch.int32))
         return product.to(torch.float32) * scale
 
@@ -148,6 +163,22 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
         # run printed 18442342834453.8 and it says nothing at a glance.
         # Recorded beside it, never instead of it.
         "quantized_tops": rate / 1e12,
+        # The second quantity, and the one that matters most here,
+        # because the first invites exactly the wrong reading.
+        #
+        # "quantized" suggests a fast path. On this part it is the slow
+        # one. All five dtypes at 4096^3 in one process, trn1.2xlarge
+        # 2026-09-10: int8 18.46 T-ops/s, uint8 72.78, bf16 70.38, and
+        # neuronx-cc refuses fp8_e4m3 outright. int8 is 0.26x bf16 --
+        # the slowest path measured on the device, not the fastest.
+        #
+        # So this row's Score is a footprint-and-accuracy figure, never
+        # a throughput win, and reporting the ratio beside it is what
+        # stops it being read as one. See kernels/tiling.py for the
+        # table and docs/a_dtype_the_engine_refuses.md for the run.
+        "ratio_to_bf16": round(
+            (rate / 1e12) / tiling.OPERAND_RATES_4096["bf16"], 3),
+        "reference_bf16_tops": tiling.OPERAND_RATES_4096["bf16"],
         "score_method": "workload",
         "analytic_basis": "quantised ops / wall time",
         **transformer_ops.output_check(

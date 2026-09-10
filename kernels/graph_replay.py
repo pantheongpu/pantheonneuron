@@ -17,9 +17,15 @@ runtime cannot batch the replays into one execution or prove them dead. The
 chain is what makes each replay a separate completion for the counter to
 see.
 
-STATUS: UNTESTED ON HARDWARE. Uses only torch on the XLA device -- no NKI --
-so what is untested here is the replay pattern and whether the execution
-counter moves the way the formula assumes, not any kernel API.
+STATUS: VERIFIED ON HARDWARE as a workload, trn1.2xlarge 2026-09-08
+and 2026-09-10. What is **not** settled is its declared Score source: the
+monitor's execution counter produced a Score on 2026-09-08 (729.3
+graph-steps/s) and not on 2026-09-10, where the row degraded to the
+analytic fallback (3051.2 graph-steps/s via replays submitted / wall
+time). Those two numbers are four times apart and are not measurements of
+the same thing -- one counts what the device finished, the other what the
+loop asked for -- so neither should be quoted without its Score Method.
+The 2026-09-10 pass also flagged it irreproducible at cv 0.63.
 """
 
 import time

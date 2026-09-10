@@ -15,7 +15,16 @@ those differ by three orders of magnitude in arithmetic per step. Anything
 that would make two of them compile to the same graph belongs in one
 workload, not two.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE indirectly, trn1.2xlarge 2026-09-10. This
+module owns no workload of its own -- its status is the status of the
+kernels that import it, and llm_inference, inference_mix, encoders and
+transformer_compute have all passed on that part.
+
+Saying so is not pedantry. This module said UNTESTED for a fortnight
+after everything built on it had run, and because it owns no workload,
+the check that caught the other ten could not see it: the check keyed on
+workload ownership, and support code owns nothing. It was found by
+reading the list the check had just filtered.
 """
 
 import typing

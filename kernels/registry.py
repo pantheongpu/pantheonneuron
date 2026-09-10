@@ -337,8 +337,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'elapsed_s',
                  ),
                  formula='attention_tiles / elapsed_s')),
+    # "INT8/FP8" was aspirational on both halves. neuronx-cc refuses
+    # fp8_e4m3 outright (`NCC_ESPP047`, trn1.2xlarge 2026-09-10), so there
+    # is no FP8 path to measure; and int8 runs at 0.26x bf16 on the same
+    # shape, so the INT8 path is the slowest arithmetic on the part rather
+    # than an acceleration. The description now says what the row is.
     Workload("quantized_gemm", "inference",
-             "INT8/FP8 quantized GEMM paths.", _COMPUTE,
+             "INT8 GEMM with dequantisation. Slower than bf16 on this "
+             "part -- a footprint figure, not a throughput win.", _COMPUTE,
              unit="quantized-ops/s",
              problem={"op": "matmul", "shape": [4096, 4096, 4096], "dtype": "int8"},
              score_source=ScoreSource(INTERNAL,

@@ -190,6 +190,44 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     return plan["profiler"]
 
 
+# A run whose measured window is below this fraction of the requested
+# duration was bounded by something other than the clock. Set at half
+# rather than something tighter because a kernel legitimately spends part
+# of its wall time on a warm-up and a final wait_device_ops, and calling
+# that a short window would cry wolf on every row.
+SHORT_WINDOW_FRACTION = 0.5
+
+
+def short_window(measured: typing.Optional[float],
+                 requested: int) -> typing.Optional[str]:
+    """Say so when ``--duration`` did not bound the run.
+
+    ``allocation_fragmentation`` pins an allocation count, and 10,000
+    allocations finish in about four seconds on trn1 however long a
+    duration is asked for. ``--duration 30`` and ``--duration 60`` both
+    measured a four-second window, three repeats of it scattered from cv
+    0.15 to cv 0.98, and every attempt to steady the number by raising
+    the duration changed nothing -- because the flag it was raised on was
+    not connected to the thing it was trying to lengthen.
+
+    That kernel now reports ``bounded_by`` itself. This is the same check
+    made general, because the defect is not specific to it: any workload
+    bounded by a pinned count publishes a rate over a window the reader
+    believes they chose, and a new kernel cannot forget a check it does
+    not have to write. It reads ``elapsed_s``, which every kernel here
+    already returns.
+    """
+    if measured is None or requested <= 0:
+        return None
+    if measured >= requested * SHORT_WINDOW_FRACTION:
+        return None
+    return (
+        f"measured a {measured:.1f}s window of a requested {requested}s, "
+        "so this run was bounded by its pinned problem rather than by "
+        "--duration; raising the duration will not steady the Score"
+    )
+
+
 def _measure_once(workload, devices, duration: int, monitor_period: float) -> dict:
     """One execution of one workload, scored. See ``run_workload``."""
     skip = workload.skip_reason(devices)
@@ -243,6 +281,22 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             # never ran, which is the definition of a failed workload.
             status = "FAIL"
             score = None
+
+    # The wall time above includes compile and warm-up. What the reader
+    # asked to bound is the measured window, which is the kernel's own
+    # elapsed_s -- so the two are compared, not conflated.
+    run_result = _LAST_RUN.get(workload.name) or {}
+    if status == "PASS" and "bounded_by" not in run_result:
+        # A kernel that reports ``bounded_by`` has already said this, in
+        # terms specific to its own pinned problem. The first version of
+        # this check tested the message texts for equality, which is not
+        # the same question -- allocation_fragmentation's row came back
+        # carrying both sentences saying the same thing (trn1.2xlarge,
+        # 2026-09-10). The general check is the floor for kernels that
+        # do not report it, not a second opinion on the ones that do.
+        window = short_window(run_result.get("elapsed_s"), duration)
+        if window:
+            detail = "; ".join(filter(None, [detail, window]))
 
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":

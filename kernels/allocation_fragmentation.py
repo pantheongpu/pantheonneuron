@@ -15,7 +15,18 @@ result is an allocation that fails while the accounting says there is room.
 No NKI here. This is the runtime's allocator, reached through ordinary
 device tensors, so nothing in this file depends on a compiled kernel.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
+
+The pinned 10,000 allocations bound the run at about four seconds
+whatever ``--duration`` says, and the kernel reports ``bounded_by`` so a
+reader is not left believing they chose the window. A sweep on
+2026-09-10 showed what that costs: cv over three repeats runs 0.083 at
+10,000 allocations (3.98s), 0.038 at 40,000 (16.7s), 0.025 at 120,000
+(54.4s). The rate itself falls across that sweep -- 2512.9, 2400.7,
+2295.3 events/s -- because a longer run works a more fragmented
+allocator, which is the thing being measured. **The Score is therefore
+not comparable across different allocation counts**, and the count
+travels with it in ``problem`` for that reason.
 """
 
 import time

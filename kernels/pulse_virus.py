@@ -17,10 +17,14 @@ duty cycle times the sustained figure. Reading it as a throughput
 regression would be a mistake; what it is for is the *stability* of the
 number and the throttle counter recorded beside it.
 
-STATUS: UNTESTED ON HARDWARE as a workload, though every piece of it has
-run. The GEMM is tensor_virus's kernel, verified on inf2.xlarge 2026-09-07
-at 1024^3 and 2048^3; the duty cycling is wall-clock arithmetic around it.
-The pinned 8192^3 shape has never compiled -- see tensor_virus.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10,
+at the pinned 8192^3 shape that had never compiled when this note was
+first written: 14.4 TFLOPS via neuron-monitor.
+
+That figure is roughly half tensor_virus's sustained number and is meant
+to be. The analytic basis spans the idle halves of the duty cycle, so it
+lines up with the monitor's average rather than with a sustained rate --
+which is the entire point of the workload.
 """
 
 import time

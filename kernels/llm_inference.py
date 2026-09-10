@@ -21,7 +21,11 @@ workloads because they stress three different things:
 
 Reporting one number for these three would be the mistake pantheongpu made.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
+
+``kv_cache_churn`` is the workload that taught this repo XLA has no
+in-place write: 0.85 cache-updates/s on 2026-09-08 against 97,497.4 after
+the static-slice ring rewrite. See docs/xla_has_no_in_place_write.md.
 """
 
 import time

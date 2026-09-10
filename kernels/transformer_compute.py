@@ -17,9 +17,17 @@ Two workloads that run the same block for different reasons:
                           capability at all -- which is why it is gated on
                           it and skips on Inferentia.
 
-STATUS: UNTESTED ON HARDWARE as workloads, though the training path itself
-was verified on trn1.2xlarge 2026-08-27 at 23.25 train-steps/s with a real
-backward pass and optimiser step.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-10:
+``transformer_virus`` 53.1 TFLOPS via neuron-monitor,
+``transformer_train_step`` 3.64 train-steps/s.
+
+``transformer_train_step`` failed on 2026-09-08 -- the pinned problem did
+not fit device memory -- and the registry repinned it to batch 1 /
+layers 4, near 6.5 GB, which leaves room for the optimiser state rather
+than only just fitting. That was the fourth pinned problem in this repo
+found unreachable on the part it targets. The 23.25 train-steps/s
+measured on 2026-08-27 was a different, smaller problem and is not
+comparable to the 3.64 above.
 """
 
 import time
