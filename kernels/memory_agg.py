@@ -255,7 +255,11 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
             "not an aggregate over the whole part"
         )
     else:
-        warning = (verify_workers_overlapped(results, span)
+        # Coverage first: a worker that did not move its planned bytes
+        # makes the aggregate wrong in a way an overlap or an unevenness
+        # finding would only distract from.
+        warning = (verify_cores_read_what_they_planned(per_core)
+                   or verify_workers_overlapped(results, span)
                    or verify_cores_scaled(per_core))
 
     return {
@@ -291,6 +295,45 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         "analytic_basis": "summed bytes / longest worker span",
         "warning": warning,
     }
+
+
+def verify_cores_read_what_they_planned(
+    per_core: typing.Sequence[typing.Mapping],
+    floor: float = 0.99,
+) -> typing.Optional[str]:
+    """Flag a worker that moved less than the plan it was billed for.
+
+    Each worker's own kernel checks its coverage -- memory_read's
+    ``read_verified_ratio`` and memory_write's ``write_verified_ratio``
+    -- and the aggregate collects both into ``per_core``. It then
+    compared *rates* between cores and never looked at the ratios.
+
+    That leaves a specific hole. ``total_bytes`` sums each worker's
+    ``bytes_requested``, which is what the plan asked for rather than
+    what the kernel confirmed it touched, so a worker that covered half
+    its plan contributes its whole plan to the numerator. The aggregate
+    is then overstated by exactly the shortfall, the per-core rates stay
+    even -- so ``verify_cores_scaled`` says nothing -- and the row
+    carries the evidence in a field nothing reads.
+
+    A ratio of None means the worker did not report one, which is not
+    the same as reporting a bad one and is not accused here.
+    """
+    short = [
+        (core.get("core"), core["verified_ratio"])
+        for core in per_core
+        if isinstance(core.get("verified_ratio"), (int, float))
+        and core["verified_ratio"] < floor
+    ]
+    if not short:
+        return None
+    detail = ", ".join(f"core {core} covered {ratio:.3g}"
+                       for core, ratio in short)
+    return (
+        f"{detail} of its planned bytes -- the aggregate sums bytes "
+        "requested rather than bytes confirmed, so it is overstated by "
+        "the shortfall"
+    )
 
 
 def verify_cores_scaled(per_core: typing.Sequence[typing.Mapping],

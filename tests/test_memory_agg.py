@@ -7,6 +7,7 @@ bandwidth as the whole part's.
 """
 
 import pantheon_neuron
+import sourcecheck
 from kernels import cores, memory_agg, registry
 
 
@@ -248,3 +249,58 @@ def test_unknown_timing_is_not_zero_overlap():
 def test_one_worker_cannot_fail_to_overlap_with_itself():
     assert memory_agg._no_overlap_at_all([_timed(0.0, 5.0)], 5.0) is False
     assert memory_agg._no_overlap_at_all([], 5.0) is False
+
+
+# -- a worker that did not move its planned bytes ----------------------------
+
+def test_a_short_worker_is_reported():
+    """The aggregate sums bytes *requested*, not bytes confirmed.
+
+    So a worker covering half its plan contributes its whole plan to the
+    numerator: the aggregate is overstated by exactly the shortfall, the
+    per-core rates stay even so verify_cores_scaled says nothing, and the
+    evidence sits in per_core["verified_ratio"] where nothing read it.
+    """
+    per_core = [{"core": 0, "verified_ratio": 1.0},
+                {"core": 1, "verified_ratio": 0.5}]
+    message = memory_agg.verify_cores_read_what_they_planned(per_core)
+    assert message is not None
+    assert "core 1 covered 0.5" in message
+    assert "bytes requested rather than bytes confirmed" in message
+
+
+def test_full_coverage_says_nothing():
+    per_core = [{"core": 0, "verified_ratio": 1.0},
+                {"core": 1, "verified_ratio": 1.0}]
+    assert memory_agg.verify_cores_read_what_they_planned(per_core) is None
+
+
+def test_a_worker_that_reported_no_ratio_is_not_accused():
+    """Absent is not short, and inventing a verdict from a missing field
+    would fail a run for incomplete telemetry."""
+    assert memory_agg.verify_cores_read_what_they_planned(
+        [{"core": 0, "verified_ratio": None}]) is None
+    assert memory_agg.verify_cores_read_what_they_planned([{"core": 0}]) is None
+
+
+def test_coverage_is_checked_before_overlap_and_evenness():
+    """A worker that did not move its bytes makes the aggregate wrong in
+    a way the other two findings would only distract from."""
+    code = sourcecheck.flat_function_code(memory_agg.summarise)
+    assert code.index("verify_cores_read_what_they_planned") < code.index(
+        "verify_workers_overlapped")
+    assert code.index("verify_cores_read_what_they_planned") < code.index(
+        "verify_cores_scaled")
+
+
+def test_verify_cores_scaled_cannot_see_a_uniform_shortfall():
+    """Which is why the coverage check is separate rather than folded in.
+
+    Two cores both covering half their plan are perfectly even, so the
+    rate comparison is silent and the aggregate is half of what it
+    claims.
+    """
+    even_but_short = [{"core": 0, "gbps": 250.0, "verified_ratio": 0.5},
+                      {"core": 1, "gbps": 250.0, "verified_ratio": 0.5}]
+    assert memory_agg.verify_cores_scaled(even_but_short) is None
+    assert memory_agg.verify_cores_read_what_they_planned(even_but_short)
