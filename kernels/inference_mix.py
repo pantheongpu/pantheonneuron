@@ -92,8 +92,14 @@ def run_fused_attention(problem: typing.Mapping[str, typing.Any],
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "attention tiles / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "attention output"),
+        # Not output_check. q, k and v are all ones, so every score is
+        # identical, softmax is exactly uniform, and the context is v's own
+        # value -- the answer is known in advance and this is a
+        # correctness check rather than a plausibility one. A saturated
+        # softmax, a transposed head reshape or a mask applied by mistake
+        # each produce a finite number that is not 1.0, and every one of
+        # them passed the previous check.
+        **transformer_ops.attention_check(transformer_ops.read_back(sink)),
     }
 
 

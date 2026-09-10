@@ -198,6 +198,56 @@ def read_back(tensor) -> typing.Optional[float]:
         return None
 
 
+def verify_attention_is_uniform(
+    observed: typing.Optional[float],
+    expected: float = 1.0,
+    tolerance: float = 0.02,
+) -> typing.Optional[str]:
+    """Check attention over constant inputs produced the value it must.
+
+    ``fused_attention`` runs q, k and v all ones. Every score is then
+    ``head_dim / sqrt(head_dim)``, the same for every pair, so softmax
+    returns exactly uniform weights of ``1/seq`` and the context is the
+    weighted mean of v -- which is v's own constant value.
+
+    **The answer is known in advance, so this is a correctness check and
+    not a plausibility one.** Until 2026-09-10 the only check on this
+    kernel was that the output was a readable number, which a saturated
+    softmax, a transposed head reshape, an off-by-one in the sequence
+    axis or a mask applied by mistake would all survive: each produces a
+    finite number that is not 1.0.
+
+    The tolerance is loose on purpose. ``1/2048`` is exactly representable
+    in bf16 and the Tensor Engine accumulates in fp32, so the sum should
+    land on 1.0 exactly -- but a check that is right for a reason this
+    specific will fire on the first legitimate change to the pinned shape
+    or dtype, and a check that cries wolf gets deleted.
+    """
+    if observed is None:
+        return "attention output could not be read back to verify"
+    if observed != observed:
+        return "attention output is NaN"
+    if abs(observed - expected) > tolerance * max(1.0, abs(expected)):
+        return (
+            f"attention over constant inputs returned {observed:.6g} where "
+            f"uniform weights over identical values must give {expected:.6g} "
+            "-- the arithmetic ran and computed the wrong thing"
+        )
+    return None
+
+
+def attention_check(observed: typing.Optional[float],
+                    expected: float = 1.0) -> typing.Dict[str, typing.Any]:
+    """``output_check``'s stricter sibling, for the one kernel that can.
+
+    Same contract -- a message and a ``score_invalid`` flag travelling
+    together -- because separating them is how three NaN runs published
+    Scores.
+    """
+    message = verify_attention_is_uniform(observed, expected)
+    return {"warning": message, "score_invalid": message is not None}
+
+
 def output_check(observed: typing.Optional[float],
                  what: str = "output") -> typing.Dict[str, typing.Any]:
     """Judge an output, and say whether a Score computed beside it survives.

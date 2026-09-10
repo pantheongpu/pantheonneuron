@@ -405,14 +405,25 @@ def test_every_family_workload_verifies_that_its_graph_ran(name):
     their output was NaN: the check fired and nothing acted on it.
     `output_check` returns the message and `score_invalid` together, so the
     orchestrator cannot fail to notice.
-    """
-    import inspect
 
+    Which paired helper is used is not the invariant, and asserting on
+    `output_check(` by name was. fused_attention now uses
+    `attention_check`, which is stricter -- its inputs are all ones, so
+    softmax is exactly uniform and the answer is 1.0 rather than merely
+    finite -- and the old assertion failed it for being better. A check
+    written against one implementation of a rule enforces the
+    implementation, not the rule.
+    """
     module, function, _ = FAMILY_ENTRY_POINTS[name]
-    source = inspect.getsource(getattr(module, function))
-    assert "transformer_ops.output_check(" in source, name
+    source = sourcecheck.function_code(getattr(module, function))
+
+    paired = [name for name in dir(transformer_ops)
+              if name.endswith("_check")]
+    assert paired, "no paired helpers found -- the naming convention moved"
+    assert any(f"transformer_ops . {helper} (" in source for helper in paired), (
+        f"{name} uses no paired check helper; one of {sorted(paired)}")
     assert "read_back" in source, name
-    assert '"warning": transformer_ops.verify_output_is_a_number' not in source, (
+    assert '"warning" : transformer_ops . verify_' not in source, (
         f"{name} stores the message without the verdict"
     )
 
@@ -1084,3 +1095,69 @@ def test_speculative_decode_reports_a_total_not_only_a_per_cycle_cost():
     # And computed once, so the total and the per-cycle figure cannot drift
     # apart.
     assert code.count("block_flops") == 1
+
+
+# -- the one kernel whose answer is known in advance -------------------------
+
+def test_uniform_attention_accepts_the_value_it_must_produce():
+    assert transformer_ops.verify_attention_is_uniform(1.0) is None
+    assert transformer_ops.verify_attention_is_uniform(0.995) is None
+    assert transformer_ops.verify_attention_is_uniform(1.005) is None
+
+
+@pytest.mark.parametrize("wrong,why", [
+    (0.0, "a mask applied by mistake, or a saturated softmax at the far end"),
+    (2048.0, "weights summing to seq instead of to one"),
+    (0.000488, "the mean taken over the wrong axis"),
+    (float("inf"), "saturation -- finite is not the test here"),
+])
+def test_uniform_attention_rejects_finite_wrong_answers(wrong, why):
+    """Every one of these passed the previous check, which asked only
+    whether the number was readable and not NaN.
+
+    That is the point of the change: attention over constant inputs has a
+    known answer, so a plausibility check was standing where a
+    correctness check could stand.
+    """
+    message = transformer_ops.verify_attention_is_uniform(wrong)
+    assert message is not None, why
+
+
+def test_a_nan_is_still_caught():
+    """The old check's job, kept."""
+    message = transformer_ops.verify_attention_is_uniform(float("nan"))
+    assert message is not None
+    assert "NaN" in message
+
+
+def test_an_unreadable_output_is_not_silently_accepted():
+    message = transformer_ops.verify_attention_is_uniform(None)
+    assert message is not None
+    assert "could not be read" in message
+
+
+def test_the_verdict_and_the_flag_travel_together():
+    """Separating them is how three NaN runs published Scores."""
+    good = transformer_ops.attention_check(1.0)
+    assert good["warning"] is None and good["score_invalid"] is False
+    bad = transformer_ops.attention_check(0.0)
+    assert bad["warning"] is not None and bad["score_invalid"] is True
+
+
+def test_fused_attention_uses_the_stricter_check():
+    code = sourcecheck.function_code(inference_mix.run_fused_attention)
+    assert "attention_check" in code
+    assert "output_check" not in code
+
+
+def test_the_expected_value_follows_from_the_pinned_problem():
+    """Softmax over identical scores is uniform whatever the shape, so
+    the context is v's fill value -- which the kernel sets to one.
+
+    Asserted rather than assumed, because if the kernel ever fills v with
+    something else the expected value moves with it and this check would
+    otherwise start failing for the right reason with the wrong message.
+    """
+    code = sourcecheck.function_code(inference_mix.run_fused_attention)
+    assert "v = torch . ones (" in code
+    assert "attention_check ( transformer_ops . read_back ( sink ) )" in code
