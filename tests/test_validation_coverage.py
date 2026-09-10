@@ -215,6 +215,24 @@ CALLED_ONLY_BY_TESTS = {
     # Nothing at runtime needs the answer, because the inputs cannot make
     # it come out otherwise -- and a test proving that is the point.
     "routing_balance",
+    # Aspirational, and honestly so. Its four counters --
+    # tensor/vector/scalar/gpsimd_engine_active_time_percent -- are real
+    # and are in neuron-profile's 108-counter set. They are NOT in the
+    # neuron-monitor stream, and omni_virus declares neuron-monitor as its
+    # Score source, so nothing on that workload's path ever holds them.
+    #
+    # Wiring it to the monitor metrics was tried on 2026-09-10 and
+    # reverted: it type-checked, ran, and returned an empty dict every
+    # time. A call site that reports nothing is worse than no call site,
+    # because it looks answered.
+    #
+    # The workload whose entire premise is per-engine behaviour is scored
+    # by the reader that cannot see any engine. Reaching those counters
+    # needs a profiler capture of omni_virus's own NEFF, which needs a
+    # reserved core, which is off for any selection containing a
+    # cores: "all" workload. That is a real piece of work, not an
+    # oversight, and it is not done.
+    "engine_activity",
 }
 
 
