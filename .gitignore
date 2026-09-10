@@ -22,3 +22,8 @@ venv/
 neuron_compile_cache/
 /tmp/nki_cache/
 log-neuron-cc.txt
+
+# Coverage output (see .coveragerc for what the number means).
+.coverage
+htmlcov/
+.ruff_cache/

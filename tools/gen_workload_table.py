@@ -13,8 +13,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kernels import registry  # noqa: E402
-from neuron_device import NeuronDevice  # noqa: E402
+from kernels import registry
+from neuron_device import NeuronDevice
 
 FLEET = [
     ("inf2.xlarge", "inf2", 1, 2, False),

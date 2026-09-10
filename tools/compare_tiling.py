@@ -42,7 +42,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kernels import tensor_virus  # noqa: E402
+from kernels import tensor_virus
 
 SHAPES = [int(s) for s in os.environ.get("SHAPES", "2048,4096,8192").split(",")]
 DURATION = int(os.environ.get("DURATION", "15"))
@@ -68,7 +68,7 @@ def main() -> int:
                        "dtype": "bf16", "tiling": strategy}
             try:
                 r = tensor_virus.run(problem, DURATION)
-            except Exception as error:  # noqa: BLE001 - a failure is a result
+            except Exception as error:  # broad: a failure IS the result
                 print(f"{shape:>7} {strategy:>10}   FAIL "
                       f"{type(error).__name__}: {str(error)[:110]}")
                 sys.stdout.flush()
@@ -81,7 +81,7 @@ def main() -> int:
             results[(shape, strategy)] = (r["analytic_tflops"], verified)
             print(f"{shape:>7} {strategy:>10} {r['analytic_tflops']:>9.2f} "
                   f"{ms:>9.3f} {traffic / 1e9:>8.2f} {implied:>13.1f} "
-                  f"{str(verified):>9}")
+                  f"{verified!s:>9}")
             sys.stdout.flush()
 
     print("\nverdict")

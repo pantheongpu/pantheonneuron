@@ -10,8 +10,6 @@ failing is exactly when the analytic number becomes the Score. These cover
 the profiler-independent check that closes that hole.
 """
 
-import pytest
-
 from kernels.memory_read import tile_plan, verify_read_completed
 
 

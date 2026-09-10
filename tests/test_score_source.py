@@ -9,8 +9,6 @@ broken reference.
 import json
 import os
 
-import pytest
-
 from kernels import registry
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

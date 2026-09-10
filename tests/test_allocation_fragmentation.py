@@ -170,7 +170,20 @@ def test_the_warm_up_covers_every_shape_the_loop_will_use():
     sizes = size_sequence({w.name: w.problem for w in registry.WORKLOADS}[
         "allocation_fragmentation"])
     assert len(set(sizes)) == 13
-    assert set(sorted(set(sizes))) == set(sizes)
+
+    # This asserted `set(sorted(set(sizes))) == set(sizes)`, which is a
+    # tautology: set() discards the ordering the assertion was about, so
+    # the two sides are the same expression written twice and it could
+    # never fail. Found by ruff (C414) the first time a linter ran here.
+    #
+    # What it meant to check is that the kernel's warm-up loop --
+    # `for size in sorted(set(sizes))` -- visits every distinct size
+    # exactly once, in an order that does not depend on where each size
+    # first appeared in the sequence.
+    warmed = sorted(set(sizes))
+    assert len(warmed) == len(set(sizes)), "a size is warmed twice"
+    assert set(warmed) == set(sizes), "a size is never warmed"
+    assert warmed == sorted(warmed), "the warm-up order is not deterministic"
 
 
 def test_the_row_says_which_limit_stopped_the_run():

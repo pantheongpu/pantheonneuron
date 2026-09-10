@@ -108,14 +108,14 @@ def main() -> int:
     for name, run in PATHS:
         try:
             result = run()
-        except Exception as error:  # noqa: BLE001 - a failure is a result
+        except Exception as error:  # broad: a failure IS the result
             print(f"{name:>18}  FAILED  {type(error).__name__}: "
                   f"{str(error)[:110]}")
             sys.stdout.flush()
             continue
         results[name] = result
         print(f"{name:>18} {result['tflops']:>9.2f} {result['passes']:>8} "
-              f"{str(result['product']):>14} {str(result['exact']):>6}")
+              f"{result['product']!s:>14} {result['exact']!s:>6}")
         sys.stdout.flush()
 
     print("\nverdict")

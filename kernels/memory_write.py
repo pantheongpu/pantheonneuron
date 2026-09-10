@@ -136,7 +136,11 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # on inf2.xlarge 2026-09-07, where the next request for 8.59 GB met
     # 8.099 GB still resident on a 16 GB core. See the module docstring for
     # what that means for the pinned problem.
-    warm = None
+    # -- not a dead store. This drops the only reference to the
+    # warm-up destination so the runtime can free it, which is the whole
+    # point of the paragraph above: deleting the line as "unused" would
+    # keep 8 GB resident and reintroduce the failure it documents.
+    warm = None  # noqa: F841
     gc.collect()
     xm.mark_step()
     xm.wait_device_ops()
@@ -163,7 +167,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     while time.perf_counter() < deadline:
         written = kernel(source)
         xm.mark_step()
-        written = None
+        # Released each pass for the same reason, so the destination does
+        # not accumulate across the loop. Not a dead store.
+        written = None  # noqa: F841
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started

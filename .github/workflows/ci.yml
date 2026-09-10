@@ -6,40 +6,146 @@ on:
   pull_request:
     branches: [main]
 
+# A push that supersedes an in-flight run cancels it. Without this, a
+# branch pushed three times runs three full matrices and the first two
+# report on code nobody is looking at any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  test:
-    # Runs on GitHub-hosted runners: the suite is designed to be fully
-    # exercisable without Neuron hardware via the mock backend.
+  lint:
+    # Its own job rather than a matrix step. `make lint` was in .PHONY and
+    # in `make help` with no recipe for two weeks: it printed "Nothing to
+    # be done for 'lint'" and exited 0, so anything calling it was green
+    # while checking nothing. The first real run found a tautological
+    # assertion (`set(sorted(set(x))) == set(x)`, which cannot fail) and
+    # two unused imports.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip && python -m pip install ruff
+      - name: Lint
+        run: make lint
+
+  test:
+    # GitHub-hosted runners: the suite is fully exercisable without Neuron
+    # hardware via the mock backend.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      # Don't cancel 3.12 because 3.9 failed -- knowing whether a break is
+      # version-specific is most of the diagnosis.
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        # 3.10 was missing from this list while 3.9, 3.11 and 3.12 were
+        # present, so the only version between the floor and the ceiling
+        # went untested.
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
       - name: Run tests
+        # A fresh checkout has no __pycache__, which is what makes
+        # pytest.ini's `filterwarnings = error` catch a compile-time
+        # SyntaxWarning. See that file: a warm cache hides them, which is
+        # how one reached a commit.
         run: python -m pytest tests/ -q
+
       - name: Mock end-to-end run
         env:
           PANTHEON_NEURON_MOCK: "1"
-        run: python pantheon_neuron.py --duration 1 --monitor-period 0.02
+        # Piped through a check rather than trusted to exit 0. The command
+        # succeeds whether it scores twenty-six workloads or none, and a
+        # run that silently stopped selecting anything is exactly the kind
+        # of regression an end-to-end step exists to catch.
+        run: |
+          set -o pipefail
+          python pantheon_neuron.py --duration 1 --monitor-period 0.02 \
+            | tee mock-run.log
+          python - <<'PY'
+          import re, sys
+          log = open("mock-run.log", encoding="utf-8").read()
+          rows = re.findall(r"^\[PANTHEON-NEURON\] -> (\S+)", log, re.M)
+          if len(rows) < 20:
+              sys.exit(f"mock run produced {len(rows)} workload rows, "
+                       f"expected the whole registry: {rows}")
+          print(f"mock run exercised {len(rows)} workloads")
+          PY
+
+  coverage:
+    # Reported and floored, not chased. The floor is the measured figure
+    # rounded down, so it ratchets against a drop rather than demanding a
+    # number nobody chose -- a coverage target picked from the air is the
+    # kind of check that gets waived the first time it is inconvenient.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-cov
+      - name: Test with coverage
+        run: make cov
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: .coverage
+          if-no-files-found: ignore
 
   report-privacy:
     # This repository is public. Reports must never carry host identifiers,
     # so the guard runs as its own required job rather than buried in the
     # matrix, where a single green check could hide it.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+          cache: pip
       - run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
       - name: Enforce report privacy invariant
         run: python -m pytest tests/test_report_privacy.py -q
+
+  generated-files:
+    # docs/workload_counter_map.md is generated from the registry and says
+    # "do not hand-edit". This is what makes that enforceable: a registry
+    # change nobody regenerated fails here rather than leaving the
+    # reference describing a suite that no longer exists.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Regenerate and diff
+        run: |
+          python tools/gen_workload_table.py
+          git diff --exit-code -- docs/workload_counter_map.md \
+            || { echo "::error::docs/workload_counter_map.md is stale; run tools/gen_workload_table.py"; exit 1; }

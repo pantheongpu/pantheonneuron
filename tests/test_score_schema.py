@@ -179,16 +179,34 @@ def test_row_carries_score_unit_and_problem(mock_env):
     assert "Score" in row
 
 
-def test_mock_mode_never_fabricates_a_score(mock_env):
+# Mock mode sleeps for the requested duration -- `time.sleep(min(duration,
+# 2))` in pantheon_neuron._execute -- so a test looping over every workload
+# at duration=1 spends a real second per workload doing nothing.
+#
+# That one test took 26 of the suite's 59 seconds. The duration is not what
+# it is testing: the assertion is that mock mode returns no Score, which is
+# true at any duration. A test suite people wait a minute for is a test
+# suite people stop running before pushing.
+MOCK_DURATION = 0.02
+
+
+@pytest.mark.parametrize(
+    "workload",
+    [w for w in registry.WORKLOADS if w.runnable_on(TRN1)],
+    ids=lambda w: w.name,
+)
+def test_mock_mode_never_fabricates_a_score(workload, mock_env):
     """A synthetic Score would flow into a report and be compared against
-    real GPU numbers."""
-    for workload in registry.WORKLOADS:
-        if not workload.runnable_on(TRN1):
-            continue
-        row = pantheon_neuron.run_workload(
-            workload, TRN1, duration=1, monitor_period=0.01
-        )
-        assert row["Score"] is None, f"{workload.name} invented a Score in mock mode"
+    real GPU numbers.
+
+    Parametrised rather than looped, so a failure names the workload
+    without needing the assertion message to, and so the cases can be
+    distributed across workers.
+    """
+    row = pantheon_neuron.run_workload(
+        workload, TRN1, duration=MOCK_DURATION, monitor_period=0.01
+    )
+    assert row["Score"] is None, f"{workload.name} invented a Score in mock mode"
 
 
 def test_skipped_row_still_declares_its_unit(mock_env):

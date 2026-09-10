@@ -1,0 +1,66 @@
+# Lint configuration.
+#
+# `make lint` was in .PHONY and in the help text and had no recipe, so it
+# printed "Nothing to be done for 'lint'" and exited 0. A CI step calling
+# it would have been green forever while linting nothing -- the shape this
+# repo catalogues in docs/checks_that_pass_by_accident.md, in the one
+# place where the check was not merely weak but absent.
+#
+# The rule set is deliberately narrow. This suite's whole argument is that
+# a check nobody can act on gets ignored, and a linter that reports two
+# hundred style opinions on first run is a check nobody acts on. These are
+# the rules that catch mistakes rather than preferences:
+#
+#   E, W   pycodestyle -- whitespace and syntax errors
+#   F      pyflakes -- undefined names, unused imports, dead stores
+#   B      bugbear -- mutable default arguments, loop-variable capture
+#   C4     comprehension misuse
+#   RUF    ruff's own correctness checks
+#
+# Deliberately absent, each for a measured reason rather than a taste:
+#
+#   UP   pyupgrade produced 64 findings on first run and every one was
+#        `typing.Dict` -> `dict`. That is a rewrite of annotations across
+#        every kernel, in files whose docstrings carry dated measurements,
+#        for no defect. The narrowness of this list is the point: a linter
+#        that reports a hundred preferences on first run is a check nobody
+#        acts on, which is the same failure as a check that cannot fail.
+#   I    import sorting -- catches nothing.
+#   D    docstring style -- these docstrings are prose carrying dates,
+#        error text and measured tables, and a formatter would fight them.
+#   N    naming -- catches nothing.
+
+line-length = 88
+target-version = "py39"
+
+[lint]
+select = ["E", "W", "F", "B", "C4", "RUF"]
+
+ignore = [
+    # Assigning a lambda is occasionally the clearest way to express a
+    # per-strategy dispatch in a kernel, and rewriting it as a def moves
+    # the definition away from its use.
+    "E731",
+    # Line length. Twelve findings, and eleven are registry entries and
+    # comments quoting a compiler's own error text or a measured table --
+    # wrapping those makes them harder to match against the output they
+    # came from, which is the only thing they are for.
+    #
+    # This is a real cost and worth naming: nothing now stops a genuinely
+    # unreadable line. The alternative was reformatting evidence, and
+    # evidence that has been reflowed to fit a column is worth less than
+    # a long line.
+    "E501",
+]
+
+[lint.per-file-ignores]
+# Tests assert against long measured figures and quoted compiler errors,
+# and wrapping those would make them harder to match against the output
+# they came from.
+"tests/*" = ["E501"]
+
+[lint.flake8-bugbear]
+# transformer_ops and the kernels take small numeric defaults that are
+# part of the published contract (tolerances, floors); flagging them as
+# "function call in default" would be noise.
+extend-immutable-calls = []

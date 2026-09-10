@@ -262,7 +262,7 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         score = _execute(workload, devices, duration)
     except nki_backend.BackendUnavailable as error:
         status, detail = "SKIPPED", str(error)
-    except Exception as error:  # noqa: BLE001 - a failing workload is a result
+    except Exception as error:  # broad: a failing workload IS a result
         status, detail = "FAIL", f"{type(error).__name__}: {error}"
     elapsed = time.time() - started
 

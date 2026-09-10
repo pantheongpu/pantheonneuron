@@ -22,6 +22,13 @@ from neuron_device import NeuronDevice
 MOCK = [NeuronDevice(i, "mock", "v2", 2, 32 * 1024**3, True) for i in range(2)]
 
 
+# Mock mode sleeps the requested duration, so every `1` below was a real
+# second per repeat -- six tests at three repeats came to seventeen of the
+# suite's fifty-nine seconds. None of them is testing the duration; they
+# test how repeats are summarised, which holds at any duration.
+DURATION = 0.02
+
+
 def _workload(name="memory_read"):
     return next(w for w in registry.WORKLOADS if w.name == name)
 
@@ -93,7 +100,7 @@ def test_the_threshold_is_where_it_is_documented(cv_target, flagged):
 
 def test_a_single_run_carries_no_repeat_summary(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01)
     assert row["Repeats"] is None
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
 
@@ -108,7 +115,7 @@ def test_repeats_run_the_workload_that_many_times(monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(pantheon_neuron, "_measure_once", counted)
-    pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
     assert len(calls) == 3
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
 
@@ -118,10 +125,10 @@ def test_every_row_has_the_same_shape(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
     inf2 = [NeuronDevice(i, "inf2", "v2", 2, 32 * 1024**3, False) for i in range(2)]
 
-    single = pantheon_neuron.run_workload(_workload(), inf2, 1, 0.01)
-    repeated = pantheon_neuron.run_workload(_workload(), inf2, 1, 0.01, repeat=2)
+    single = pantheon_neuron.run_workload(_workload(), inf2, DURATION, 0.01)
+    repeated = pantheon_neuron.run_workload(_workload(), inf2, DURATION, 0.01, repeat=2)
     skipped = pantheon_neuron.run_workload(
-        _workload("transformer_train_step"), inf2, 1, 0.01, repeat=2)
+        _workload("transformer_train_step"), inf2, DURATION, 0.01, repeat=2)
 
     assert sorted(single) == sorted(repeated) == sorted(skipped)
     assert "Repeats" in single
@@ -133,7 +140,7 @@ def test_a_skip_is_not_repeated(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
     inf2 = [NeuronDevice(0, "inf2", "v2", 2, 32 * 1024**3, False)]
     row = pantheon_neuron.run_workload(
-        _workload("transformer_train_step"), inf2, 1, 0.01, repeat=3)
+        _workload("transformer_train_step"), inf2, DURATION, 0.01, repeat=3)
     assert row["Status"] == "SKIPPED"
     assert row["Repeats"] is None
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
@@ -151,7 +158,7 @@ def test_the_median_is_the_published_score(monkeypatch):
         return row
 
     monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
 
     assert row["Score"] == 20.0
     assert row["Repeats"]["min"] == 10.0 and row["Repeats"]["max"] == 100.0
@@ -173,7 +180,7 @@ def test_one_failed_repeat_fails_the_row(monkeypatch):
         return row
 
     monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
 
     assert row["Status"] == "FAIL"
     assert "1 of 3 repeats failed" in row["Detail"]
@@ -275,7 +282,7 @@ def test_measurement_belongs_to_the_repeat_that_set_the_score(monkeypatch):
     _scripted(monkeypatch, [10.0, 20.0, 30.0],
               [{"from": 1}, {"from": 2}, {"from": 3}])
 
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
     assert row["Score"] == 20.0
     assert row["Measurement"] == {"from": 2}, "not the last repeat"
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
@@ -290,7 +297,7 @@ def test_an_even_median_belongs_to_no_repeat(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
     _scripted(monkeypatch, [10.0, 20.0], [{"from": 1}, {"from": 2}])
 
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=2)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=2)
     assert row["Score"] == 15.0
     assert row["Measurement"] is None
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
@@ -301,7 +308,7 @@ def test_a_single_run_keeps_its_own_measurement(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
     _scripted(monkeypatch, [42.0], [{"from": 1}])
 
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01)
     assert row["Measurement"] == {"from": 1}
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
 
