@@ -304,3 +304,51 @@ def test_a_single_run_keeps_its_own_measurement(monkeypatch):
     row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01)
     assert row["Measurement"] == {"from": 1}
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+# -- agreeing more closely than the Score can resolve ------------------------
+
+def test_a_cv_above_the_resolution_is_real_agreement():
+    """The control. Most Scores are continuous and this never fires."""
+    assert pantheon_neuron.quantised_agreement({"cv": 0.02}, 0.007) is None
+    assert pantheon_neuron.quantised_agreement({"cv": 0.007}, 0.007) is None
+
+
+def test_a_cv_far_below_the_resolution_is_quantisation():
+    """serving_mix: cv 0.0001 on a Score that steps by 1 in 149.
+
+    Its Score is decode_tokens // decode, so the request count advances
+    once per 32 decode steps and not at all in between. Three repeats at
+    DURATION=60 landed on the same integer, and the only thing varying was
+    the wall clock in the denominator -- read at the time as the most
+    reproducible Score in the suite.
+    """
+    message = pantheon_neuron.quantised_agreement({"cv": 0.0001}, 1 / 149)
+    assert message is not None
+    assert "resolution" in message
+    assert "same integer" in message
+
+
+def test_a_continuous_score_is_never_accused():
+    """No resolution declared means the counter is not an integer count."""
+    assert pantheon_neuron.quantised_agreement({"cv": 0.0001}, None) is None
+    assert pantheon_neuron.quantised_agreement({"cv": 0.0001}, 0) is None
+
+
+def test_a_single_repeat_has_no_cv_to_compare():
+    assert pantheon_neuron.quantised_agreement(None, 0.5) is None
+    assert pantheon_neuron.quantised_agreement({}, 0.5) is None
+    assert pantheon_neuron.quantised_agreement({"cv": None}, 0.5) is None
+
+
+def test_this_is_the_opposite_check_to_unstable_and_they_cannot_both_fire():
+    """UNSTABLE_CV catches a Score disagreeing with itself; this catches
+    one that cannot disagree with itself. A Score is not both.
+    """
+    resolution = 1 / 149
+    unstable_cv = pantheon_neuron.UNSTABLE_CV
+    assert resolution < unstable_cv, (
+        "if a Score's resolution exceeded the instability threshold, both "
+        "checks could fire on the same row and each would be right")
+    assert pantheon_neuron.quantised_agreement(
+        {"cv": unstable_cv + 0.01}, resolution) is None

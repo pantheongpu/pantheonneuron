@@ -415,6 +415,15 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
         unstable = _unstable(row["Repeats"])
         if unstable:
             row["Detail"] = "; ".join(filter(None, [row.get("Detail"), unstable]))
+        else:
+            # The opposite failure, and the less obvious one: repeats that
+            # agree more closely than the Score can resolve.
+            quantised = quantised_agreement(
+                row["Repeats"],
+                (_LAST_RUN.get(workload.name) or {}).get("score_resolution"))
+            if quantised:
+                row["Detail"] = "; ".join(
+                    filter(None, [row.get("Detail"), quantised]))
     return row
 
 
@@ -431,6 +440,37 @@ def _median_provenance(rows, scores, published):
         if candidate.get("Score") == published:
             return candidate.get("Measurement")
     return None
+
+
+def quantised_agreement(spread, resolution) -> typing.Optional[str]:
+    """Say so when repeats agree more closely than the Score can resolve.
+
+    ``serving_mix`` reported cv 0.0001 over three repeats at DURATION=60 --
+    by a wide margin the most reproducible Score in the suite, and read as
+    evidence the workload was exceptionally steady.
+
+    It is nothing of the sort. Its Score is an integer division:
+    ``decode_tokens // decode``, so the request count advances once per 32
+    decode steps and not at all in between. The three runs landed on the
+    same integer, and the only thing varying was the wall clock in the
+    denominator. Variation in the work done was below the resolution of the
+    number reporting it.
+
+    ``UNSTABLE_CV`` catches a Score that disagrees with itself. This catches
+    the opposite and less obvious failure: one that cannot disagree with
+    itself, which is not the same as one that does not.
+    """
+    if not spread or resolution is None or resolution <= 0:
+        return None
+    cv = spread.get("cv")
+    if cv is None or cv >= resolution:
+        return None
+    return (
+        f"repeats agree to cv {cv:.4g} on a Score that one more completed "
+        f"unit would move by {resolution:.4g} -- the repeats landed on the "
+        "same integer, so this is the counter's resolution rather than the "
+        "workload's stability"
+    )
 
 
 # Above this, repeats of the same pinned problem disagree enough that the

@@ -647,6 +647,27 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         # The rate the scheduler actually sustained. A request is many
         # steps, so these differ by a large factor and both are wanted.
         "scheduler_steps_per_s": steps / elapsed if elapsed else 0.0,
+        # How coarse the Score is, which is not the same question as how
+        # stable it is -- and on 2026-09-10 the two were confused.
+        #
+        # requests_completed is an integer division: decode_tokens //
+        # decode, so it advances once per decode/batch steps and not at
+        # all in between. Three repeats at DURATION=60 reported 2.4776,
+        # 2.4781 and 2.4780 requests/s, cv 0.0001 -- by a wide margin the
+        # most reproducible Score in the suite, and read as evidence this
+        # workload was exceptionally steady.
+        #
+        # It is evidence of nothing of the sort. The three runs landed on
+        # the same integer request count, so the only thing varying was
+        # the wall clock in the denominator. Real variation in the work
+        # done was below the resolution of the number reporting it.
+        #
+        # score_resolution is the fraction of the Score that one more or
+        # fewer completed request would move it. A cv far below that is
+        # quantisation, not agreement -- and scheduler_steps_per_s is the
+        # quantity that can actually show the difference.
+        "steps_per_request": plan["decode_steps_per_request"],
+        "score_resolution": (1.0 / requests if requests else None),
         "decode_tokens": decode_tokens,
         "decode_length": plan["decode"],
         "blocks_executed": steps * layers,
