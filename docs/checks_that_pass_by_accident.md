@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced sixteen of them, and they are collected
+would go. This repo has now produced seventeen of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -271,7 +271,41 @@ something before checking it.
 Found by deleting some local reports for an unrelated reason and noticing
 the skip count go up by one.
 
-### 16. The check passes because the collection is empty
+### 16. The correction was wrong and the original was right
+
+`kernels/memory_read.py` quoted "the part's ~820 GB/s HBM" in prose for
+weeks. Building a table of peak specs, I judged it unverified — correctly
+— and then *replaced* it with 613 GB/s, derived by dividing the AWS
+instance page's "9.8 TB/s" by 16 chips, on a suspicion that 820 was
+really Inferentia2's number.
+
+The architecture documentation gives both parts in identical words: two
+NeuronCore-v2, 32 GiB HBM at **820 GiB/sec**, 190 TFLOPS. The prose was
+right. The correction was wrong. And because the substituted ceiling was
+smaller, it reported the bandwidth kernels at **83–88% of peak when they
+reach about 60%** — an error in the flattering direction, published in a
+table with a `source` field and a `verified` flag that made it look
+checked.
+
+Three things should have stopped it, and each was available:
+
+- **The repo already knew.** Both chips report NeuronCore-v2, which it
+  documents in two places. Same core, same generation — the per-chip
+  figures being different was the surprising claim, not the boring one.
+- **The arithmetic didn't reconcile.** 16 × 820 GiB/s is 14.1 TB/s, not
+  9.8. I noticed that inf2 reconciled and trn1 didn't, and read it as
+  evidence *for* the substitution rather than against the source I was
+  substituting from.
+- **Units.** 820 **GiB**/s is 880.5 GB/s decimal, and the Scores are
+  decimal. Even the right figure was 7% wrong until converted.
+
+The lesson is not "verify your numbers" — the flag said `verified:
+False` and the console printed *"peak unverified"*, which is the process
+working. It is that **an unverified number replaced by a derived one is
+worse than the unverified number**, because a derivation carries an air
+of work that a recalled figure does not.
+
+### 17. The check passes because the collection is empty
 
 Not yet caught in the wild here, and guarded against on the way in: a
 coverage check over a directory, a sweep over "every INTERNAL workload",
@@ -296,4 +330,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-sixteen above were found by reading what a passing check had filtered out.
+seventeen above were found by reading what a passing check had filtered out.

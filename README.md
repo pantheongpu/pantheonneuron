@@ -843,48 +843,57 @@ another accelerator's 40 says nothing about either chip until both are
 read as a fraction of what their silicon can do — so `Percent Of Peak`
 travels with every figure that has a published ceiling.
 
-Measured on trn1.2xlarge 2026-09-10, against Trainium1's published
-613 GB/s HBM and 212.5 TFLOPS bf16 per chip:
+**Ceilings verified 2026-09-10** against the AWS Neuron architecture
+documentation, which gives Trainium1 and Inferentia2 in identical words:
+two NeuronCore-v2 per chip, 32 GiB HBM at **820 GiB/s**, **190 TFLOPS**
+FP16/BF16/cFP8/TF32. They are the same silicon per chip; they differ in
+how many chips an instance carries.
 
 | workload | Score | cores | of its share |
 |---|--:|--:|--:|
-| `memory_read_agg` | 541.5 GB/s | 2 of 2 | **88.3%** |
-| `memory_read` | 256.1 GB/s | 1 of 2 | **83.6%** |
-| `memory_write_agg` | 506.4 GB/s | 2 of 2 | 82.6% |
-| `memory_write` | 226.5 GB/s | 1 of 2 | 73.9% |
-| `transformer_virus` | 53.2 TFLOPS | 2 of 2 | 25.0% |
-| `tensor_virus` | 26.1 TFLOPS | 2 of 2 | **12.3%** |
+| `memory_read_agg` | 541.5 GB/s | 2 of 2 | **61.5%** |
+| `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
+| `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
+| `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
+| `torch.matmul` (not a workload) | 66.3 TFLOPS | 2 of 2 | 34.9% |
+| `transformer_virus` | 53.2 TFLOPS | 2 of 2 | 28.0% |
+| `tensor_virus` | 26.1 TFLOPS | 2 of 2 | **13.7%** |
 
-**The denominator is the whole point of the column.** A workload
-declaring `cores: 1` gets one NeuronCore of a two-core part, so its
-ceiling is half the chip's — comparing a single-core figure against a
-whole accelerator is what made `memory_read` look like 42% of the part
-when it is 84% of what it was given. `memory_read` and `memory_read_agg`
-measure the same thing on the same silicon and differ only in how much of
-it they are allowed; read against their own shares they land within six
-points of each other, which is the sanity check that the arithmetic is
-right.
+**The denominator is the whole point of the column**, and getting it
+wrong is easy in the flattering direction. Two traps, both hit here
+before the figures were checked:
+
+- **Units.** The doc says 820 **GiB**/s and every Score is decimal GB/s
+  (bytes ÷ 1e9). Treating them as interchangeable is a silent 7% error.
+- **Core share.** A workload declaring `cores: 1` gets one NeuronCore of
+  a two-core part, so its ceiling is half the chip's. `memory_read` and
+  `memory_read_agg` measure the same thing on the same silicon and differ
+  only in how much of it they are allowed; read against their own shares
+  they land within four points of each other, which is the check that the
+  arithmetic is right rather than merely plausible.
 
 It also separates the two kinds of gap. The bandwidth kernels reach
-83–88%, which is what a well-tuned streaming benchmark achieves and is a
-number worth comparing across vendors. `tensor_virus` reaches 12.3%,
-which is a statement about the kernel — a plain `torch.matmul` on the
-same part reaches 31%.
+51–62% of HBM — ordinary for a streaming benchmark, and a figure worth
+comparing across vendors. `tensor_virus` reaches 13.7%, which is a
+statement about the kernel: a plain `torch.matmul` on the same silicon
+reaches 34.9%.
 
-**None of these ceilings has been verified.** The device reports its own
-name (`Trainium1`, from
-`/sys/class/neuron_device/neuron0/info/architecture/device_name`) and
-nothing about its bandwidth or arithmetic throughput, so every figure in
-`registry.PART_PEAKS` is transcribed from a vendor page rather than read
-from a datasheet or measured. Each carries its source and
-`verified: False`, the console prints *"peak unverified"* beside the
-percentage, and a test fails if any row claims otherwise.
+**An earlier version of this table was wrong, in the flattering
+direction.** `kernels/memory_read.py` had long quoted "the part's ~820
+GB/s HBM" in prose; I took that for an Inferentia2 figure misapplied to
+Trainium1 and replaced it with 613 GB/s, derived by dividing the *instance
+page's* "9.8 TB/s" by 16 chips. The suspicion was backwards — 820 is
+correct, for both parts — and the smaller ceiling reported the bandwidth
+kernels at 83–88% of peak when they reach about 60%.
 
-That matters more than it sounds. `kernels/memory_read.py` quoted "the
-part's ~820 GB/s HBM" in prose for weeks — and **820 is Inferentia2's
-figure, not Trainium1's**. If that is right, every share computed from
-the old comment understated the part by a third. The table exists so the
-next such number has a source attached rather than a comment.
+The repo already knew they were the same silicon: both chips report
+NeuronCore-v2, which is what should have made the suspicion suspicious.
+
+What genuinely does not reconcile is the instance pages, and it is why
+the architecture page is the cited source: **both** trn1.32xlarge (16
+chips) and inf2.48xlarge (12) claim "9.8 TB/s of total memory bandwidth",
+which is twelve chips' worth. Compute reconciles on both — 16 × 190 =
+3.04 PFLOPS against "up to 3", 12 × 190 = 2.28 against "up to 2.3".
 
 ### The headline TFLOPS figure is the kernel, not the part
 

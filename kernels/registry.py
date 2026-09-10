@@ -624,55 +624,71 @@ COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
     "pulse_virus": ("throttle_active_nc0_time_ns",),
 }
 
-# Vendor-published peak figures, per accelerator chip.
+# Published peak figures, per accelerator chip. **VERIFIED 2026-09-10**
+# against the AWS Neuron architecture documentation.
 #
-# These are the denominator that makes a Score interpretable. 26.1 TFLOPS
-# and 66.3 TFLOPS are two numbers; "27% of peak" and "70% of peak" are a
-# finding -- the first pair invites a comparison against another vendor's
-# result, and the second says whether that comparison would be about
-# silicon or about kernel quality.
+#   Trainium1:   https://awsdocs-neuron.readthedocs-hosted.com/en/latest/
+#                general/arch/neuron-hardware/trainium.html
+#   Inferentia2: .../neuron-hardware/inferentia2.html
 #
-# **NONE OF THESE IS MEASURED, AND NONE IS VERIFIED.** The device reports
-# its own name (`Trainium1` from
-# /sys/class/neuron_device/neuron0/info/architecture/device_name, read on
-# trn1.2xlarge 2026-09-10) and nothing about its bandwidth or arithmetic
-# throughput. Every figure below has to come from a datasheet, and until
-# someone opens one and sets ``verified``, they are recalled numbers
-# wearing a table's authority.
+# Both quote, per chip, in identical words: two NeuronCore-v2, "32GiB of
+# high-bandwidth device memory (HBM)" with "820 GiB/sec of bandwidth",
+# and "190 FP16/BF16/cFP8/TF32 TFLOPS" (Trainium1 adds 47.5 FP32).
 #
-# That distinction is the whole reason this is structured rather than
-# written in a comment. ``kernels/memory_read.py`` carried "the part's
-# ~820 GB/s HBM" in prose for weeks, and it is the figure that prompted
-# this table -- **and it looks wrong.** AWS publishes 9.8 TB/s of HBM
-# bandwidth for both trn1.32xlarge (16 chips) and inf2.48xlarge (12
-# chips), which is 613 GB/s per Trainium1 and 817 per Inferentia2. 820 is
-# the Inferentia2 number. If that is right, every "% of HBM" computed for
-# trn1 from the old comment understated the part by a third.
+# **The two parts are the same silicon per chip.** They differ in how
+# many chips an instance carries, not in what a chip does -- which the
+# repo already knew from the other direction: both report NeuronCore-v2.
 #
-# Recorded as a suspicion, not a correction: it needs the datasheet, and
-# `verified` stays False on every row until it gets one.
+# UNITS. The doc says 820 **GiB**/sec and every Score here is decimal
+# GB/s (bytes / 1e9), so the ceiling is 820 * 2^30 / 1e9 = 880.5 GB/s.
+# Storing the GiB figure and converting at the point of use would invite
+# the 7% error every time; the conversion is done once, here, and the
+# original is kept beside it so the citation can be checked without
+# undoing arithmetic.
+#
+# WHAT DID NOT RECONCILE, recorded because it is the reason to trust the
+# architecture page over the marketing one. The instance pages say "9.8
+# TB/s of total memory bandwidth" for *both* trn1.32xlarge (16 chips) and
+# inf2.48xlarge (12). At 820 GiB/s per chip those are 14.09 and 10.57
+# TB/s -- inf2 is close, trn1 is not, and 9.8 looks like inf2's number
+# printed on both pages. Compute reconciles cleanly on both: 16 x 190 =
+# 3.04 PFLOPS against "up to 3", and 12 x 190 = 2.28 against "up to 2.3".
+#
+# A PREVIOUS VERSION OF THIS TABLE WAS WRONG, and in the direction that
+# flatters. It carried 613 GB/s for trn1, derived by dividing the
+# instance page's 9.8 TB/s by 16, on a suspicion that the "~820" long
+# quoted in kernels/memory_read.py was really Inferentia2's figure. The
+# suspicion was backwards: 820 was right, for both parts, and dividing by
+# the smaller ceiling reported the bandwidth kernels at 83-88% of peak
+# when they reach about 60%.
 PART_PEAKS = {
     "trn1": {
         "device_name": "Trainium1",
         "neuroncores": 2,
-        "hbm_gbps": 613.0,
-        "bf16_tflops": 212.5,
+        "hbm_gibps": 820.0,
+        "hbm_gbps": 880.5,
+        "bf16_tflops": 190.0,
+        "fp32_tflops": 47.5,
         "source": (
-            "AWS EC2 Trn1 instance page: trn1.32xlarge, 16 chips, "
-            "9.8 TB/s HBM and 3.4 PFLOPS BF16 -- divided by 16"
+            "AWS Neuron architecture docs, neuron-hardware/trainium.html, "
+            "read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, "
+            "190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS"
         ),
-        "verified": False,
+        "verified": True,
     },
     "inf2": {
         "device_name": "Inferentia2",
         "neuroncores": 2,
-        "hbm_gbps": 817.0,
-        "bf16_tflops": 191.7,
+        "hbm_gibps": 820.0,
+        "hbm_gbps": 880.5,
+        "bf16_tflops": 190.0,
+        "fp32_tflops": None,
         "source": (
-            "AWS EC2 Inf2 instance page: inf2.48xlarge, 12 chips, "
-            "9.8 TB/s HBM and 2.3 PFLOPS BF16 -- divided by 12"
+            "AWS Neuron architecture docs, neuron-hardware/inferentia2.html, "
+            "read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, "
+            "190 FP16/BF16/cFP8/TF32 TFLOPS"
         ),
-        "verified": False,
+        "verified": True,
     },
 }
 
