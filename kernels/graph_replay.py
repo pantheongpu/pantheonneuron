@@ -17,6 +17,33 @@ runtime cannot batch the replays into one execution or prove them dead. The
 chain is what makes each replay a separate completion for the counter to
 see.
 
+HYPOTHESIS, recorded 2026-09-10 before the run that tests it, so it
+cannot be retrofitted to whatever came back.
+
+This workload is bounded by ``replays`` (pinned at 10,000) as well as by
+``duration``, and the count is reached first. **The measured window is
+therefore a function of the rate being measured**: at the 3051.2
+graph-steps/s seen on 2026-09-10 the window is 3.3 seconds, and at the
+729.3 seen on 2026-09-08 it is 13.7.
+
+That would explain the declared Score's variance without either counter
+being wrong. neuron-monitor samples on a period, drops samples taken
+while the workload compiles, and needs two carrying the counter to form a
+delta. A 13.7-second window supplies them; a 3.3-second one may not, and
+the row degrades to the analytic fallback -- which is exactly what
+happened on those two dates, in that order.
+
+It would also explain the cv 0.63 across repeats, for the same reason
+allocation_fragmentation scattered: a window of a few seconds is not a
+measurement, and here the window shortens precisely when the device is
+fast.
+
+**Prediction:** at ``--duration 30 --repeat 3``, this run will report a
+window near 3 seconds rather than 30, ``short_window`` will fire, and the
+declared monitor Score will be absent or unstable. If the window comes
+back near 30 seconds the hypothesis is wrong and the replay count is not
+what bounds this.
+
 STATUS: VERIFIED ON HARDWARE as a workload, trn1.2xlarge 2026-09-08
 and 2026-09-10. What is **not** settled is its declared Score source: the
 monitor's execution counter produced a Score on 2026-09-08 (729.3
