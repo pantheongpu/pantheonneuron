@@ -388,3 +388,44 @@ def test_every_dispatch_branch_names_a_real_workload():
 
     known = {workload.name for workload in registry.WORKLOADS}
     assert not named - known, f"dispatched but not in the registry: {named - known}"
+
+
+def test_the_readme_has_no_dangling_internal_links():
+    """A cross-reference to a heading that moved reads as a broken page.
+
+    The findings sections cross-link each other, and headings here get
+    rewritten as measurements replace guesses.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        doc = handle.read()
+
+    headings = re.findall(r"^#+ (.+)$", doc, re.MULTILINE)
+    assert headings, "no headings parsed -- the shape changed"
+    slugs = {re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-")
+             for h in headings}
+
+    anchors = re.findall(r"\]\(#([a-z0-9-]+)\)", doc)
+    dangling = [a for a in anchors if a not in slugs]
+    assert not dangling, dangling
+
+
+def test_every_readme_file_link_points_at_something_that_exists():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        doc = handle.read()
+
+    targets = re.findall(r"\]\(((?:docs|data|tools|kernels)/[^)#]+)\)", doc)
+    assert targets, "no file links parsed -- the shape changed"
+    missing = [t for t in targets
+               if not os.path.exists(os.path.join(root, t))]
+    assert not missing, missing
+
+
+def test_the_readme_headings_are_unique():
+    """Two identical headings give one of them an unreachable anchor."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        headings = re.findall(r"^#+ (.+)$", handle.read(), re.MULTILINE)
+    duplicates = sorted({h for h in headings if headings.count(h) > 1})
+    assert not duplicates, duplicates
