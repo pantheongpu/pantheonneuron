@@ -71,6 +71,11 @@ A `neuron-profile` Score is a single deterministic NEFF replay; a
 difference is worth remembering before quoting a monitor figure to three
 decimals.
 
+**And `tensor_virus`'s TFLOPS is a floor, not this part's capability.** A
+`torch.matmul` at the same shape reaches 2.53× it. See
+[the headline TFLOPS figure is the kernel, not the
+part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
+
 | Workload | Status | Measured | Score source |
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
@@ -655,6 +660,47 @@ of reporting a bandwidth.
 The lesson for the table above: **a short run is not a cheap run.** Ten
 seconds is long enough for every workload to pass and too short for six of
 them to mean anything.
+
+### The headline TFLOPS figure is the kernel, not the part
+
+trn1.2xlarge, 2026-09-10. 8192³ bf16, 25s each, one process, both
+products verified exact against all-ones arithmetic.
+
+| path | TFLOPS | passes |
+|---|--:|--:|
+| NKI (`tensor_virus`) | 26.19 | 598 |
+| XLA (`torch.matmul`) | **66.32** | 1510 |
+
+**A plain `torch.matmul` compiled by `neuronx-cc` is 2.53× this suite's
+own compute kernel.**
+
+`tensor_virus` is what a cross-platform comparison joins on, and the
+premise of that comparison is that both sides ran the same problem on
+comparable terms. A 2.53× gap does not survive that premise: quoting 26.1
+TFLOPS against another accelerator's peak compares a compiler-generated
+matmul on one side against a hand-written kernel on the other, and
+reports the difference as a property of the silicon.
+
+**So the figure is a floor, not a capability.** It is a real, correct,
+sustained measurement of what this kernel does on this part. It is not
+what this part does, and the kernel's docstring now says so in those
+words.
+
+The cause is *not* operand bandwidth — that was the first diagnosis and
+it is wrong. Arithmetic intensity is flat near 102 FLOP/byte, and 102 ×
+`memory_read`'s 256.2 GB/s is 26.1 TFLOPS, which matches almost exactly
+and is a coincidence: blocked tiling cuts operand traffic 4.7× and buys
+1.06×. The ceiling is somewhere neither the arithmetic nor the tiling
+experiment has looked. Recording "2.53× slower, cause unknown" is worth
+more than a third confident diagnosis — the first two were both wrong,
+and each was believed because a plausible number agreed with it.
+
+```bash
+python tools/compare_matmul_paths.py
+```
+
+Both sides verify their product before the ratio is computed, because a
+ratio between a correct kernel and a rounded one means nothing.
 
 ### "Quantized" is the slowest arithmetic on this part
 

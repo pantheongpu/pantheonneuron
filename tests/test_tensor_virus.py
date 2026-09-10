@@ -6,6 +6,8 @@ behind the analytic cross-check, and the correctness guard that separates a
 real GEMM from one the compiler reshaped.
 """
 
+import os
+
 import pytest
 
 import pantheon_neuron
@@ -426,3 +428,53 @@ def test_streaming_is_the_default_tiling():
     import importlib
     reloaded = importlib.reload(tensor_virus)
     assert reloaded.TILING == "streaming"
+
+
+# -- the headline figure is a floor, and has to say so -----------------------
+
+def test_the_headline_figure_is_declared_a_floor_not_a_capability():
+    """26.19 TFLOPS against torch.matmul's 66.32 at a matched shape.
+
+    trn1.2xlarge 2026-09-10, 8192^3 bf16, one process, both products
+    verified exact. A plain matmul lowered by neuronx-cc is 2.53x this
+    kernel, so the suite's headline compute number is a property of the
+    kernel rather than of the part -- and a cross-platform comparison
+    that quotes it against another accelerator's peak is comparing
+    against a ceiling this repo built.
+    """
+    doc = tensor_virus.__doc__
+    assert "PROPERTY OF THIS KERNEL, NOT OF THE PART" in doc
+    assert "66.32" in doc and "26.19" in doc
+    assert "compare_matmul_paths" in doc
+
+
+def test_the_comparison_tool_exists_and_verifies_before_it_divides():
+    """A ratio between a correct kernel and a rounded one means nothing."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "tools", "compare_matmul_paths.py")
+    assert os.path.exists(path), "the claim above has to stay re-runnable"
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+    assert "INCORRECT PRODUCT" in source
+    # The check has to come before the division, not beside it.
+    assert source.index("INCORRECT PRODUCT") < source.index(
+        'ratio = xla["tflops"] / nki["tflops"]')
+
+
+def test_the_bandwidth_explanation_is_recorded_as_falsified():
+    """Two confident diagnoses were wrong; the third is "unknown".
+
+    102 FLOP/byte times memory_read's 256.2 GB/s is 26.1 TFLOPS, which
+    matches the observed figure almost exactly and is a coincidence --
+    blocked tiling cuts operand traffic 4.7x and buys 1.06x. A doc that
+    dropped the falsification would leave the next reader to believe the
+    arithmetic all over again.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs",
+                           "the_headline_number_is_the_kernel.md"),
+              encoding="utf-8") as handle:
+        doc = handle.read()
+    assert "coincidence" in doc
+    assert "4.7" in doc and "1.06" in doc
+    assert "cause unknown" in doc.lower()

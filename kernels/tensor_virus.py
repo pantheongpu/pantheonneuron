@@ -20,18 +20,37 @@ dead code, and one over constant operands can in principle be folded at
 compile time. The output is the kernel's return value, held live by the
 caller across ``mark_step()``, for the reason memory_read documents.
 
-STATUS: verified on inf2.xlarge 2026-09-07, at reduced shapes. ``nl.matmul``
-and the PSUM accumulator ran correctly on their first execution:
-``verify_product_is_correct`` returned exactly 1.0 at 1024^3 (2.68 TFLOPS,
-12,481 passes) and 2048^3 (21.05 TFLOPS, 12,257 passes), so both sampled
-corners held exactly K and the GEMM computed the declared problem.
+STATUS: VERIFIED ON HARDWARE at the pinned 8192^3 shape, trn1.2xlarge
+2026-09-08 and 2026-09-10, 26.1 TFLOPS bf16 with the product verified
+exactly. Earlier verification at reduced shapes on inf2.xlarge 2026-09-07:
+``verify_product_is_correct`` returned exactly 1.0 at 1024^3 (2.68 TFLOPS)
+and 2048^3 (21.05 TFLOPS).
 
-The pinned 8192^3 shape has **not** run. It unrolls to 65,536 matmul calls,
-four times the 16,384-iteration graph that already took roughly seven
-minutes to compile on this part, so its compile cost is the open question
-rather than its correctness. The near-8x throughput jump between the two
-verified shapes says the smaller one is launch-overhead bound, so neither
-figure should be read as this part's compute capability.
+**THIS NUMBER IS A PROPERTY OF THIS KERNEL, NOT OF THE PART.**
+
+trn1.2xlarge 2026-09-10, same 8192^3 shape, same bf16, same process, both
+products verified exact:
+
+    NKI (this kernel)      26.19 TFLOPS    598 passes
+    XLA (torch.matmul)     66.32 TFLOPS   1510 passes
+
+A plain ``torch.matmul`` compiled by neuronx-cc is **2.53x** this kernel.
+The suite's headline compute figure is therefore a floor on what the
+device can do, and a reader comparing it against another accelerator's
+peak is comparing against a ceiling this repo built rather than one
+Trainium imposes. ``tools/compare_matmul_paths.py`` re-runs that
+comparison; keeping it runnable is what stops the claim going stale.
+
+The cause is not operand bandwidth. That was the first diagnosis -- the
+streaming tiling re-reads every operand tile per (row, col), giving n^3
+traffic and a flat ~102 FLOP/byte, and 102 x memory_read's 256.2 GB/s
+lands on 26.1 almost exactly. It is a coincidence: the blocked tiling cuts
+operand traffic 4.7x and buys 1.06x. Whatever the ceiling is, it is not
+the one that arithmetic describes, and it has not been found yet.
+
+What is settled is that the kernel is correct and slow, which is the right
+way round -- but the figure must not be quoted as Trainium's bf16
+throughput. See docs/the_headline_number_is_the_kernel.md.
 """
 
 import os
