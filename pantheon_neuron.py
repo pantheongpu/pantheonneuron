@@ -332,11 +332,24 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             disagreement = override_disagreement(score, declared, counter)
             if disagreement:
                 detail = "; ".join(filter(None, [detail, disagreement]))
-            overhang = span_outran_the_kernel(
-                metrics.get("execution_span_s"),
-                (_LAST_RUN.get(workload.name) or {}).get("elapsed_s"))
-            if overhang:
-                detail = "; ".join(filter(None, [detail, overhang]))
+            # Only for a Score that is a *rate over that span*. The
+            # compute family is scored from mean(effective_flops), and a
+            # mean is not divided by the span at all -- so an inflated
+            # span cannot move it, and saying it does is a caveat about
+            # arithmetic the row never performed.
+            #
+            # It fired on pulse_virus on trn1.2xlarge 2026-09-10 -- "the
+            # declared rate is divided by 4.50x the time the workload
+            # actually ran" -- for a Score with no denominator. Exactly
+            # the defect thin_monitor_sample had two commits earlier, and
+            # gated the same way: a row must describe the counter it
+            # publishes.
+            if _wants_execution_rate(workload):
+                overhang = span_outran_the_kernel(
+                    metrics.get("execution_span_s"),
+                    (_LAST_RUN.get(workload.name) or {}).get("elapsed_s"))
+                if overhang:
+                    detail = "; ".join(filter(None, [detail, overhang]))
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
@@ -512,6 +525,24 @@ def span_outran_the_kernel(span, elapsed) -> typing.Optional[str]:
     analytic figures differ by about four, and a denominator inflated by a
     fifth is exactly the sort of thing that gets offered as the
     explanation for a discrepancy it is far too small to explain.
+
+    **Where the extra time comes from, as a hypothesis rather than a
+    finding.** The monitor starts before the workload and stops after it,
+    so its window is compile plus run. ``execution_rate`` trims a leading
+    flat run to remove the compile, and that trim only works if the
+    completion counter is perfectly flat while compiling -- any activity
+    at all, from another process or from the warm-up, leaves the leading
+    samples looking like progress and the compile stays in the span.
+
+    That would explain both observations. graph_replay's 24.99s against a
+    20.47s window is a short compile; pulse_virus reported 89.99s against
+    20.00s on trn1.2xlarge 2026-09-10, and its pinned 8192^3 takes about
+    seventy seconds to compile cold. 70 + 20 is 90.
+
+    Not established: it needs a run that records the compile boundary
+    separately, and ``execution_idle_fraction`` reading 0.0 in the
+    graph_replay case says nothing was trimmed, which is consistent with
+    the story and does not prove it.
     """
     if not isinstance(span, (int, float)) or span <= 0:
         return None

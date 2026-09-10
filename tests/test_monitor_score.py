@@ -10,6 +10,7 @@ only correct answer is no Score at all.
 """
 
 import pantheon_neuron
+import sourcecheck
 from kernels import registry
 from neuron_device import NeuronDevice
 
@@ -444,3 +445,32 @@ def test_the_thinness_advice_does_not_recommend_a_shorter_period():
         assert "run longer" in message
         assert "shorter --monitor-period" not in message
         assert "floors around 2s" in message
+
+
+def test_the_span_overhang_is_only_reported_for_a_rate():
+    """A mean has no denominator for an inflated span to inflate.
+
+    span_outran_the_kernel fired on pulse_virus on trn1.2xlarge
+    2026-09-10 -- "the declared rate is divided by 4.50x the time the
+    workload actually ran" -- and pulse_virus is scored from
+    mean(effective_flops). Nothing divides a mean by the span, so the
+    caveat described arithmetic the row never performed.
+
+    Same defect as thin_monitor_sample two commits earlier, gated the
+    same way: a row must describe the counter it publishes.
+    """
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    marker = code.index("span_outran_the_kernel")
+    preceding = code[:marker]
+    assert "_wants_execution_rate ( workload )" in preceding, (
+        "the span check is not gated on the Score being a rate")
+
+
+def test_the_gate_admits_graph_replay_and_excludes_the_compute_family():
+    """graph_replay's Score is delta(completed)/period -- a rate over
+    exactly the span this measures, so the overhang is real there."""
+    assert pantheon_neuron._wants_execution_rate(_graph_replay())
+    for name in ("tensor_virus", "pulse_virus", "omni_virus",
+                 "int_virus", "transformer_virus"):
+        workload = next(w for w in registry.WORKLOADS if w.name == name)
+        assert not pantheon_neuron._wants_execution_rate(workload), name
