@@ -333,7 +333,9 @@ def test_the_accident_catalogue_numbering_matches_its_own_count():
         numbered
 
     words = {10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
-             14: "fourteen", 15: "fifteen", 16: "sixteen"}
+             14: "fourteen", 15: "fifteen", 16: "sixteen",
+             17: "seventeen", 18: "eighteen", 19: "nineteen",
+             20: "twenty"}
     total = words.get(len(numbered))
     assert total, f"add {len(numbered)} to the words map"
     assert f"produced {total} of them" in doc, (
