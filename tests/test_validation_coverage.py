@@ -16,6 +16,7 @@ import re
 
 import pytest
 
+import pantheon_neuron
 from kernels import registry
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -339,3 +340,51 @@ def test_the_accident_catalogue_numbering_matches_its_own_count():
         f"the intro does not say 'produced {total} of them'")
     assert f"{total} above were found" in doc, (
         f"the closing line does not say '{total} above were found'")
+
+
+def test_every_implemented_workload_has_a_dispatch_branch():
+    """A name in IMPLEMENTED with no branch falls through to
+    NotImplementedError -- which is the honest outcome, but the name
+    being in IMPLEMENTED is then a claim the code does not keep.
+
+    The pattern deliberately allows digits. The first version of this
+    check used `[a-z_]+` and reported p2p_thrasher as unhandled, because
+    the name has a 2 in it. A check whose pattern cannot express its
+    subject is the shape in docs/checks_that_pass_by_accident.md that
+    matches a phrasing rather than a claim -- here it produced a false
+    positive rather than a false negative, which is the lucky direction.
+    """
+    import re
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "pantheon_neuron.py"),
+              encoding="utf-8") as handle:
+        code = sourcecheck.code_only(handle.read())
+
+    named = set(re.findall(r'workload \. name == "([a-z0-9_]+)"', code))
+    for group in re.findall(r'workload \. name in \(([^)]*)\)', code):
+        named.update(re.findall(r'"([a-z0-9_]+)"', group))
+
+    assert named, "no dispatch branches parsed -- the shape changed"
+    missing = set(pantheon_neuron.IMPLEMENTED) - named
+    assert not missing, f"in IMPLEMENTED with no dispatch branch: {missing}"
+
+
+def test_every_dispatch_branch_names_a_real_workload():
+    """A branch for a workload the registry does not have is dead code
+    that reads as coverage."""
+    import re
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "pantheon_neuron.py"),
+              encoding="utf-8") as handle:
+        code = sourcecheck.code_only(handle.read())
+
+    named = set(re.findall(r'workload \. name == "([a-z0-9_]+)"', code))
+    for group in re.findall(r'workload \. name in \(([^)]*)\)', code):
+        named.update(re.findall(r'"([a-z0-9_]+)"', group))
+
+    known = {workload.name for workload in registry.WORKLOADS}
+    assert not named - known, f"dispatched but not in the registry: {named - known}"
