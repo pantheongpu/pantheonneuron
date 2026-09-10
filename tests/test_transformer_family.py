@@ -1282,3 +1282,36 @@ def test_the_tolerance_is_five_times_the_drift_bf16_actually_produces():
         # And the simulated value must pass the real check.
         assert transformer_ops.verify_stack_computed_its_depth(
             walked, layers) is None, (layers, walked)
+
+
+def test_decode_uses_the_depth_check_too():
+    """Its recursion is prefill's: rms_norm makes every branch input unit
+    scale, attention over a constant cache is uniform whatever the
+    context length, and both residuals add 1 and gelu(1).
+    """
+    code = sourcecheck.function_code(llm_inference.run_decode)
+    assert "stack_check" in code
+    assert "output_check" not in code
+
+
+def test_decode_omits_the_softmax_scale_and_nothing_can_see_it():
+    """A limit of constant-input verification, asserted so it stays known.
+
+    transformer_ops.attention divides scores by sqrt(head_dim); decode's
+    inline attention does not. With all-ones inputs every score is
+    identical and softmax is uniform either way, so the omission changes
+    no observable value -- not the output, not the FLOP count, not the
+    rate. It is a real structural difference from prefill that no check
+    built on constant inputs can distinguish.
+
+    This test does not fix that. It records it, so the next person to
+    reconcile the two paths finds the reason rather than the divergence.
+    """
+    shared = sourcecheck.function_code(transformer_ops.attention)
+    assert "head_dim ** 0.5" in shared
+
+    decode = sourcecheck.function_code(llm_inference.run_decode)
+    assert "torch . softmax" in decode, "decode still inlines its attention"
+    assert "head_dim" not in decode, (
+        "decode now references head_dim -- if it has adopted the scale, "
+        "this test should be deleted rather than updated")

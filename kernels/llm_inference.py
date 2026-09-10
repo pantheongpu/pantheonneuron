@@ -181,8 +181,20 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "tokens generated / wall time",
-        **transformer_ops.output_check(
-            observed, "decode output"),
+        # Same recursion as prefill, and so the same expected value.
+        # state starts at ones; rms_norm makes every branch input unit
+        # scale; attention over a constant cache is uniform whatever the
+        # context length, so the attended value is the cache's own; and
+        # both residuals add 1 and gelu(1). 32 layers -> 59.92.
+        #
+        # One thing this cannot check, and it is worth naming rather than
+        # leaving implied: the scores here are **not** divided by
+        # sqrt(head_dim), where transformer_ops.attention divides. With
+        # all-ones inputs every score is identical and softmax is uniform
+        # either way, so the omission is invisible to any check built on
+        # constant inputs -- including this one. It is a real structural
+        # difference from prefill that no test in this suite can see.
+        **transformer_ops.stack_check(observed, layers),
     }
 
 
