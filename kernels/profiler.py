@@ -23,10 +23,18 @@ each one costing a round trip to find. The first four came out of the
    analytic figure -- which, until 2026-09-07, it always had. See
    kernels/cores.py.
 
-STATUS: capture verified on inf2.xlarge 2026-09-07 -- it produced a session
-against a real NEFF once no workload held the device. The counter-reading
-path above it is still exercised only by hand-taken captures. See
-docs/neuron_counters.md for the raw output it parses.
+STATUS: VERIFIED END TO END, trn1.2xlarge 2026-09-10. The counter-reading
+path is no longer exercised only by hand-taken captures: memory_read
+(256.0888 GB/s) and memory_write (226.6205 GB/s) both scored through it in
+a full pass, which is the first time the declared profiler source produced
+Scores in a scored run rather than a standalone probe session.
+
+Capture alone was verified earlier, on inf2.xlarge 2026-09-07. The gap
+between the two dates is NEFF identification: a capture that runs against
+the wrong graph produces a plausible bandwidth from four bytes, and
+verify_profile_covers_plan refusing it is what made the difference visible
+rather than silent. See docs/neuron_counters.md for the raw output this
+parses.
 """
 
 import json

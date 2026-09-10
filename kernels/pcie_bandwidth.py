@@ -50,9 +50,11 @@ registry decision and is left open: 16 MiB measures the link, 1 GiB
 measures what a large transfer actually costs, and those are different
 questions. What is no longer true is that the number is unexplained.
 
-STATUS: verified on both parts 2026-09-08; the pinning and alternating-
-source controls are UNTESTED. No NKI: this is torch tensor movement, so it
-depends on the runtime rather than on a compiled kernel.
+STATUS: VERIFIED ON HARDWARE, both parts 2026-09-08 and trn1.2xlarge
+2026-09-10, including the preallocation and alternating-source controls --
+the size sweep above was taken through this kernel with both in place. No
+NKI: this is torch tensor movement, so it depends on the runtime rather
+than on a compiled kernel.
 """
 
 import time

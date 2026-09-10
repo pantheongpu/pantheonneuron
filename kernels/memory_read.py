@@ -14,10 +14,20 @@ The read-coverage check has returned exactly 1.0 on both parts, so the
 kernel reads every byte the plan describes. Measured 264 GB/s on trn1 at
 1 GiB and 236.9 GB/s on inf2 at the pinned 8 GiB.
 
-Its declared Score source, however, has never produced a number: the
-profiler needs a NeuronCore to replay the NEFF and the workload held them
-all, so every run so far has reported the analytic figure. A core is now
-reserved for it (kernels/cores.py), untested on hardware.
+Its declared Score source **now produces a number**: 256.0888 GB/s via
+neuron-profile on trn1.2xlarge 2026-09-10. For a long time it did not --
+the profiler needs a NeuronCore to replay the NEFF and the workload held
+them all -- and the core reservation in kernels/cores.py is what closed it.
+
+Two things had to be true and the second took longer. Reserving the core
+let the capture run at all; identifying *which* NEFF was this kernel's
+needed compile-cache isolation, because timestamp narrowing alone selected
+the wrong graph and verify_profile_covers_plan correctly refused it
+(*profiled graph moved 4 bytes against a plan of 8589934592*).
+
+The reservation is not free: it is off for any selection containing a
+`cores: "all"` workload, which includes --test all and --test memory. See
+docs/workload_counter_map.md.
 """
 
 import os

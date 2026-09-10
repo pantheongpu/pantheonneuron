@@ -188,3 +188,75 @@ def test_the_support_modules_are_the_ones_owning_no_workload():
     # Every one of these is invisible to the ownership-keyed check above.
     assert "transformer_ops.py" in support
     assert "tiling.py" in support
+
+
+def _status_block(source):
+    """The STATUS paragraph, which is the part making the claim.
+
+    Prose elsewhere in a docstring may legitimately use the word --
+    transformer_ops narrates the bug that produced this file, and
+    pcie_bandwidth notes a live untested hypothesis in a code comment.
+    Only the STATUS block is a claim about whether the kernel has run.
+    """
+    marker = source.find("STATUS:")
+    if marker < 0:
+        return ""
+    end = source.find("\n\n", marker)
+    return source[marker:end if end > 0 else len(source)]
+
+
+@pytest.mark.parametrize("module", sorted(k for k in OWNERS if k))
+def test_no_status_block_hedges_untested_for_a_workload_that_has_run(module):
+    """The third hole found in this same guard, and the same shape again.
+
+    The first check keyed on workload ownership and could not see support
+    code. The second asked every module the blunt question and matched the
+    exact phrase "STATUS: UNTESTED ON HARDWARE" -- so four modules saying
+    "STATUS: verified ... but X is UNTESTED" went straight past it, and
+    all four were stale:
+
+      pcie_bandwidth  "the pinning and alternating-source controls are
+                      UNTESTED" -- the 2026-09-10 size sweep was taken
+                      through this kernel with both in place
+      memory_write    "not at the pinned size" -- pinned size changed to
+                      4 GiB and it has scored there via neuron-profile
+      memory_read     "declared Score source has never produced a number"
+                      -- it produced 256.0888 GB/s on 2026-09-10
+      profiler        "exercised only by hand-taken captures" -- two
+                      workloads scored through it in a full pass
+
+    The last two understate a solved problem that took real work, which is
+    the cost of a stale status nobody checks.
+
+    An exact-phrase match is a check that only catches the phrasing it was
+    written against. This asks whether the word appears anywhere in the
+    STATUS block at all.
+    """
+    block = _status_block(_module_source(module))
+    if "untested" not in block.lower():
+        return
+    verified = _verified_workloads() & set(OWNERS[module])
+    assert not verified, (
+        f"{module}'s STATUS block hedges 'untested' but {sorted(verified)} "
+        "have passed on hardware; see data/hardware_runs.json"
+    )
+
+
+def test_the_status_block_stops_at_the_paragraph():
+    """Or the check above would fire on prose that merely says the word.
+
+    transformer_ops narrates this very bug in the paragraph after its
+    STATUS line, and would otherwise accuse itself.
+    """
+    block = _status_block(_module_source("transformer_ops.py"))
+    assert block.startswith("STATUS:")
+    assert "untested" not in block.lower()
+    assert "VERIFIED ON HARDWARE indirectly" in block
+    # The narration is in the source and deliberately outside the block.
+    assert "UNTESTED" in _module_source("transformer_ops.py")
+
+
+def test_collectives_still_fails_the_wider_check_too():
+    """The control, for the wider net as well as the narrow one."""
+    block = _status_block(_module_source("collectives.py"))
+    assert "UNTESTED" in block
