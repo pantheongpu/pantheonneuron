@@ -1,0 +1,99 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. python pantheon_neuron.py --test all --duration 30
+# One process, at commit 2a5c54b (coalesced default, run_order, aggregate invalidation).
+# Console lines filtered to workload / status / percent-of-peak / report and cut at 330
+# characters; nothing else removed. memory_read and memory_write report analytic Scores:
+# a cores:"all" workload in the selection turns the profiler reservation off (README,
+# 'What --test all cannot measure'). Scores from the report JSON follow the console.
+
+[PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+[PANTHEON-NEURON] -> baseline_metrics
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    61.44% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    57.54% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> tensor_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    73.23% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> int_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> pulse_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    78.78% of 47.5 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> transformer_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    55.54% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> omni_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    55.04% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 22:44:23.317709 15894:15904 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2
+[PANTHEON-NEURON]    61.74% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-10 22:44:57.941029 16104:16111 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2
+[PANTHEON-NEURON]    58.39% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> all_reduce
+[PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+[PANTHEON-NEURON] -> p2p_thrasher
+[PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.6 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-09-08 split was a per-pass host allocation, not the link), then the negotiated link width)
+[PANTHEON-NEURON]    0.44% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> llm_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> llm_prefill
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> kv_cache_churn
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> fused_attention
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> quantized_gemm
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> serving_mix
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> speculative_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> moe_router
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> transformer_train_step
+[PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and the model never updates. The Score still measures what a training step costs; it does not measure train
+[PANTHEON-NEURON] -> allocation_fragmentation
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> graph_replay
+[PANTHEON-NEURON]    PASS (the completion counter reports 1012 where the kernel counted 3025, a factor of 3 -- the Score is the former and the two are not measuring the same thing; the completion counter moved across 4 sample(s); a rate over fewer than 5 moves with any one of them, so run longer before quoting this -- neuron-mon
+[PANTHEON-NEURON] -> rag_embedding
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> vision_encoder
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: database/pantheon_neuron_report_20260910_223107.json
+
+
+## Report rows
+baseline_metrics         PASS     None   [None]
+memory_read_agg          PASS     540.9731 GB/s  [workload]
+memory_write_agg         PASS     506.6613 GB/s  [workload]
+tensor_virus             PASS     69.5646 TFLOPS  [neuron-monitor]
+int_virus                PASS     77.1832 TOPS  [neuron-monitor]
+pulse_virus              PASS     37.4189 TFLOPS  [neuron-monitor]
+transformer_virus        PASS     52.766 TFLOPS  [neuron-monitor]
+omni_virus               PASS     52.292 TFLOPS  [neuron-monitor]
+memory_read              PASS     271.8041 GB/s  [analytic (bytes moved / wall time); declared source is neuron-profile hbm_read_bytes]
+memory_write             PASS     257.0676 GB/s  [analytic (bytes moved / wall time); declared source is neuron-profile hbm_write_bytes]
+all_reduce               SKIPPED  None GB/s  [None]
+p2p_thrasher             SKIPPED  None GB/s  [None]
+pcie_bandwidth           PASS     3.8962 GB/s  [workload]
+llm_decode               PASS     20.6072 tokens/s  [workload]
+llm_prefill              PASS     3812.1065 prompt-tokens/s  [workload]
+kv_cache_churn           PASS     97306.7566 cache-updates/s  [workload]
+fused_attention          PASS     6047.425 attention-tiles/s  [workload]
+quantized_gemm           PASS     18459018297824.926 quantized-ops/s  [workload]
+serving_mix              PASS     2.4771 requests/s  [workload]
+speculative_decode       PASS     73.7273 verified-tokens/s  [workload]
+moe_router               PASS     254982.376 routed-tokens/s  [workload]
+transformer_train_step   PASS     3.6471 train-steps/s  [workload]
+allocation_fragmentation PASS     2263.5119 allocation-events/s  [workload]
+graph_replay             PASS     1011.9744 graph-steps/s  [neuron-monitor]
+rag_embedding            PASS     854.2847 embedding-vectors/s  [workload]
+vision_encoder           PASS     58136.9627 image-tiles/s  [workload]

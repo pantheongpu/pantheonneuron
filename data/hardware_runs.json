@@ -57,6 +57,25 @@
           ],
           "failed": [],
           "skipped": ["all_reduce", "p2p_thrasher"]
+        },
+        {
+          "date": "2026-09-10",
+          "evidence": "data/validation-2026-09-10/trn1-full-pass-ordered.log",
+          "note": "--test all --duration 30 in one process: 24 PASS (baseline_metrics, which carries no Score, not listed), 0 FAIL, with the coalesced GEMM tiling as default (tensor_virus 69.56 TFLOPS, int_virus 77.18 TOPS, pulse_virus 37.42 TFLOPS) and every row-tile of each GEMM product checked. An earlier --test all the same day (trn1-full-pass-single-process.log) reported memory_read_agg and memory_write_agg as PASS at 0.0 GB/s with every worker aborted; that PASS was the defect and is not recorded as one. Here they run first and read 540.97 and 506.66 GB/s. Coalesced tiling evidence: trn1-coalesced-tiling.log; ordering before/after: trn1-aggregate-ordering.log.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn",
+            "llm_decode", "llm_prefill", "memory_read",
+            "memory_read_agg", "memory_write",
+            "memory_write_agg", "moe_router", "omni_virus",
+            "pcie_bandwidth", "pulse_virus", "quantized_gemm",
+            "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": ["all_reduce", "p2p_thrasher"]
         }
       ]
     },
