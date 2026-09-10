@@ -145,8 +145,25 @@ said nothing whatever about whether it ran, and nothing else did either.
 
 Its job is now `pantheon_neuron.override_disagreement`, which is called,
 covers every monitor-scored workload rather than one family, and carries
-both zero cases. There is a test asserting nothing calls the old name, so
-it cannot return as a second unreachable copy.
+both zero cases.
+
+**And there was a second one.** `profiler.verify_profile_covers_plan`
+rejects a capture whose counters do not match the plan — the check that
+produced *"profiled graph moved 4 bytes against a plan of 8589934592"*,
+quoted in three docstrings, in the generated reference and in the README.
+`select_by_plan` had grown an inline floor test and stopped calling it.
+Five more tests, all green, all on unreachable code.
+
+Being dead is not a neutral state. While nothing exercised it, it kept a
+**one-sided bound**: it refused a graph that moved too few of the planned
+bytes and accepted one that moved ten times too many, which divides by a
+real `total_time` and publishes a bandwidth an order of magnitude too
+fast. The inline copy inherited the same gap. Nobody found it because
+nobody ran it, and nobody ran it because the tests passed.
+
+Both are now guarded by a sweep asserting every `verify_*` function in
+production code is called from production code, read through the comment
+filter so a docstring crediting a function does not count as calling it.
 
 ### 11. The check passes because the collection is empty
 

@@ -193,3 +193,53 @@ def test_no_test_module_defines_the_same_name_twice():
                 offenders.append(f"{name}:{node.lineno} redefines {node.name}")
             seen.add(node.name)
     assert not offenders, offenders
+
+
+def test_every_verify_function_is_called_from_production_code():
+    """Two were not, and both had passing tests.
+
+    tensor_virus.verify_against_monitor and
+    profiler.verify_profile_covers_plan were each written, documented and
+    covered -- five tests apiece -- and neither was called from anywhere.
+    Their tests said the functions were correct, and they were. Nothing
+    said whether they ran.
+
+    Being dead is not a neutral state either. verify_profile_covers_plan
+    kept a one-sided bound the whole time it was unreachable, because
+    nothing exercised it against a graph larger than the plan, and the
+    inline copy that replaced it inherited the same gap.
+
+    Read through the comment filter, so a mention in a docstring does not
+    count as a call site -- three docstrings credited
+    verify_profile_covers_plan with a refusal it was no longer making.
+    """
+    import ast
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sources = {}
+    for directory in (root, os.path.join(root, "kernels")):
+        for name in sorted(os.listdir(directory)):
+            if name.endswith(".py"):
+                path = os.path.join(directory, name)
+                with open(path, encoding="utf-8") as handle:
+                    sources[path] = handle.read()
+
+    assert sources, "no production modules found -- the sweep is broken"
+
+    code = "".join(sourcecheck.code_only(text) for text in sources.values())
+
+    unreachable = []
+    for path, text in sources.items():
+        for node in ast.parse(text).body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if not node.name.startswith(("verify_", "check_")):
+                continue
+            # One occurrence is the definition itself.
+            if code.count(node.name) <= 1:
+                unreachable.append(f"{os.path.basename(path)}:{node.name}")
+
+    assert not unreachable, (
+        f"defined and never called: {unreachable} -- either wire it in or "
+        "delete it, but a check that does not run is not a check")
