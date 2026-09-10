@@ -357,3 +357,54 @@ def test_flat_collapses_the_wrapping_a_call_was_split_across():
 def test_flat_leaves_a_single_line_alone():
     assert sourcecheck.flat("a  b\tc") == "a b c"
     assert sourcecheck.flat("") == ""
+
+
+# -- the bytes that arrived, not just the bytes requested --------------------
+
+def test_a_landing_buffer_holding_its_own_fill_means_nothing_arrived():
+    """The kernel timed copies and never looked at what arrived.
+
+    The Score is bytes *requested* over wall time, and the bytes
+    requested are a constant -- so a d2h leg that moved nothing reports
+    full bandwidth and leaves the landing buffer at the value it was
+    created with.
+    """
+    message = pcie_bandwidth.verify_transfer_arrived(
+        pcie_bandwidth.LANDING_FILL, ["h2d", "d2h"])
+    assert message is not None
+    assert "no bytes arrived" in message
+    assert "bytes requested rather than bytes observed" in message
+
+
+def test_a_landing_buffer_holding_a_source_fill_is_accepted():
+    for fill in (pcie_bandwidth.SOURCE_FILL, pcie_bandwidth.ALT_FILL):
+        assert pcie_bandwidth.verify_transfer_arrived(
+            fill, ["h2d", "d2h"]) is None
+
+
+def test_bytes_that_are_neither_source_are_reported_as_wrong():
+    """Arriving is not the same as arriving correctly."""
+    message = pcie_bandwidth.verify_transfer_arrived(7.5, ["h2d", "d2h"])
+    assert message is not None
+    assert "not the bytes that were sent" in message
+
+
+def test_a_plan_without_d2h_is_not_accused():
+    """h2d alone leaves the landing buffer untouched by design, and a
+    check that fires on a correct run gets disabled."""
+    assert pcie_bandwidth.verify_transfer_arrived(
+        pcie_bandwidth.LANDING_FILL, ["h2d"]) is None
+
+
+def test_the_fills_are_distinct_or_the_check_proves_nothing():
+    """If the landing fill equalled a source fill, a buffer that never
+    received anything would be indistinguishable from one that did."""
+    fills = (pcie_bandwidth.SOURCE_FILL, pcie_bandwidth.ALT_FILL,
+             pcie_bandwidth.LANDING_FILL)
+    assert len(set(fills)) == 3
+
+
+def test_the_kernel_reads_the_landing_buffer_back():
+    code = sourcecheck.flat_function_code(pcie_bandwidth.run)
+    assert "landing_value" in code
+    assert "verify_transfer_arrived" in code

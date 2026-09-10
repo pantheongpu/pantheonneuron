@@ -33,6 +33,58 @@ import typing
 from . import nki_backend, tensor_virus, tiling
 
 
+# How far the observed duty may sit from the requested one before the row
+# says so. Generous, and asymmetric in spirit rather than in code: the
+# barrier at the end of each loaded half waits for the device, so
+# ``loaded_s`` carries the tail of the last submission and the observed
+# ratio runs slightly *above* the request. At the pinned 2s period a pass
+# is tens of milliseconds against a 1s half, so the bias is a percent or
+# two; 0.15 leaves room for a slower part without admitting a run that
+# never idled.
+DUTY_TOLERANCE = 0.15
+
+
+def verify_duty_cycle_was_observed(
+    loaded_s: float, elapsed_s: float, duty: float,
+    tolerance: float = DUTY_TOLERANCE,
+) -> typing.Optional[str]:
+    """Check the load actually pulsed.
+
+    This workload's whole premise is that half the run is idle: the
+    transitions are what provoke the power and clock behaviour it exists
+    to measure, and the docstring says a healthy part reports "roughly
+    the duty cycle times the sustained figure".
+
+    **Nothing checked that.** A run whose idle half vanished -- a sleep
+    that returned immediately, a pulse window that swallowed the period,
+    an ``off_s`` computed as zero -- is ``tensor_virus`` under another
+    name, at roughly twice the analytic figure, and every number in the
+    row would look healthy. 13.85 TFLOPS against tensor_virus's 26.12 is
+    the evidence that it *is* pulsing today; a ratio near 1.0 would be
+    the evidence that it stopped, and no one was reading for it.
+
+    The comparison is available in the result and costs nothing: the
+    kernel already records ``loaded_s`` and ``elapsed_s`` and knows what
+    duty it asked for.
+    """
+    if elapsed_s <= 0:
+        return "the run measured no wall time, so no duty can be observed"
+    observed = loaded_s / elapsed_s
+    if abs(observed - duty) <= tolerance:
+        return None
+    if observed > duty:
+        return (
+            f"the load ran for {observed:.0%} of the run against a "
+            f"requested {duty:.0%} -- the idle half did not happen, so "
+            "this is a sustained load wearing a duty cycle's name"
+        )
+    return (
+        f"the load ran for only {observed:.0%} of the run against a "
+        f"requested {duty:.0%} -- the loaded half is not filling its "
+        "window, so the analytic figure spans more idle than it should"
+    )
+
+
 def duty_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, float]:
     """Split the pinned period into its loaded and idle halves.
 
@@ -145,7 +197,14 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "FLOPs issued / wall time, including idle halves",
-        "warning": tensor_virus.verify_product_is_correct(product_verified),
+        # What fraction of the run was actually loaded. The row reported
+        # loaded_s and elapsed_s and the requested duty and never
+        # compared them.
+        "observed_duty": (loaded_s / elapsed) if elapsed else None,
+        "warning": "; ".join(part for part in (
+            tensor_virus.verify_product_is_correct(product_verified),
+            verify_duty_cycle_was_observed(loaded_s, elapsed, cycle["duty"]),
+        ) if part) or None,
         "plan": plan,
         "duty": cycle,
         "product_verified_ratio": product_verified,

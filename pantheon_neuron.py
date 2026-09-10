@@ -979,6 +979,15 @@ _PROVENANCE_KEYS = (
     # than take the PASS on faith.
     "expected_output",
     "expected_loss",
+    # pulse_virus: what fraction of the run was actually loaded. The row
+    # carried loaded_s, elapsed_s and the requested duty and never
+    # compared them, so a run that stopped idling was indistinguishable
+    # from one that did not.
+    "observed_duty",
+    # pcie_bandwidth: what arrived, not just how fast. The Score counts
+    # bytes requested, which is a constant, so a leg that moved nothing
+    # reported full bandwidth.
+    "landing_value",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",
