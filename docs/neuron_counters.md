@@ -52,6 +52,33 @@ full 108-counter set, including MFU/HFU/MBU, per-engine instruction counts
 for all five engines, the SBUF/PSUM/spill memory hierarchy, and 17 DMA
 counters.
 
+### The `_percent` counters are fractions
+
+**Every `neuron-profile` counter whose name ends in `_percent` reports a
+0–1 fraction, not a percentage.** Measured on trn1.2xlarge 2026-09-10:
+
+| counter | torch.matmul, 4096³ bf16 |
+|---|--:|
+| `tensor_engine_active_time_percent` | 0.451 |
+| `dma_active_time_percent` | 0.205 |
+| `mfu_max_achievable_estimated_percent` | **1** |
+
+A "maximum achievable" of exactly 1 is 100%, and a tensor engine active
+0.45% of the time could not have delivered the 51.8 TFLOPS the same run
+measured. The name says percent; the value is a fraction.
+
+This was found by getting it wrong. The probe that captured these
+compared them against a percentage threshold, printed *"tensor engine
+active: NKI 0.379%"*, and concluded the engines were comparable and the
+gap lay elsewhere. Read on the right scale, the same numbers say the
+opposite — see `docs/the_headline_number_is_the_kernel.md`.
+
+Nothing in production reads these counters yet
+(`omni_virus.engine_activity` is deliberately unwired — see
+`COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY`), so the trap has only
+caught a probe so far. `tests/test_neuron_counters_units.py` exists so it
+cannot catch the first real consumer.
+
 ## Power: partially recoverable
 
 `/sys/devices/virtual/neuron_device/neuron0/stats/power/utilization` is

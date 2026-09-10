@@ -94,6 +94,56 @@ The shape is not the story either: this kernel reaches 23.67 TFLOPS at
 2048³ and 26.19 at 8192³, so it is within 10% of its own ceiling across a
 64× range of problem sizes while `torch.matmul` is 2.5× above it at both.
 
+## What the engines are doing
+
+The three experiments above each changed the kernel and watched the rate.
+This one reads the hardware. `neuron-profile` captured one execution of
+each path's kernel graph at 4096³ bf16, trn1.2xlarge 2026-09-10, both
+products verified exact:
+
+| counter (0–1 fraction, shown as %) | NKI | XLA |
+|---|--:|--:|
+| **DMA active** | **59.1%** | **20.5%** |
+| tensor engine active | 37.9% | 45.1% |
+| GpSimd active | 8.9% | 0.1% |
+| tensor engine instructions | 15,373 | 18,338 |
+| time per execution | 5.74 ms | 3.96 ms |
+
+**The profile agrees with the wall clock** — 1.45× slower per execution
+by the profiler, 1.43× by rate in the same run — so these counters
+describe the gap the rate measured rather than something beside it.
+
+What they show: **the hand-written kernel spends most of its execution
+moving data.** Its DMA is active 59% of the time against the compiler's
+20%, while its tensor engine is active less (38% against 45%). The
+compiler's matmul inverts the balance: little movement, more arithmetic.
+The GpSimd engine — address generation and data movement that does not
+map to the systolic array — is busy nearly ninety times as much.
+
+That fits the streaming tiling, which re-reads every operand tile for
+every (row, col) pair.
+
+**It does not fit the blocked-tiling result, and that tension is left
+standing rather than explained away.** Blocked tiling cut the modelled
+operand traffic 4.7× and bought 1.06×. If data movement dominates, cutting
+it should have helped more. Two readings would reconcile them — DMA time
+set by transfer *count* and per-transfer overhead rather than by bytes,
+or blocked tiling's remaining lhs stream being no more efficient — and
+neither has been measured. `dma_transfer_total_bytes` is unreported for
+the NKI graph, which is the counter that would distinguish them.
+
+Two things worth keeping from how this was found:
+
+- **The probe's own verdict was wrong.** It read the `_percent` counters
+  as percentages, printed *"tensor engine active: NKI 0.379%"*, and
+  concluded *"comparable; the gap is elsewhere."* They are 0–1 fractions
+  — `mfu_max_achievable_estimated_percent` reads exactly 1 — and on the
+  right scale they say the opposite. See `docs/neuron_counters.md`.
+- **The gap depends on shape.** 1.43× at 4096³, 2.53× at 8192³. The
+  hand-written kernel falls further behind as the problem grows, which is
+  what a data-movement cost that scales faster than the compiler's would
+  do.
+
 ## What is settled
 
 The kernel is **correct and slow**, which is the right way round. Its

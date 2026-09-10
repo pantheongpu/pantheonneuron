@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced eighteen of them, and they are collected
+would go. This repo has now produced nineteen of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -329,7 +329,29 @@ caught by watching the actual job on GitHub, and neither would have been
 caught by any number of local runs. There is now a sweep that every
 import is declared, and it was checked by putting `import yaml` back.
 
-### 18. The check passes because the collection is empty
+### 18. The counter named `_percent` reports a fraction
+
+A probe captured per-engine counters from `neuron-profile` to find where
+`tensor_virus` loses to `torch.matmul`, and ended with its own verdict:
+
+```
+tensor engine active: NKI 0.3789141712006497%  XLA 0.4510375568931359%
+Tensor engine activity is comparable; the gap is elsewhere.
+```
+
+Every `_percent` counter is a 0–1 fraction.
+`mfu_max_achievable_estimated_percent` read exactly 1, and a tensor
+engine active 0.45% of the time could not have delivered the 51.8 TFLOPS
+the same run measured. The probe compared fractions against a percentage
+threshold, so its verdict was computed rather than guessed — and wrong,
+in a way that pointed away from the answer. On the right scale the NKI
+kernel's DMA is busy 59% of the time against XLA's 20%.
+
+A verdict printed by the tool reads as more authoritative than the table
+above it, and here it was the part to distrust. The numbers were right;
+the sentence summarising them inverted them.
+
+### 19. The check passes because the collection is empty
 
 Not yet caught in the wild here, and guarded against on the way in: a
 coverage check over a directory, a sweep over "every INTERNAL workload",
@@ -354,4 +376,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-eighteen above were found by reading what a passing check had filtered out.
+nineteen above were found by reading what a passing check had filtered out.

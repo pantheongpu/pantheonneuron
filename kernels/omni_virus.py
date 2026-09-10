@@ -200,6 +200,13 @@ def engine_activity(metrics: typing.Mapping[str, typing.Any]) -> typing.Dict[str
     and trn1 exposes 90, so a missing engine here is a property of the part
     rather than a failed run -- and inventing a zero for it would read as an
     idle engine instead of an unreported one.
+
+    **The values are 0-1 fractions despite the ``_percent`` names.**
+    Measured on trn1.2xlarge 2026-09-10: a torch.matmul at 51.8 TFLOPS
+    reported ``tensor_engine_active_time_percent`` 0.451 and
+    ``mfu_max_achievable_estimated_percent`` exactly 1. Multiply by 100
+    before presenting any of them as a percentage. See
+    docs/neuron_counters.md.
     """
     found = {}
     for counter in ENGINE_COUNTERS:
