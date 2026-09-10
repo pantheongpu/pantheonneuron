@@ -1,0 +1,221 @@
+"""A Score against the ceiling its part publishes.
+
+26.1 TFLOPS and 66.3 TFLOPS are two numbers. 12% and 31% of peak are a
+finding: the first pair invites a cross-vendor comparison, and the second
+says whether that comparison would be about silicon or about kernel
+quality.
+
+The denominator is the hard part, and this file is mostly about getting
+it right rather than about the division.
+"""
+
+import pytest
+
+import pantheon_neuron
+import sourcecheck
+from kernels import registry
+from neuron_device import NeuronDevice
+
+TRN1 = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
+INF2 = [NeuronDevice(0, "inf2", "v2", 2, 32 * 1024**3, False)]
+
+
+def _named(name):
+    return next(w for w in registry.WORKLOADS if w.name == name)
+
+
+# -- the published figures ---------------------------------------------------
+
+def test_every_peak_cites_a_source():
+    """A number in a table without provenance is a number with a table's
+    authority and a comment's evidence. That is what this replaced."""
+    assert registry.PART_PEAKS, "no peaks declared -- the sweep is vacuous"
+    for arch, peak in registry.PART_PEAKS.items():
+        assert peak.get("source"), arch
+        assert len(peak["source"]) > 30, f"{arch}: source is not a citation"
+        for field in ("hbm_gbps", "bf16_tflops", "neuroncores"):
+            assert isinstance(peak.get(field), (int, float)), (arch, field)
+            assert peak[field] > 0, (arch, field)
+
+
+def test_no_peak_claims_to_be_verified_yet():
+    """None of these has been checked against a datasheet.
+
+    The device reports its own name and nothing about its bandwidth or
+    arithmetic throughput, so every figure here is recalled rather than
+    read. When someone opens the datasheet, this test is what they change
+    -- and it failing is the signal that they did.
+    """
+    unverified = sorted(a for a, p in registry.PART_PEAKS.items()
+                        if not p.get("verified"))
+    assert unverified == sorted(registry.PART_PEAKS), (
+        "a peak is marked verified: update this test with what was "
+        "checked and against which document")
+
+
+def test_the_two_parts_do_not_share_a_bandwidth_figure():
+    """The suspicion that prompted the table.
+
+    kernels/memory_read.py carried "the part's ~820 GB/s HBM" in prose,
+    and 820 is the Inferentia2 figure, not Trainium1's. If that is right,
+    every "% of HBM" computed for trn1 from that comment understated the
+    part by a third.
+    """
+    trn1 = registry.PART_PEAKS["trn1"]["hbm_gbps"]
+    inf2 = registry.PART_PEAKS["inf2"]["hbm_gbps"]
+    assert trn1 != inf2, (
+        "the two parts now share a bandwidth figure, which is what the "
+        "old prose did wrong")
+
+
+# -- the share, which is the part that is easy to get wrong ------------------
+
+def test_a_single_core_workload_is_measured_against_one_core():
+    """memory_read declares cores: 1 on a two-core part.
+
+    Comparing it against the whole chip is the error that makes 256 GB/s
+    look like 42% of the part when it is 84% of what it was given.
+    """
+    share = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    assert share["cores_used"] == 1
+    assert share["cores_available"] == 2
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["hbm_gbps"] / 2)
+
+
+def test_an_all_core_workload_is_measured_against_the_chip():
+    share = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    assert share["cores_used"] == 2
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["hbm_gbps"])
+
+
+def test_the_two_memory_workloads_are_not_flattered_by_their_core_count():
+    """memory_read and memory_read_agg measure the same thing on the same
+    silicon and differ only in how much of it they are allowed.
+
+    A percentage ignoring that makes the aggregate look better for a
+    reason that has nothing to do with memory. Measured on trn1.2xlarge
+    2026-09-10: 256.1 and 541.5 GB/s, which land within six points of
+    each other once each is read against its own share.
+    """
+    single = pantheon_neuron.percent_of_peak(
+        256.1, pantheon_neuron.peak_share(_named("memory_read"), TRN1))
+    aggregate = pantheon_neuron.percent_of_peak(
+        541.5, pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1))
+    assert abs(single - aggregate) < 10, (single, aggregate)
+
+
+def test_the_peak_follows_the_architecture():
+    """inf2 and trn1 publish different figures, so the same workload gets
+    a different denominator on each."""
+    trn1 = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    inf2 = pantheon_neuron.peak_share(_named("memory_read"), INF2)
+    assert trn1["peak"] != inf2["peak"]
+
+
+def test_multiple_devices_scale_the_ceiling():
+    two = [NeuronDevice(i, "trn1", "v2", 2, 32 * 1024**3, True)
+           for i in range(2)]
+    one = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    both = pantheon_neuron.peak_share(_named("memory_read_agg"), two)
+    assert both["peak"] == pytest.approx(one["peak"] * 2)
+
+
+# -- where there is no ceiling to divide by ----------------------------------
+
+def test_a_unit_with_no_published_peak_gets_no_percentage():
+    """graph-steps/s and requests/s have no datasheet figure, and
+    inventing one would be worse than an empty column."""
+    for name in ("graph_replay", "serving_mix", "allocation_fragmentation"):
+        assert pantheon_neuron.peak_share(_named(name), TRN1) is None
+
+
+def test_an_unknown_architecture_gets_no_percentage():
+    alien = [NeuronDevice(0, "trn9", "v9", 4, 32 * 1024**3, True)]
+    assert pantheon_neuron.peak_share(_named("memory_read"), alien) is None
+
+
+def test_no_devices_means_no_share():
+    assert pantheon_neuron.peak_share(_named("memory_read"), []) is None
+
+
+# -- the division ------------------------------------------------------------
+
+def test_the_percentage_is_the_score_over_the_share():
+    share = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    assert pantheon_neuron.percent_of_peak(share["peak"], share) == 100.0
+    assert pantheon_neuron.percent_of_peak(
+        share["peak"] / 2, share) == pytest.approx(50.0)
+
+
+def test_an_absent_or_impossible_score_gets_no_percentage():
+    share = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    for bad in (None, 0, -1.0, "n/a"):
+        assert pantheon_neuron.percent_of_peak(bad, share) is None
+    assert pantheon_neuron.percent_of_peak(100.0, None) is None
+
+
+def test_a_score_above_peak_is_reported_rather_than_clamped():
+    """Over 100% means the Score, the peak, or the core split is wrong,
+    and clamping it to 100 would hide exactly that.
+
+    memory_read once reported 14,513 GB/s from an elided DMA. A column
+    reading 2367% is the loudest possible way to say so.
+    """
+    share = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    assert pantheon_neuron.percent_of_peak(
+        share["peak"] * 5, share) == pytest.approx(500.0)
+
+
+# -- the row -----------------------------------------------------------------
+
+def test_the_row_carries_the_percentage_and_its_provenance(mock_env=None):
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    assert '"Percent Of Peak"' in code
+    assert '"Peak"' in code
+    # Both on the skipped row too, or the shapes diverge.
+    assert code.count('"Percent Of Peak"') == 2
+
+
+def test_the_console_prints_the_share_and_flags_an_unverified_peak(capsys):
+    """A reader who never opens the JSON is exactly the reader who would
+    quote a Score against another vendor's, so the share belongs on the
+    console -- and so does the fact that the denominator is unchecked.
+    """
+    import io
+    import contextlib
+
+    row = {
+        "Status": "PASS", "Detail": "", "Unit": "GB/s",
+        "Percent Of Peak": 88.3,
+        "Peak": {"peak": 613.0, "cores_used": 2, "cores_available": 2,
+                 "peak_verified": False},
+        "Repeats": None,
+    }
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        pct, share = row["Percent Of Peak"], row["Peak"]
+        caveat = "" if share.get("peak_verified") else ", peak unverified"
+        print(f"[PANTHEON-NEURON]    {pct}% of {share['peak']} {row['Unit']} "
+              f"across {share['cores_used']} of "
+              f"{share['cores_available']} core(s){caveat}")
+    printed = buffer.getvalue()
+    assert "88.3% of 613.0 GB/s" in printed
+    assert "2 of 2 core(s)" in printed
+    assert "peak unverified" in printed
+
+
+def test_the_console_block_exists_in_the_run_loop():
+    """The test above exercises the arithmetic; this asserts the loop
+    actually does it, which is the half a copy of the code cannot show."""
+    source = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert '"Percent Of Peak"' in source
+    assert "peak unverified" in source
+
+
+def test_a_verified_peak_would_drop_the_caveat():
+    """So the caveat disappears on its own when someone checks the
+    datasheet, rather than needing a second edit to remove."""
+    source = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert 'if share . get ( "peak_verified" )' in source

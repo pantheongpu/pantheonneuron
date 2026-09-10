@@ -624,6 +624,66 @@ COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
     "pulse_virus": ("throttle_active_nc0_time_ns",),
 }
 
+# Vendor-published peak figures, per accelerator chip.
+#
+# These are the denominator that makes a Score interpretable. 26.1 TFLOPS
+# and 66.3 TFLOPS are two numbers; "27% of peak" and "70% of peak" are a
+# finding -- the first pair invites a comparison against another vendor's
+# result, and the second says whether that comparison would be about
+# silicon or about kernel quality.
+#
+# **NONE OF THESE IS MEASURED, AND NONE IS VERIFIED.** The device reports
+# its own name (`Trainium1` from
+# /sys/class/neuron_device/neuron0/info/architecture/device_name, read on
+# trn1.2xlarge 2026-09-10) and nothing about its bandwidth or arithmetic
+# throughput. Every figure below has to come from a datasheet, and until
+# someone opens one and sets ``verified``, they are recalled numbers
+# wearing a table's authority.
+#
+# That distinction is the whole reason this is structured rather than
+# written in a comment. ``kernels/memory_read.py`` carried "the part's
+# ~820 GB/s HBM" in prose for weeks, and it is the figure that prompted
+# this table -- **and it looks wrong.** AWS publishes 9.8 TB/s of HBM
+# bandwidth for both trn1.32xlarge (16 chips) and inf2.48xlarge (12
+# chips), which is 613 GB/s per Trainium1 and 817 per Inferentia2. 820 is
+# the Inferentia2 number. If that is right, every "% of HBM" computed for
+# trn1 from the old comment understated the part by a third.
+#
+# Recorded as a suspicion, not a correction: it needs the datasheet, and
+# `verified` stays False on every row until it gets one.
+PART_PEAKS = {
+    "trn1": {
+        "device_name": "Trainium1",
+        "neuroncores": 2,
+        "hbm_gbps": 613.0,
+        "bf16_tflops": 212.5,
+        "source": (
+            "AWS EC2 Trn1 instance page: trn1.32xlarge, 16 chips, "
+            "9.8 TB/s HBM and 3.4 PFLOPS BF16 -- divided by 16"
+        ),
+        "verified": False,
+    },
+    "inf2": {
+        "device_name": "Inferentia2",
+        "neuroncores": 2,
+        "hbm_gbps": 817.0,
+        "bf16_tflops": 191.7,
+        "source": (
+            "AWS EC2 Inf2 instance page: inf2.48xlarge, 12 chips, "
+            "9.8 TB/s HBM and 2.3 PFLOPS BF16 -- divided by 12"
+        ),
+        "verified": False,
+    },
+}
+
+# Which peak a workload's unit should be measured against. A unit alone
+# cannot say: GB/s is a memory figure and TFLOPS an arithmetic one, but
+# TOPS is arithmetic too and graph-steps/s is neither.
+PEAK_FOR_UNIT = {
+    "GB/s": "hbm_gbps",
+    "TFLOPS": "bf16_tflops",
+}
+
 # What pantheongpu reports for those names since v1.0.19.
 GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 

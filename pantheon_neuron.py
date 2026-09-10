@@ -244,6 +244,10 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             "Devices": [device.index for device in devices],
             "Score": None,
             "Unit": workload.unit,
+            # Declared and empty like Score, so a skipped row keeps the
+            # same shape as a scored one.
+            "Percent Of Peak": None,
+            "Peak": None,
             "Score Method": None,
             # Declared and empty, like Score above: a cross-platform
             # comparison reads an explicit gap, not a missing key.
@@ -360,6 +364,7 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     # cross-platform comparison can join on (Test Name, Unit). "Problem"
     # records the pinned shape/dtype, because a Score is only comparable if
     # both platforms ran the same problem.
+    _peak_share = peak_share(workload, devices)
     return {
         "Test Name": workload.name,
         "Suite": workload.suite,
@@ -369,6 +374,15 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         "Devices": [device.index for device in devices],
         "Score": round(score, 4) if isinstance(score, (int, float)) else None,
         "Unit": workload.unit,
+        # What fraction of the ceiling this workload was actually given.
+        #
+        # A Score without it invites a cross-vendor comparison it cannot
+        # support: 26.1 TFLOPS against another accelerator's 40 says
+        # nothing about the silicon until both are read as a share of
+        # what their part can do. None when there is no published peak
+        # for the unit, which is most of the suite.
+        "Percent Of Peak": percent_of_peak(score, _peak_share),
+        "Peak": _peak_share,
         "Score Method": _score_method(workload, score),
         "Measurement": _provenance(workload),
         # Filled in by run_workload when more than one repeat ran; declared
@@ -561,6 +575,81 @@ def override_disagreement(analytic, declared,
         f"{analytic:.4g}, a factor of {ratio:.2g} -- the Score is the "
         "former and the two are not measuring the same thing"
     )
+
+
+def peak_share(workload, devices) -> typing.Optional[dict]:
+    """The peak this workload's Score should be measured against.
+
+    Not the device's peak. A workload declaring ``cores: 1`` gets one
+    NeuronCore of a two-core part, so its ceiling is half the chip's --
+    and comparing a single-core figure against a whole accelerator is the
+    error that makes 256 GB/s look like 31% of the part when it is closer
+    to 62% of what it was actually given.
+
+    That distinction is the point of this function. ``memory_read`` and
+    ``memory_read_agg`` measure the same thing on the same silicon and
+    differ only in how much of it they are allowed; a percentage that
+    ignores the difference makes the aggregate look better than the
+    single-core run for a reason that has nothing to do with memory.
+
+    Returns None when there is no peak to divide by -- an unrecognised
+    architecture, or a unit that is not a rate against a published
+    ceiling. graph-steps/s and requests/s have no datasheet figure, and
+    inventing one would be worse than leaving the column empty.
+    """
+    if not devices:
+        return None
+    arch = getattr(devices[0], "arch", None)
+    peak = registry.PART_PEAKS.get(arch)
+    if peak is None:
+        return None
+
+    field = registry.PEAK_FOR_UNIT.get(workload.unit)
+    if field is None or peak.get(field) is None:
+        return None
+
+    per_device = float(peak[field])
+    cores_declared = (workload.problem or {}).get("cores")
+    total_cores = sum(getattr(d, "neuroncores", 0) for d in devices)
+
+    if cores_declared == "all" or cores_declared is None:
+        # "all" spans the selection; an unset value means the workload
+        # takes whatever the run gave it, which is the same span.
+        cores_used = total_cores
+    else:
+        cores_used = int(cores_declared)
+
+    if not total_cores or not cores_used:
+        return None
+
+    devices_span = len(devices)
+    ceiling = per_device * devices_span * (
+        cores_used / float(total_cores))
+    if ceiling <= 0:
+        return None
+
+    return {
+        "peak": round(ceiling, 4),
+        "peak_field": field,
+        "peak_source": peak["source"],
+        "peak_verified": bool(peak.get("verified")),
+        "cores_used": cores_used,
+        "cores_available": total_cores,
+    }
+
+
+def percent_of_peak(score, share) -> typing.Optional[float]:
+    """``score`` as a percentage of the ceiling ``peak_share`` derived.
+
+    The column that turns two numbers into a finding. 26.1 TFLOPS and
+    66.3 TFLOPS are two numbers; 27% and 70% say which of them is a
+    statement about the silicon.
+    """
+    if share is None or not isinstance(score, (int, float)):
+        return None
+    if score <= 0 or share.get("peak", 0) <= 0:
+        return None
+    return round(100.0 * score / share["peak"], 2)
 
 
 def score_resolution(workload, result) -> typing.Optional[float]:
@@ -979,6 +1068,14 @@ _PROVENANCE_KEYS = (
     # than take the PASS on faith.
     "expected_output",
     "expected_loss",
+    # The denominator behind "Percent Of Peak", so a reader can recompute
+    # it and see which part's figure was used and whether it was checked.
+    "peak",
+    "peak_field",
+    "peak_source",
+    "peak_verified",
+    "cores_used",
+    "cores_available",
     # pulse_virus: what fraction of the run was actually loaded. The row
     # carried loaded_s, elapsed_s and the requested duty and never
     # compared them, so a run that stopped idling was indistinguishable
@@ -1324,6 +1421,18 @@ def main(argv=None) -> int:
         results.append(row)
         detail = f" ({row['Detail']})" if row.get("Detail") else ""
         print(f"[PANTHEON-NEURON]    {row['Status']}{detail}")
+        # The share of peak, on the console rather than only in the
+        # report. It is the number that decides whether a Score can be
+        # quoted against another vendor's, and a reader who never opens
+        # the JSON is exactly the reader who would quote it.
+        pct, share = row.get("Percent Of Peak"), row.get("Peak") or {}
+        if pct is not None:
+            caveat = "" if share.get("peak_verified") else ", peak unverified"
+            print(f"[PANTHEON-NEURON]    {pct}% of "
+                  f"{share.get('peak')} {row['Unit']} across "
+                  f"{share.get('cores_used')} of "
+                  f"{share.get('cores_available')} core(s){caveat}")
+
         spread = row.get("Repeats") or {}
         if spread.get("scored", 0) > 1:
             print(f"[PANTHEON-NEURON]    {spread['scored']} repeats: "

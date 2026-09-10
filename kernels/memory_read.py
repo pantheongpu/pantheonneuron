@@ -155,7 +155,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # as `kernel(source)` on its own does -- leaves nothing referencing the
     # graph at the cut point, so XLA proves it dead and skips the DMA.
     # Measured on trn1.2xlarge 2026-08-27: a 90s run reported 14,513 GB/s
-    # (17x the part's ~820 GB/s HBM) while neuron-monitor recorded
+    # (24x this part's HBM -- see registry.PART_PEAKS, and note the "~820"
+    # this comment used to quote is the *Inferentia2* figure; Trainium1
+    # publishes 613 GB/s per chip) while neuron-monitor recorded
     # total_executions=1 and NeuronCore utilisation of 0.05%. `passes`
     # counted thousands of submissions; the device ran the graph once.
     sink = None

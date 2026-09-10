@@ -836,6 +836,56 @@ to 40,000 allocations after a sweep: cv 0.083 at 3.98 s, 0.038 at 16.7 s,
 a more fragmented allocator — so two pins are two quantities, declared in
 `registry.SCORE_DEPENDS_ON_PIN`.
 
+### Every Score now says what share of the part it reached
+
+A Score alone invites a comparison it cannot support. 26.1 TFLOPS against
+another accelerator's 40 says nothing about either chip until both are
+read as a fraction of what their silicon can do — so `Percent Of Peak`
+travels with every figure that has a published ceiling.
+
+Measured on trn1.2xlarge 2026-09-10, against Trainium1's published
+613 GB/s HBM and 212.5 TFLOPS bf16 per chip:
+
+| workload | Score | cores | of its share |
+|---|--:|--:|--:|
+| `memory_read_agg` | 541.5 GB/s | 2 of 2 | **88.3%** |
+| `memory_read` | 256.1 GB/s | 1 of 2 | **83.6%** |
+| `memory_write_agg` | 506.4 GB/s | 2 of 2 | 82.6% |
+| `memory_write` | 226.5 GB/s | 1 of 2 | 73.9% |
+| `transformer_virus` | 53.2 TFLOPS | 2 of 2 | 25.0% |
+| `tensor_virus` | 26.1 TFLOPS | 2 of 2 | **12.3%** |
+
+**The denominator is the whole point of the column.** A workload
+declaring `cores: 1` gets one NeuronCore of a two-core part, so its
+ceiling is half the chip's — comparing a single-core figure against a
+whole accelerator is what made `memory_read` look like 42% of the part
+when it is 84% of what it was given. `memory_read` and `memory_read_agg`
+measure the same thing on the same silicon and differ only in how much of
+it they are allowed; read against their own shares they land within six
+points of each other, which is the sanity check that the arithmetic is
+right.
+
+It also separates the two kinds of gap. The bandwidth kernels reach
+83–88%, which is what a well-tuned streaming benchmark achieves and is a
+number worth comparing across vendors. `tensor_virus` reaches 12.3%,
+which is a statement about the kernel — a plain `torch.matmul` on the
+same part reaches 31%.
+
+**None of these ceilings has been verified.** The device reports its own
+name (`Trainium1`, from
+`/sys/class/neuron_device/neuron0/info/architecture/device_name`) and
+nothing about its bandwidth or arithmetic throughput, so every figure in
+`registry.PART_PEAKS` is transcribed from a vendor page rather than read
+from a datasheet or measured. Each carries its source and
+`verified: False`, the console prints *"peak unverified"* beside the
+percentage, and a test fails if any row claims otherwise.
+
+That matters more than it sounds. `kernels/memory_read.py` quoted "the
+part's ~820 GB/s HBM" in prose for weeks — and **820 is Inferentia2's
+figure, not Trainium1's**. If that is right, every share computed from
+the old comment understated the part by a third. The table exists so the
+next such number has a source attached rather than a comment.
+
 ### The headline TFLOPS figure is the kernel, not the part
 
 trn1.2xlarge, 2026-09-10. 8192³ bf16, 25s each, one process, both
