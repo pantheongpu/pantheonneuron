@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced seventeen of them, and they are collected
+would go. This repo has now produced eighteen of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -305,7 +305,31 @@ working. It is that **an unverified number replaced by a derived one is
 worse than the unverified number**, because a derivation carries an air
 of work that a recalled figure does not.
 
-### 17. The check passes because the collection is empty
+### 17. The check passes where it was written, not where it runs
+
+Two failures in a row, one shape.
+
+The lint job installed `ruff` unpinned and got 0.16.7; the local copy was
+0.5.6. The newer version had added rules inside the selected categories,
+so CI failed on three findings while every local run printed *"All checks
+passed!"* — and the PR sat red for several commits while it was reported
+green, because it was only ever checked locally. The verdict depended on
+the day CI ran, not on the code.
+
+The fix pinned the tooling and added a test that every CI job installs
+from the pinned file. That test parsed the workflow with `import yaml`.
+PyYAML was on the machine that wrote it and not on the runner — so it
+failed all four matrix jobs and the coverage job, **a guard against
+works-locally-fails-in-CI failing through exactly that**, and passing
+locally because locally is where the undeclared package lived.
+
+A local run is a sample of one environment. For anything whose job is to
+run somewhere else, the only evidence is a run in that place: both were
+caught by watching the actual job on GitHub, and neither would have been
+caught by any number of local runs. There is now a sweep that every
+import is declared, and it was checked by putting `import yaml` back.
+
+### 18. The check passes because the collection is empty
 
 Not yet caught in the wild here, and guarded against on the way in: a
 coverage check over a directory, a sweep over "every INTERNAL workload",
@@ -330,4 +354,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-seventeen above were found by reading what a passing check had filtered out.
+eighteen above were found by reading what a passing check had filtered out.
