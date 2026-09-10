@@ -43,9 +43,24 @@ Every workload in the registry now has an implementation: **26 of 26**, and
 **24 of 26 have run on hardware**. The last full pass was 23 PASS, 0 FAIL,
 with 8 Scores from a declared hardware source (trn1.2xlarge, 2026-09-08).
 
-Figures are single runs unless stated. The one quantity measured repeatedly
-turned out not to be reproducible until its cause was found, so treat a lone
-number as provisional and use `--repeat`.
+**Figures are single runs unless the Repeats column says otherwise.** The one
+quantity ever measured repeatedly disagreed with itself by 2× until its cause
+was found, and a single pass could never have shown that. `--repeat N` gives
+a row the range and coefficient of variation; `REPEAT=3 bash
+tools/validate_hardware.sh` does it for a whole pass.
+
+So far only two figures have been repeated, and they differ by seventy times
+in stability:
+
+| Workload | Repeats | Range | cv |
+|---|--:|---|--:|
+| `memory_read` | 3 | 255.966 – 256.175 GB/s | **0.0004** |
+| `tensor_virus` | 3 | 24.776 – 26.095 TFLOPS | **0.0289** |
+
+A `neuron-profile` Score is a single deterministic NEFF replay; a
+`neuron-monitor` Score is an average over a sampled counter stream. That
+difference is worth remembering before quoting a monitor figure to three
+decimals.
 
 | Workload | Status | Measured | Score source |
 |---|---|--:|---|
