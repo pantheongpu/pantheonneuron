@@ -1248,3 +1248,37 @@ def test_the_stacks_use_the_depth_check(module, function):
     code = sourcecheck.function_code(getattr(target, function))
     assert "stack_check" in code
     assert "output_check" not in code
+
+
+def test_the_tolerance_is_five_times_the_drift_bf16_actually_produces():
+    """The threshold is measured, not guessed.
+
+    Simulating the residual walk in bf16 -- the rounding lands on the two
+    additions per block, since the matmuls accumulate in fp32 -- gives
+    -1.96% at 32 layers. A first estimate from worst-case ulp
+    accumulation said 7%, which would have left almost no headroom.
+    Round-to-nearest does far better than worst case because the errors
+    do not share a sign.
+
+    This matters in one direction: the check sets score_invalid, so a
+    false positive turns a working run into a FAIL, and a check that
+    fails good runs gets widened until it means nothing.
+    """
+    def bf16(value):
+        if value == 0:
+            return 0.0
+        ulp = 2.0 ** (math.floor(math.log2(abs(value))) - 7)
+        return round(value / ulp) * ulp
+
+    gelu_bf16 = bf16(0.8413447460685429)
+    for layers in (1, 4, 32):
+        walked = 1.0
+        for _ in range(layers):
+            walked = bf16(walked + 1.0)
+            walked = bf16(walked + gelu_bf16)
+        exact = transformer_ops.stacked_block_output(layers)
+        drift = abs(walked / exact - 1.0)
+        assert drift < 0.02, (layers, walked, exact, drift)
+        # And the simulated value must pass the real check.
+        assert transformer_ops.verify_stack_computed_its_depth(
+            walked, layers) is None, (layers, walked)

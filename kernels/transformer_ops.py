@@ -258,10 +258,25 @@ def verify_stack_computed_its_depth(
     not that many ran, so a stack executing half its depth reports the
     full arithmetic at twice the throughput and looks like good news.
 
-    The tolerance is 10%. bf16 carries about three decimal digits and the
-    sum reaches ~60 over 32 accumulations, so a few percent of drift is
-    expected and is not a defect; the failures this catches are factors,
-    not percentages.
+    The tolerance is 10%, and that number is measured rather than
+    guessed. Simulating the residual walk in bf16 -- the rounding lands on
+    the two additions per block, not on the matmuls, which accumulate in
+    fp32 -- gives:
+
+           1 layer    2.8438 against 2.8413    +0.08%
+           4 layers   8.3750 against 8.3654    +0.12%
+          32 layers  58.7500 against 59.9230    -1.96%
+
+    So 10% is about five times the drift the arithmetic actually produces.
+    A first estimate from worst-case ulp accumulation said 7%, which would
+    have left almost no headroom; round-to-nearest does far better than
+    worst case because the errors do not share a sign.
+
+    The headroom matters in one direction specifically. This check sets
+    ``score_invalid``, so a false positive turns a working run into a
+    FAIL -- and a check that fails good runs gets its threshold widened
+    until it means nothing, or deleted. The failures worth catching here
+    are factors, not percentages.
     """
     if observed is None:
         return "stack output could not be read back to verify"
