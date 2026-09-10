@@ -337,7 +337,7 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
             )
-            thin = thin_monitor_sample(metrics)
+            thin = thin_monitor_sample(metrics, workload)
             if thin:
                 detail = "; ".join(filter(None, [detail, thin]))
         elif score is None and (_wants_monitor_score(workload)
@@ -802,14 +802,38 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 MIN_FLOPS_SAMPLES = 5
 
 
-def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any]
-                        ) -> typing.Optional[str]:
-    """Say so when a monitor Score averages too few samples to be stable.
+def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
+                        workload=None) -> typing.Optional[str]:
+    """Say so when a monitor Score rests on too few samples to be stable.
 
     A rate cannot show this about itself, and the spread across repeats
     only shows it if somebody runs repeats. The sample count is the
     quantity that makes a single run self-describing.
+
+    **It has to describe the counter that produced the Score.** This read
+    ``effective_flops`` for every monitor-scored workload, and graph_replay
+    is scored from the completion counter instead -- so on trn1.2xlarge
+    2026-09-10 its row carried "effective_flops averaged over 3 sample(s)"
+    about a number it does not publish, while the thinness of the counter
+    it does publish went unreported. A warning naming the wrong quantity
+    is worse than none: it invites a reader to discount the Score for a
+    reason that has nothing to do with it.
+
+    ``workload`` is optional so the existing callers and tests keep
+    working; without it the effective_flops path is assumed, which is what
+    every workload but graph_replay uses.
     """
+    if workload is not None and _wants_execution_rate(workload):
+        samples = metrics.get("execution_samples")
+        if not isinstance(samples, int) or samples >= MIN_FLOPS_SAMPLES:
+            return None
+        return (
+            f"the completion counter moved across {samples} sample(s); a "
+            f"rate over fewer than {MIN_FLOPS_SAMPLES} moves with any one "
+            "of them, so run longer or with a shorter --monitor-period "
+            "before quoting this"
+        )
+
     flops = metrics.get("effective_flops") or {}
     counts = [core["samples"] for core in flops.values()
               if isinstance(core, dict) and isinstance(core.get("samples"), int)]

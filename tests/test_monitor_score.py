@@ -365,3 +365,59 @@ def test_the_overhang_is_far_too_small_to_explain_the_coalescing_gap():
     assert inflation < 1.3
     assert 60000 / 14737 > 3.5
     assert inflation * 1.5 < 60000 / 14737
+
+
+# -- the thinness warning has to describe the published counter --------------
+
+def _graph_replay():
+    return next(w for w in registry.WORKLOADS if w.name == "graph_replay")
+
+
+def _tensor_virus():
+    return next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+
+
+def test_a_flops_scored_workload_is_told_about_effective_flops():
+    metrics = {"effective_flops": {"0": {"samples": 3, "mean": 1.0}}}
+    message = pantheon_neuron.thin_monitor_sample(metrics, _tensor_virus())
+    assert message is not None
+    assert "effective_flops" in message
+
+
+def test_graph_replay_is_told_about_the_counter_it_publishes():
+    """It was told about effective_flops, which it does not publish.
+
+    trn1.2xlarge 2026-09-10: its row carried "effective_flops averaged
+    over 3 sample(s)" while its Score came from the completion counter,
+    whose own thinness went unreported. A warning naming the wrong
+    quantity is worse than none -- it invites a reader to discount the
+    Score for a reason that has nothing to do with it.
+    """
+    metrics = {"effective_flops": {"0": {"samples": 3, "mean": 1.0}},
+               "execution_samples": 4}
+    message = pantheon_neuron.thin_monitor_sample(metrics, _graph_replay())
+    assert message is not None
+    assert "completion counter" in message
+    assert "effective_flops" not in message
+    assert "4 sample(s)" in message
+
+
+def test_graph_replay_with_enough_counter_samples_is_quiet():
+    """Even when effective_flops is thin -- which is not its Score."""
+    metrics = {"effective_flops": {"0": {"samples": 1, "mean": 1.0}},
+               "execution_samples": 40}
+    assert pantheon_neuron.thin_monitor_sample(
+        metrics, _graph_replay()) is None
+
+
+def test_the_flops_path_still_applies_without_a_workload():
+    """The old signature keeps working, which is what every caller but
+    the orchestrator uses."""
+    metrics = {"effective_flops": {"0": {"samples": 2, "mean": 1.0}}}
+    assert "effective_flops" in pantheon_neuron.thin_monitor_sample(metrics)
+
+
+def test_a_missing_counter_sample_count_is_not_thinness():
+    assert pantheon_neuron.thin_monitor_sample(
+        {"execution_samples": None}, _graph_replay()) is None
+    assert pantheon_neuron.thin_monitor_sample({}, _graph_replay()) is None
