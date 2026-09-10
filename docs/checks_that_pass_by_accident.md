@@ -173,4 +173,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Three of the
-ten above were found by reading what a passing check had filtered out.
+eleven above were found by reading what a passing check had filtered out.
