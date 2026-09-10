@@ -475,10 +475,25 @@ def override_disagreement(analytic, declared,
     Which is right is not decided here. A row that publishes one of two
     numbers differing by 4x should say that it did.
     """
-    if not isinstance(analytic, (int, float)) or analytic <= 0:
+    if not isinstance(analytic, (int, float)) or isinstance(analytic, bool):
         return None
-    if not isinstance(declared, (int, float)) or declared <= 0:
+    if not isinstance(declared, (int, float)) or isinstance(declared, bool):
         return None
+
+    # The two zero cases, which are not "a large ratio" but a different
+    # statement entirely. These came from tensor_virus.verify_against_
+    # monitor, a function that had been written to make exactly these
+    # checks and was never called from anywhere -- a check that exists and
+    # does not run, which is the purest form of the defect catalogued in
+    # docs/checks_that_pass_by_accident.md.
+    if analytic <= 0:
+        return "the kernel issued no arithmetic, so it measured nothing"
+    if declared <= 0:
+        return (
+            f"{counter} reported no activity while the kernel counted "
+            f"{analytic:.4g} -- the work was probably eliminated"
+        )
+
     ratio = max(analytic, declared) / min(analytic, declared)
     if ratio < OVERRIDE_DISAGREEMENT:
         return None

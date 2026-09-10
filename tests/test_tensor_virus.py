@@ -93,33 +93,34 @@ def test_guard_flags_an_unreadable_product():
 
 
 # -- monitor cross-check -----------------------------------------------------
-
-def test_cross_check_accepts_agreement():
-    assert tensor_virus.verify_against_monitor(90.0, 100.0) is None
-
-
-def test_cross_check_flags_an_idle_engine():
-    """The signal that the matmuls were folded away."""
-    message = tensor_virus.verify_against_monitor(0.0, 100.0)
-    assert message is not None
-    assert "eliminated" in message
-
-
-def test_cross_check_flags_order_of_magnitude_disagreement():
-    message = tensor_virus.verify_against_monitor(5.0, 100.0)
-    assert message is not None
-    assert "differ by more than" in message
-
-
-def test_cross_check_is_quiet_when_the_monitor_said_nothing():
-    """Absent telemetry is handled by monitor_score, not reported as divergence."""
-    assert tensor_virus.verify_against_monitor(None, 100.0) is None
+#
+# Five tests lived here, all green, all exercising
+# tensor_virus.verify_against_monitor -- which was never called from
+# anywhere in the suite. A function written, tested, documented, and wired
+# to nothing.
+#
+# That is the part worth pausing on: the tests passing said the function
+# was correct, and it was. They said nothing whatever about whether it ran,
+# and nothing else did either. Coverage of a function is not evidence that
+# the function is reachable.
+#
+# Its job moved to pantheon_neuron.override_disagreement, which is called,
+# covers every monitor-scored workload rather than this family alone, and
+# carries both zero cases. The five cases moved with it, to
+# tests/test_monitor_score.py, plus one asserting nothing calls the old
+# name any more.
 
 
-def test_cross_check_flags_zero_analytic_throughput():
-    message = tensor_virus.verify_against_monitor(10.0, 0.0)
-    assert message is not None
-    assert "no arithmetic was issued" in message
+def test_nothing_calls_the_removed_cross_check():
+    """So it cannot come back as a second, unreachable copy."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    callers = []
+    for path in list(root.glob("*.py")) + list(root.glob("kernels/*.py")):
+        code = sourcecheck.code_only(path.read_text(encoding="utf-8"))
+        if "verify_against_monitor" in code:
+            callers.append(path.name)
+    assert not callers, callers
 
 
 # -- orchestrator integration ------------------------------------------------

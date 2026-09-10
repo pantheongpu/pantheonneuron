@@ -435,35 +435,13 @@ def verify_product_is_correct(
     return None
 
 
-def verify_against_monitor(
-    monitor_tflops: typing.Optional[float],
-    analytic_tflops: float,
-    tolerance: float = 0.5,
-) -> typing.Optional[str]:
-    """Compare the declared Score against the analytic cross-check.
-
-    ``effective_flops`` is what the hardware retired; the analytic figure is
-    what the kernel issued. They should agree to within a wide margin -- the
-    monitor samples on a period and a short run catches ramp-up, so this is
-    deliberately loose. What it is looking for is the order-of-magnitude
-    disagreement that means the matmuls were folded away or the engine sat
-    idle while the wall clock ran.
-    """
-    if analytic_tflops <= 0:
-        return "analytic throughput is zero -- no arithmetic was issued"
-    if monitor_tflops is None:
-        return None
-    if monitor_tflops <= 0:
-        return (
-            "neuron-monitor reported no Tensor Engine activity while the "
-            f"kernel claimed {analytic_tflops:.2f} TFLOPS -- the matmuls "
-            "were probably eliminated"
-        )
-    ratio = monitor_tflops / analytic_tflops
-    if ratio < (1 - tolerance) or ratio > (1 + tolerance):
-        return (
-            f"monitor {monitor_tflops:.2f} TFLOPS and analytic "
-            f"{analytic_tflops:.2f} TFLOPS differ by more than "
-            f"{tolerance:.0%} (ratio {ratio:.2f})"
-        )
-    return None
+# ``verify_against_monitor`` lived here and was never called from
+# anywhere. It compared the declared Score against the analytic
+# cross-check and would have caught a monitor reading of zero against a
+# kernel claiming throughput -- a real check: written, tested, documented,
+# and wired to nothing. The purest form of the defect catalogued in
+# docs/checks_that_pass_by_accident.md, since the check did exist.
+#
+# Its job is now ``pantheon_neuron.override_disagreement``, which is
+# called, covers every monitor-scored workload rather than this family
+# alone, and carries the two zero cases this one had.

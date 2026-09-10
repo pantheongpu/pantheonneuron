@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced ten of them, and they are collected
+would go. This repo has now produced eleven of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -130,7 +130,25 @@ other existed.
 
 A comment describing a check is not a check.
 
-### 10. The check passes because the collection is empty
+### 10. The check is correct, complete, tested — and unreachable
+
+`tensor_virus.verify_against_monitor` compared the declared Score against
+the analytic cross-check and would have caught a monitor reading of zero
+against a kernel claiming throughput. Written, documented, and covered by
+**five passing tests**.
+
+Nothing called it. Not the kernel, not the orchestrator, not anything.
+
+The five tests passing said the function was correct, and it was. They
+said nothing whatever about whether it ran, and nothing else did either.
+**Coverage of a function is not evidence that the function is reachable.**
+
+Its job is now `pantheon_neuron.override_disagreement`, which is called,
+covers every monitor-scored workload rather than one family, and carries
+both zero cases. There is a test asserting nothing calls the old name, so
+it cannot return as a second unreachable copy.
+
+### 11. The check passes because the collection is empty
 
 Not yet caught in the wild here, and guarded against on the way in: a
 coverage check over a directory, a sweep over "every INTERNAL workload",

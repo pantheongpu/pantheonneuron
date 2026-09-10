@@ -242,10 +242,35 @@ def test_it_fires_in_both_directions():
     assert pantheon_neuron.override_disagreement(100.0, 10.0, "c") is not None
 
 
-def test_a_missing_or_zero_figure_is_not_a_disagreement():
-    for bad in (None, 0, -1.0, "n/a"):
-        assert pantheon_neuron.override_disagreement(bad, 5.0, "c") is None
-        assert pantheon_neuron.override_disagreement(5.0, bad, "c") is None
+def test_a_missing_figure_is_not_a_disagreement():
+    """Absent is not zero. Nothing to compare is not a comparison."""
+    for absent in (None, "n/a", True, False):
+        assert pantheon_neuron.override_disagreement(absent, 5.0, "c") is None
+        assert pantheon_neuron.override_disagreement(5.0, absent, "c") is None
+
+
+def test_a_zero_figure_is_its_own_statement():
+    """These two cases came from tensor_virus.verify_against_monitor, a
+    function written to make exactly these checks and never called from
+    anywhere. A check that exists and does not run.
+
+    A zero is not "a large ratio" -- it is a different claim, and each
+    side means something different. The kernel at zero issued nothing; the
+    counter at zero saw nothing while the kernel claimed work, which is
+    what an eliminated matmul looks like.
+    """
+    issued_nothing = pantheon_neuron.override_disagreement(0, 5.0, "c")
+    assert issued_nothing is not None
+    assert "issued no arithmetic" in issued_nothing
+
+    saw_nothing = pantheon_neuron.override_disagreement(26.19, 0, "c")
+    assert saw_nothing is not None
+    assert "probably eliminated" in saw_nothing
+
+    # Negative is nonsense from either side, and reads as the same
+    # failure: there is no throughput there.
+    assert pantheon_neuron.override_disagreement(-1.0, 5.0, "c") is not None
+    assert pantheon_neuron.override_disagreement(5.0, -1.0, "c") is not None
 
 
 def test_the_threshold_is_wide_on_purpose():
@@ -256,3 +281,36 @@ def test_the_threshold_is_wide_on_purpose():
     assert pantheon_neuron.override_disagreement(1.0, just_under, "c") is None
     just_over = pantheon_neuron.OVERRIDE_DISAGREEMENT + 0.01
     assert pantheon_neuron.override_disagreement(1.0, just_over, "c") is not None
+
+
+# -- the five cases that used to test an unreachable function ----------------
+#
+# tensor_virus.verify_against_monitor had these and was never called. They
+# are here because this function is.
+
+def test_cross_check_accepts_agreement():
+    assert pantheon_neuron.override_disagreement(100.0, 90.0, "c") is None
+
+
+def test_cross_check_flags_an_idle_engine():
+    """The signal that the matmuls were folded away."""
+    message = pantheon_neuron.override_disagreement(100.0, 0.0, "c")
+    assert message is not None
+    assert "eliminated" in message
+
+
+def test_cross_check_flags_order_of_magnitude_disagreement():
+    message = pantheon_neuron.override_disagreement(100.0, 5.0, "c")
+    assert message is not None
+    assert "factor of 20" in message
+
+
+def test_cross_check_is_quiet_when_the_monitor_said_nothing():
+    """Absent telemetry is handled by monitor_score, not called divergence."""
+    assert pantheon_neuron.override_disagreement(100.0, None, "c") is None
+
+
+def test_cross_check_flags_zero_analytic_throughput():
+    message = pantheon_neuron.override_disagreement(0.0, 10.0, "c")
+    assert message is not None
+    assert "issued no arithmetic" in message
