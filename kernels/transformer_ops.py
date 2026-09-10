@@ -27,6 +27,7 @@ workload ownership, and support code owns nothing. It was found by
 reading the list the check had just filtered.
 """
 
+import math
 import typing
 
 
@@ -206,6 +207,56 @@ def read_back(tensor) -> typing.Optional[float]:
 _GELU_OF_ONE = 0.8413447460685429
 
 
+def ulp(magnitude: float, mantissa_bits: int = 8) -> float:
+    """Spacing between representable values near ``magnitude``.
+
+    Defaults to bfloat16's 8 explicit mantissa bits, which is what every
+    compute workload here runs in.
+    """
+    if magnitude == 0:
+        return 0.0
+    if not math.isfinite(magnitude):
+        # An infinity has no neighbours, so nothing added to it is
+        # observable. Returning inf makes ``increment_is_observable`` say
+        # so instead of raising, which is what it did: an inf output
+        # reached this through the NaN gate -- inf is not NaN -- and
+        # math.floor(inf) raised OverflowError from inside a verdict
+        # function whose whole job is to return a message.
+        return float("inf")
+    return 2.0 ** (math.floor(math.log2(abs(magnitude))) - (mantissa_bits - 1))
+
+
+def increment_is_observable(magnitude: float, increment: float,
+                            mantissa_bits: int = 8) -> bool:
+    """Whether adding ``increment`` to ``magnitude`` changes the value.
+
+    This names the property that three separate defects in this suite
+    violated, each found by deriving an expected output rather than by
+    reading code:
+
+    - **vision_encoder** projected patches with an unscaled ``torch.ones``,
+      so the embedding was patch_dim = 588. bf16's ulp there is 4.0 and a
+      block adds 1.84. Twelve blocks moved the output by exactly 0.0.
+    - **speculative_decode** drafted through an unscaled square weight, so
+      the state grew as ``1024^draft_len`` -- 1.1e15 after four steps,
+      where the ulp is 8.8e12. All 32 target blocks were nine orders of
+      magnitude below the resolution of the number carrying them.
+    - **llm_prefill** is the same defect from the other end: unscaled
+      weights grew the residual multiplicatively until it left bf16's
+      range entirely and the output was NaN. That one was loud.
+
+    The first two were silent, and silence is the dangerous case. The
+    arithmetic ran in all three -- the FLOPs were issued and the
+    throughput was real -- but in the first two the output did not depend
+    on it, so no check on the output could distinguish a working kernel
+    from a broken one.
+
+    Scaling weights by ``1/fan_in`` keeps every stack at unit scale, which
+    is what makes the derived outputs in this module checkable at all.
+    """
+    return abs(increment) >= ulp(magnitude, mantissa_bits) / 2
+
+
 def stacked_block_output(layers: int, start: float = 1.0) -> float:
     """What a stack of ``layers`` blocks over all-ones input must produce.
 
@@ -282,6 +333,30 @@ def verify_stack_computed_its_depth(
         return "stack output could not be read back to verify"
     if observed != observed:
         return "stack output is NaN"
+
+    # Before comparing, ask whether a block could have moved this value at
+    # all. At a magnitude where 1.8413 is below half an ulp the answer is
+    # no, and "wrong value" is then the wrong complaint: the output is
+    # bit-identical to running zero blocks, so it is not evidence about
+    # the stack in either direction. Three kernels shipped in that state.
+    step = 1.0 + _GELU_OF_ONE
+    if not math.isfinite(observed):
+        # Saturation. verify_output_is_a_number lets infinity pass on
+        # purpose, because unnormalised stacks were expected to reach it;
+        # a stack that is meant to land on a derived value has not.
+        return (
+            f"stack output saturated to {observed} -- a {layers}-layer "
+            f"stack over all-ones input must produce "
+            f"{stacked_block_output(layers):.4g}"
+        )
+    if layers and not increment_is_observable(observed, step):
+        return (
+            f"stack output {observed:.6g} sits where one bf16 step is "
+            f"{ulp(observed):.4g}, so a block's {step:.4f} cannot change "
+            "it -- this output is bit-identical to running zero blocks and "
+            "says nothing about whether the stack ran"
+        )
+
     expected = stacked_block_output(layers)
     if abs(observed - expected) > tolerance * expected:
         ran = (observed - 1.0) / (1.0 + _GELU_OF_ONE)

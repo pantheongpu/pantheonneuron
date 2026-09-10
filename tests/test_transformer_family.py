@@ -1382,3 +1382,105 @@ def test_the_defect_would_now_be_caught():
     unscaled = _walk(float(14 * 14 * 3), 12)
     message = transformer_ops.verify_stack_computed_its_depth(unscaled, 12)
     assert message is not None
+
+
+# -- the property all three unscaled-weight defects violated -----------------
+
+def test_a_block_is_observable_at_unit_scale():
+    """Which is why every stack in this suite must start near one."""
+    for magnitude in (1.0, 2.84, 23.1, 59.92):
+        assert transformer_ops.increment_is_observable(magnitude, 1.8413), \
+            magnitude
+
+
+@pytest.mark.parametrize("magnitude,workload", [
+    (588.0, "vision_encoder's unscaled patch projection"),
+    (1024.0 ** 4 * 1024, "speculative_decode's unscaled draft chain"),
+])
+def test_a_block_vanishes_at_the_magnitudes_the_defects_produced(
+        magnitude, workload):
+    """Both silent. The arithmetic ran and the output did not depend on it.
+
+    llm_prefill is the same defect from the other end -- unscaled weights
+    grew the residual until it left bf16's range and the output was NaN.
+    That one was loud, which is why it was found first.
+    """
+    assert not transformer_ops.increment_is_observable(magnitude, 1.8413), \
+        workload
+
+
+def test_the_ulp_helper_matches_bfloat16():
+    """8 explicit mantissa bits, so the spacing doubles every octave."""
+    assert transformer_ops.ulp(1.0) == 2.0 ** -7
+    assert transformer_ops.ulp(2.0) == 2.0 ** -6
+    assert transformer_ops.ulp(588.0) == 4.0
+    assert transformer_ops.ulp(0.0) == 0.0
+    # fp32 for comparison: 24 significand bits.
+    assert transformer_ops.ulp(1.0, mantissa_bits=24) == 2.0 ** -23
+
+
+def test_every_stack_in_the_suite_starts_where_its_blocks_are_visible():
+    """The guard for the class, rather than a fix for each instance.
+
+    Three separate kernels shipped an unscaled weight. A fourth will, so
+    the invariant is stated once: every stack starts at unit scale, its
+    increment is observable there, and it stays observable through the
+    whole depth.
+    """
+    for layers in (1, 12, 32):
+        for step in range(layers + 1):
+            magnitude = transformer_ops.stacked_block_output(step)
+            assert transformer_ops.increment_is_observable(
+                magnitude, 1.8413), (layers, step, magnitude)
+
+
+def test_speculative_decode_scales_its_draft_chain():
+    code = sourcecheck.function_code(inference_mix.run_speculative_decode)
+    assert "1.0 / draft_hidden" in code
+    assert "draft_w = torch . ones (" not in code
+    assert "project_up = torch . ones (" not in code
+    assert "stack_check" in code
+
+
+def test_an_unmovable_output_is_reported_as_such_not_as_a_wrong_value():
+    """"Wrong value" is the wrong complaint when no value was possible.
+
+    At a magnitude where a block's 1.84 is below half an ulp, the output
+    is bit-identical to running zero blocks -- so it is not evidence
+    about the stack in either direction, and saying "expected 610, got
+    588" invites someone to adjust the expectation.
+    """
+    message = transformer_ops.verify_stack_computed_its_depth(588.0, 12)
+    assert message is not None
+    assert "zero blocks" in message
+    assert "says nothing" in message
+    assert "must produce" not in message, "reported as a wrong value"
+
+
+def test_the_speculative_magnitude_is_reported_the_same_way():
+    message = transformer_ops.verify_stack_computed_its_depth(1.1e15, 32)
+    assert message is not None
+    assert "zero blocks" in message
+
+
+def test_a_zero_layer_stack_is_not_accused_of_being_unmovable():
+    """With no blocks there is no increment to be invisible."""
+    assert transformer_ops.verify_stack_computed_its_depth(1.0, 0) is None
+
+
+def test_an_infinite_output_is_a_message_not_an_exception():
+    """It raised OverflowError from inside a verdict function.
+
+    verify_output_is_a_number lets infinity pass on purpose -- these
+    stacks were expected to saturate before they were normalised -- so an
+    inf reached the ulp arithmetic through the NaN gate, inf not being
+    NaN, and math.floor(inf) raised from a function whose entire job is
+    to return a message rather than throw.
+    """
+    message = transformer_ops.verify_stack_computed_its_depth(
+        float("inf"), 32)
+    assert message is not None
+    assert "saturated" in message
+
+    assert transformer_ops.ulp(float("inf")) == float("inf")
+    assert not transformer_ops.increment_is_observable(float("inf"), 1.8413)

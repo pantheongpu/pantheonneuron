@@ -383,8 +383,31 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
     # decoding only pays off when drafting is cheap, and a draft the same
     # size as the target would make this workload a slower copy of decode.
     draft_hidden = hidden // 4
-    draft_w = torch.ones((draft_hidden, draft_hidden), dtype=dtype, device=device)
-    project_up = torch.ones((draft_hidden, hidden), dtype=dtype, device=device)
+    # Both scaled by 1/fan_in, the same argument transformer_ops.weights
+    # makes. Unscaled they were the third and most extreme instance of one
+    # defect in this suite.
+    #
+    # draft_w unscaled turns each drafting step into a multiply by
+    # draft_hidden, so the chain grows as 1024^draft_len: 1.1e15 after four
+    # steps, and it would overflow bf16 at thirteen. project_up multiplied
+    # that by another 1024. bf16's ulp at 1.1e15 is 8.8e12, and each of the
+    # 32 target blocks adds 1 + gelu(1) = 1.84 -- **nine orders of
+    # magnitude below the resolution of the number carrying it.**
+    #
+    # So every one of the 32 blocks of the target model contributed
+    # nothing observable to the output, in the workload that was
+    # deliberately repinned from one block to 32 because running one made
+    # the expensive half of speculative decoding a thirty-second of its
+    # real cost. The FLOPs were issued and the throughput was real; the
+    # output simply did not depend on them.
+    #
+    # Scaled, a drafting step maps ones to ones, project_up maps ones to
+    # ones, and the target stack runs from 1.0 to 59.92 where
+    # stack_check can see it.
+    draft_w = torch.full((draft_hidden, draft_hidden), 1.0 / draft_hidden,
+                         dtype=dtype, device=device)
+    project_up = torch.full((draft_hidden, hidden), 1.0 / draft_hidden,
+                            dtype=dtype, device=device)
     target = transformer_ops.weights(hidden, dtype, device, heads=32)
 
     draft_state = torch.ones((1, 1, draft_hidden), dtype=dtype, device=device)
@@ -455,8 +478,11 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         # synthetic workload cannot honestly simulate. The number is
         # verification throughput, not end-to-end speculative speedup.
         "analytic_basis": "verified tokens / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "verification output"),
+        # The target stack runs from ones through `layers` blocks, so its
+        # output is 1 + layers * 1.8413. Checking it is what makes the
+        # target model's execution observable at all.
+        **transformer_ops.stack_check(transformer_ops.read_back(sink),
+                                      layers),
     }
 
 
