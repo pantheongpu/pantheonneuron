@@ -567,6 +567,45 @@ SCORE_DEPENDS_ON_PIN = {
     ),
 }
 
+# Counters a workload declares that its declared Score source cannot
+# supply. Every one of these is real and readable -- through
+# ``neuron-profile``, which is a per-execution capture interface rather
+# than continuous telemetry, and which no workload here declares alongside
+# a monitor source.
+#
+# Found 2026-09-10 by checking each declared counter against the code of
+# the reader named beside it. Nothing had ever asked, so five counters sat
+# in the registry attributed to a stream that does not carry them.
+#
+# This is not cosmetic. The counters tuple is the published answer to
+# "where does this number come from", and for omni_virus it is the answer
+# to a sharper question: the workload exists to load all four engines at
+# once, and the per-engine counters that would show whether it did are on
+# the other reader. **The workload whose premise is per-engine behaviour
+# is scored by the reader that cannot see any engine.**
+#
+# Reaching them needs a profiler capture of the workload's own NEFF, which
+# needs a reserved core, which is off for any selection containing a
+# cores: "all" workload. Real work, not an oversight, and not done -- so
+# it is written down here rather than left as a false attribution.
+#
+# docs/neuron_counters.md records the probe that established which reader
+# has what; data/probe-2026-08-26-tools/ carries the raw 108-counter set.
+COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
+    "omni_virus": (
+        "tensor_engine_active_time_percent",
+        "vector_engine_active_time_percent",
+        "scalar_engine_active_time_percent",
+        "gpsimd_engine_active_time_percent",
+    ),
+    # docs/neuron_counters.md lists this one under "Recovered by the
+    # profiler", explicitly noting it is not available through
+    # neuron-monitor or sysfs -- and the registry declared it as a
+    # neuron-monitor counter anyway, contradicting the repo's own
+    # documentation with nothing to notice.
+    "pulse_virus": ("throttle_active_nc0_time_ns",),
+}
+
 # What pantheongpu reports for those names since v1.0.19.
 GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 

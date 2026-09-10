@@ -25,6 +25,7 @@ import os
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import registry, tiling
 from neuron_device import NeuronDevice
 
@@ -327,3 +328,72 @@ def test_eight_bit_is_not_a_throughput_win_on_this_part():
     assert rates["int8"] < rates["bf16"], rates
     assert rates["int8"] / rates["bf16"] < 0.3, rates
     assert 0.95 < rates["uint8"] / rates["bf16"] < 1.1, rates
+
+
+# -- a declared counter its source cannot supply -----------------------------
+
+def _reader_source():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = ""
+    for path in ("neuron_monitor.py", "kernels/profiler.py",
+                 "kernels/collectives.py"):
+        with open(os.path.join(root, path), encoding="utf-8") as handle:
+            text += sourcecheck.code_only(handle.read())
+    return text
+
+
+def test_every_declared_counter_is_read_by_something_or_declared_absent():
+    """The counters tuple is the published answer to "where does this
+    number come from", and five of them named a stream that does not
+    carry them.
+
+    Read through the comment filter, so a counter mentioned in a
+    docstring about counters does not vouch for itself.
+    """
+    readers = _reader_source()
+    assert readers, "no reader source read -- the sweep is broken"
+
+    unsupplied = []
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if not source or source.source == registry.INTERNAL:
+            continue
+        known_absent = registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.get(
+            workload.name, ())
+        for counter in source.counters:
+            leaf = counter.rsplit(".", 1)[-1]
+            if leaf in known_absent:
+                continue
+            if f'"{leaf}"' not in readers and f"'{leaf}'" not in readers:
+                unsupplied.append(f"{workload.name}: {counter}")
+
+    assert not unsupplied, (
+        f"declared but unread: {unsupplied} -- either the reader should "
+        "parse it, or it belongs in "
+        "COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY with the evidence")
+
+
+def test_the_absent_list_only_names_counters_that_are_declared():
+    """A stale entry there would silently excuse a counter nobody asks for."""
+    declared = set()
+    for workload in registry.WORKLOADS:
+        if workload.score_source:
+            declared.update(c.rsplit(".", 1)[-1]
+                            for c in workload.score_source.counters)
+    for name, counters in (
+            registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.items()):
+        workload = next((w for w in registry.WORKLOADS if w.name == name), None)
+        assert workload is not None, name
+        for counter in counters:
+            assert counter in declared, (name, counter)
+
+
+def test_the_absent_counters_really_are_absent():
+    """The control. Without it the list could excuse anything, including
+    counters the readers do parse -- which is how a gap becomes a habit.
+    """
+    readers = _reader_source()
+    for name, counters in (
+            registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.items()):
+        for counter in counters:
+            assert f'"{counter}"' not in readers, (name, counter)
