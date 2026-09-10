@@ -1636,3 +1636,36 @@ def test_the_bandwidth_warning_still_yields_to_it():
     code = sourcecheck.function_code(llm_inference.run_cache_churn)
     assert code.index("observed == CACHE_FILL") < code.index(
         "verify_memory_bound ( bytes_per_s )")
+
+
+# -- a scatter that landed nowhere -------------------------------------------
+
+def test_a_zero_router_output_is_the_untouched_destination():
+    """moe_router builds torch.zeros_like and scatters into it.
+
+    A dispatch that routed nothing, scattered to the wrong positions, or
+    was elided leaves that tensor untouched -- and output_check passed
+    it, because 0.0 is a number.
+    """
+    message = transformer_ops.verify_scatter_landed(0.0, "router output")
+    assert message is not None
+    assert "exactly zero" in message
+    assert "scattered nothing" in message
+
+
+def test_a_real_router_output_says_nothing():
+    """The expert matmul sums `hidden` terms of a non-zero input, so any
+    element the dispatch touches is far from zero."""
+    assert transformer_ops.verify_scatter_landed(51.2) is None
+    assert transformer_ops.verify_scatter_landed(-51.2) is None
+
+
+def test_a_nan_and_an_unreadable_scatter_are_still_caught():
+    assert "NaN" in transformer_ops.verify_scatter_landed(float("nan"))
+    assert "could not be read" in transformer_ops.verify_scatter_landed(None)
+
+
+def test_moe_router_uses_the_scatter_check():
+    code = sourcecheck.function_code(inference_mix.run_moe_router)
+    assert "scatter_check" in code
+    assert "output_check" not in code

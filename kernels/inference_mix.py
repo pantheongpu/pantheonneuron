@@ -356,7 +356,12 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
         "capacity": capacity,
         "score_method": "workload",
         "analytic_basis": "routed tokens / wall time",
-        **transformer_ops.output_check(
+        # Not output_check. The destination is torch.zeros_like, so a
+        # dispatch that routed nothing leaves it at 0.0 -- and 0.0 is a
+        # number, which is all output_check was asking. The expert matmul
+        # sums `hidden` terms of an input that is never zero, so any
+        # element the dispatch touches is far from zero.
+        **transformer_ops.scatter_check(
             transformer_ops.read_back(sink), "router output"),
     }
 

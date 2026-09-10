@@ -376,6 +376,41 @@ def stack_check(observed: typing.Optional[float],
     return {"warning": message, "score_invalid": message is not None}
 
 
+def verify_scatter_landed(observed: typing.Optional[float],
+                          what: str = "output") -> typing.Optional[str]:
+    """Check a scattered output is not still the zeros it started as.
+
+    ``moe_router`` builds ``torch.zeros_like(hidden_states)`` and scatters
+    each expert's result into it. A dispatch that routed nothing, or
+    scattered to the wrong positions, or was elided, leaves that tensor
+    untouched -- and ``verify_output_is_a_number`` passes it, because 0.0
+    is a number.
+
+    A zero here is not a small result. The expert matmul is over
+    ``hidden`` terms of an input that is never zero, so every element the
+    dispatch touches is far from zero and an exact zero means the
+    dispatch did not touch this one.
+    """
+    if observed is None:
+        return f"{what} could not be read back to verify"
+    if observed != observed:
+        return f"{what} is NaN"
+    if observed == 0.0:
+        return (
+            f"{what} is exactly zero, which is what the destination was "
+            "initialised to -- the dispatch scattered nothing here, and a "
+            "token count cannot show that"
+        )
+    return None
+
+
+def scatter_check(observed: typing.Optional[float],
+                  what: str = "output") -> typing.Dict[str, typing.Any]:
+    """The paired form, for the same reason ``output_check`` is paired."""
+    message = verify_scatter_landed(observed, what)
+    return {"warning": message, "score_invalid": message is not None}
+
+
 def verify_optimiser_moved_the_model(
     before: typing.Optional[float],
     after: typing.Optional[float],
