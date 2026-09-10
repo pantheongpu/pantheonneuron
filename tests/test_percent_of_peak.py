@@ -318,3 +318,92 @@ def test_an_integer_workload_gets_no_percentage_and_that_is_deliberate():
     """
     assert "TOPS" not in registry.PEAK_FOR_UNIT
     assert pantheon_neuron.peak_share(_named("int_virus"), TRN1) is None
+
+
+# -- the cores a run actually exposed ----------------------------------------
+
+@pytest.mark.parametrize("value,count", [
+    ("0", 1), ("0-1", 2), ("0-6", 7), ("0,2,3", 3), ("1", 1),
+    ("", None), (None, None), ("  ", None), ("x", None), ("3-1", None),
+])
+def test_visible_cores_are_parsed_as_the_runtime_reads_them(value, count):
+    """Single index, range, or comma list -- the forms cores.split writes
+    and the runtime accepts. Unset means no limit, not zero cores."""
+    assert pantheon_neuron.visible_core_count(value) == count
+
+
+def test_a_reservation_leaves_an_unpinned_workload_one_core(monkeypatch):
+    """"cores 0 to the workload, 1 reserved for neuron-profile" is printed
+    on every single-workload run on a two-core part.
+
+    So tensor_virus sees one core. The first version of this counted two
+    and measured it against a ceiling twice what it was allowed to reach
+    -- every compute percentage in the README was half what it should
+    have been.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    share = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    assert share["cores_used"] == 1
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["bf16_tflops"] / 2)
+
+
+def test_an_aggregate_is_never_capped_by_the_reservation(monkeypatch):
+    """The reservation is off for any selection containing a cores: "all"
+    workload, and aggregates give each worker its own visibility.
+
+    Applying the cap anyway reported memory_read_agg at 123% of peak --
+    an impossible figure from a configuration the orchestrator refuses to
+    create.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    share = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    assert share["cores_used"] == 2
+    pct = pantheon_neuron.percent_of_peak(541.5, share)
+    assert pct < 100, pct
+
+
+def test_an_explicit_single_core_pin_is_unaffected_by_the_reservation(
+        monkeypatch):
+    """Capped rather than replaced, so cores: 1 stays 1 either way."""
+    from kernels import cores
+    without = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    with_it = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    assert without["cores_used"] == with_it["cores_used"] == 1
+
+
+def test_no_reservation_imposes_no_cap(monkeypatch):
+    from kernels import cores
+    monkeypatch.delenv(cores.VISIBLE_CORES, raising=False)
+    share = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    assert share["cores_used"] == 2
+
+
+def test_under_the_reservation_the_suite_is_internally_consistent(
+        monkeypatch):
+    """The check the correction is right, not merely applied.
+
+    Measured on trn1.2xlarge 2026-09-10, every single-workload run under
+    the reservation. Pairs that measure the same thing should land
+    together, and nothing can exceed its ceiling.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+
+    def pct(name, score):
+        return pantheon_neuron.percent_of_peak(
+            score, pantheon_neuron.peak_share(_named(name), TRN1))
+
+    measured = {"memory_read": 256.1, "memory_read_agg": 541.5,
+                "tensor_virus": 26.1, "pulse_virus": 13.85,
+                "transformer_virus": 53.2, "omni_virus": 54.0}
+    shares = {name: pct(name, score) for name, score in measured.items()}
+
+    assert all(0 < v < 100 for v in shares.values()), shares
+    # Same kernel, pulsed and sustained.
+    assert abs(shares["tensor_virus"] - shares["pulse_virus"]) < 3
+    # Same memory path, one core and two.
+    assert abs(shares["memory_read"] - shares["memory_read_agg"]) < 5

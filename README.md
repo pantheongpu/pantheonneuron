@@ -849,16 +849,37 @@ two NeuronCore-v2 per chip, 32 GiB HBM at **820 GiB/s**, **190 TFLOPS**
 FP16/BF16/cFP8/TF32. They are the same silicon per chip; they differ in
 how many chips an instance carries.
 
-| workload | Score | cores | of its share |
+| workload | Score | cores it had | of its share |
 |---|--:|--:|--:|
 | `memory_read_agg` | 541.5 GB/s | 2 of 2 | **61.5%** |
 | `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
 | `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
 | `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
-| `torch.matmul` (not a workload) | 66.3 TFLOPS | 2 of 2 | 34.9% |
-| `transformer_virus` | 53.2 TFLOPS | 2 of 2 | 28.0% |
-| `pulse_virus` | 13.85 TFLOPS | 2 of 2, 50% duty | 14.6% |
-| `tensor_virus` | 26.1 TFLOPS | 2 of 2 | **13.7%** |
+| `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | **69.8%** |
+| `omni_virus` | 54.0 TFLOPS | 1 of 2 | 56.8% |
+| `transformer_virus` | 53.2 TFLOPS | 1 of 2 | 56.0% |
+| `pulse_virus` | 13.85 TFLOPS | 1 of 2, 50% duty | 29.2% |
+| `tensor_virus` | 26.1 TFLOPS | 1 of 2 | **27.5%** |
+
+"Cores it had" is what the run exposed, not what the problem says. The
+profiler reservation sets `NEURON_RT_VISIBLE_CORES=0` on every
+single-workload run on a two-core part, so a workload with no `cores:`
+pin sees one core. An earlier version of this table counted two for every
+such workload and **halved every compute percentage**: `transformer_virus`
+read 28% where it reaches 56%.
+
+Pairs that measure the same thing now agree, which is the evidence the
+arithmetic is right: `tensor_virus` and `pulse_virus` run one kernel and
+land 1.7 points apart; `memory_read` and `memory_read_agg` run one memory
+path on one and two cores and land 3.3 points apart.
+
+**One gap this does not close.** Under `--test all` the reservation is
+off, so every workload sees both cores and is measured against the whole
+chip. A torch-xla kernel without explicit sharding runs on one XLA device
+— one NeuronCore — whether or not a second is visible, so in that
+selection its percentage is probably halved again. The column knows what
+the run *exposed*; it cannot know what the kernel *used*, and that needs
+a counter rather than an assumption.
 
 **The denominator is the whole point of the column**, and getting it
 wrong is easy in the flattering direction. Two traps, both hit here
@@ -881,9 +902,9 @@ before the figures were checked:
 
 It also separates the two kinds of gap. The bandwidth kernels reach
 51–62% of HBM — ordinary for a streaming benchmark, and a figure worth
-comparing across vendors. `tensor_virus` reaches 13.7%, which is a
-statement about the kernel: a plain `torch.matmul` on the same silicon
-reaches 34.9%.
+comparing across vendors. `tensor_virus` reaches 27.5%, which is a
+statement about the kernel: a plain `torch.matmul` on the same core
+reaches 69.8%, and the transformer family 56%.
 
 **An earlier version of this table was wrong, in the flattering
 direction.** `kernels/memory_read.py` had long quoted "the part's ~820

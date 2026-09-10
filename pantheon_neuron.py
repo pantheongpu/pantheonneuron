@@ -608,6 +608,33 @@ def override_disagreement(analytic, declared,
     )
 
 
+def visible_core_count(value: typing.Optional[str]) -> typing.Optional[int]:
+    """How many cores a NEURON_RT_VISIBLE_CORES value exposes.
+
+    Accepts the forms the runtime does and ``cores.split`` writes: a
+    single index ("0"), a range ("0-6"), or a comma list ("0,2,3"). None
+    when the variable is unset or unreadable -- which means "no limit was
+    imposed", not "zero cores".
+    """
+    if not value or not value.strip():
+        return None
+    count = 0
+    try:
+        for part in value.split(","):
+            part = part.strip()
+            if "-" in part:
+                low, high = (int(x) for x in part.split("-", 1))
+                if high < low:
+                    return None
+                count += high - low + 1
+            else:
+                int(part)
+                count += 1
+    except ValueError:
+        return None
+    return count or None
+
+
 def peak_share(workload, devices) -> typing.Optional[dict]:
     """The peak this workload's Score should be measured against.
 
@@ -645,10 +672,37 @@ def peak_share(workload, devices) -> typing.Optional[dict]:
 
     if cores_declared == "all" or cores_declared is None:
         # "all" spans the selection; an unset value means the workload
-        # takes whatever the run gave it, which is the same span.
+        # takes whatever the run gave it.
         cores_used = total_cores
     else:
         cores_used = int(cores_declared)
+
+    # What the run actually gave it, which is not what the problem says.
+    #
+    # The profiler reservation sets NEURON_RT_VISIBLE_CORES before the
+    # workload initialises -- "cores 0 to the workload, 1 reserved for
+    # neuron-profile", on every single-workload run on a two-core part --
+    # so a workload with no `cores:` pin sees one core, not two. The first
+    # version of this counted two, and so measured tensor_virus,
+    # transformer_virus, omni_virus and pulse_virus against a ceiling
+    # twice what they were allowed to reach: every compute percentage in
+    # the README was half what it should have been.
+    #
+    # Capped rather than replaced, so an explicit `cores: 1` stays 1
+    # whether or not a reservation is active.
+    #
+    # Not for `cores: "all"`. An aggregate spawns one worker per core and
+    # gives each its own visibility, and reservation_cost turns the
+    # reservation *off* for any selection containing one -- so the parent
+    # never runs under a single-core mask. Applying the cap anyway, which
+    # a simulation did, reported memory_read_agg at 123% of peak: an
+    # impossible figure from a configuration the orchestrator refuses to
+    # create. Over 100% being reported rather than clamped is what made
+    # that visible.
+    if cores_declared != "all":
+        visible = visible_core_count(os.environ.get(cores.VISIBLE_CORES))
+        if visible is not None:
+            cores_used = min(cores_used, visible)
 
     if not total_cores or not cores_used:
         return None
