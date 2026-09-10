@@ -4,9 +4,22 @@
 The streaming kernel re-reads every operand tile for every (row, col) pair,
 so operand traffic scales as n^3 -- the same order as the FLOPs -- and
 arithmetic intensity stays flat at about 102 FLOP/byte at any shape. At the
-pinned 8192^3 that puts it on the HBM bandwidth ceiling rather than the
-Tensor Engine's: measured operand traffic 256.4 GB/s against memory_read's
-256.2 GB/s on the same part.
+pinned 8192^3 that appears to put it on the HBM bandwidth ceiling rather
+than the Tensor Engine's: measured operand traffic 256.4 GB/s against
+memory_read's 256.2 GB/s on the same part.
+
+**That reading is wrong, and this tool is what falsified it.** The blocked
+kernel cuts operand traffic 4.7x and buys 1.06x. A kernel genuinely against
+a bandwidth wall does not behave that way, so the two figures agreeing to
+0.1% is a coincidence -- a very persuasive one, which is why it survived as
+an explanation until something measured against it.
+
+What the ceiling actually is remains unknown, and it matters more than the
+tiling question: at a matched 8192^3 a plain torch.matmul reaches 66.3
+TFLOPS against this kernel's 26.2, so the suite's headline compute figure
+is 2.53x below what the part does through the compiler. See
+tools/compare_matmul_paths.py and
+docs/the_headline_number_is_the_kernel.md.
 
 The blocked kernel holds one column's rhs tiles in SBUF across the row loop,
 so each is read once per column instead of once per (row, col).

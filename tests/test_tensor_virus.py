@@ -500,3 +500,22 @@ def test_the_bandwidth_explanation_is_recorded_as_falsified():
     assert "coincidence" in doc
     assert "4.7" in doc and "1.06" in doc
     assert "cause unknown" in doc.lower()
+
+
+def test_the_tiling_tool_does_not_state_the_falsified_ceiling_as_fact():
+    """It was the tool that falsified it, and said otherwise for days.
+
+    "operand traffic 256.4 GB/s against memory_read's 256.2" is a real
+    measurement and a coincidence: blocked tiling cuts traffic 4.7x and
+    buys 1.06x. A tool whose own output refutes its docstring is worse
+    than one that says nothing.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "tools", "compare_tiling.py"),
+              encoding="utf-8") as handle:
+        doc = handle.read()
+    assert "That reading is wrong" in doc
+    assert "coincidence" in doc
+    # And points at the larger open question rather than leaving the
+    # tiling comparison looking like the whole of it.
+    assert "compare_matmul_paths" in doc
