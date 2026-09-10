@@ -252,7 +252,8 @@ flat at ~102 FLOP/byte. At 8192³ that implied 256.4 GB/s of traffic against
 `memory_read`'s measured 256.2 GB/s on the same part — a 0.1% agreement that
 looked exactly like a bandwidth wall.
 
-**It was a coincidence.** A blocked tiling that cuts operand traffic 4.7×
+**It was a coincidence.** A blocked tiling that cuts operand traffic —
+4.7× by the model, 2.55× as measured by `neuron-profile` at 4096³ —
 moved throughput by 1.06×. Had bandwidth been the constraint, the speedup
 would have tracked the traffic. So operand bandwidth is ruled out, and what
 actually binds this kernel is still unknown: both tilings sit at 25–41% of
@@ -948,7 +949,8 @@ words.
 The cause is *not* operand bandwidth — that was the first diagnosis and
 it is wrong. Arithmetic intensity is flat near 102 FLOP/byte, and 102 ×
 `memory_read`'s 256.2 GB/s is 26.1 TFLOPS, which matches almost exactly
-and is a coincidence: blocked tiling cuts operand traffic 4.7× and buys
+and is a coincidence: blocked tiling cuts operand traffic (4.7× modelled,
+2.55× measured) and buys
 1.06×. The ceiling is somewhere neither the arithmetic nor the tiling
 experiment has looked. Recording "2.53× slower, cause unknown" is worth
 more than a third confident diagnosis — the first two were both wrong,

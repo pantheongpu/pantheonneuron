@@ -9,7 +9,8 @@ than the Tensor Engine's: measured operand traffic 256.4 GB/s against
 memory_read's 256.2 GB/s on the same part.
 
 **That reading is wrong, and this tool is what falsified it.** The blocked
-kernel cuts operand traffic 4.7x and buys 1.06x. A kernel genuinely against
+kernel cuts operand traffic 4.7x -- modelled; neuron-profile measured
+2.55x at 4096^3 on 2026-09-10 -- and buys 1.06x. A kernel genuinely against
 a bandwidth wall does not behave that way, so the two figures agreeing to
 0.1% is a coincidence -- a very persuasive one, which is why it survived as
 an explanation until something measured against it.

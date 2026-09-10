@@ -73,6 +73,14 @@ active: NKI 0.379%"*, and concluded the engines were comparable and the
 gap lay elsewhere. Read on the right scale, the same numbers say the
 opposite — see `docs/the_headline_number_is_the_kernel.md`.
 
+**Per-transfer DMA detail is in the full trace, not the summary.**
+`neuron-profile view --output-format json` writes **`ntff.json` into the
+current working directory** and prints nothing useful to stdout, so a
+caller reading stdout gets an empty trace. Its top-level `dma` list has
+one record per transfer (`transfer_size`, `duration`, `dma_queue`,
+`timestamp`, ...), which is what `summary-json` leaves as `None` for NKI
+graphs. The file is large: 173 MB for one 4096³ NKI matmul execution.
+
 Nothing in production reads these counters yet
 (`omni_virus.engine_activity` is deliberately unwired — see
 `COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY`), so the trap has only

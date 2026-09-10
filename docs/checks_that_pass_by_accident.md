@@ -369,7 +369,8 @@ could disagree with it:
   string.
 - The stale statuses: a hardware record read next to a docstring.
 - The quantised Score: a cv read next to the Score's own resolution.
-- The tiling diagnosis: 4.7× less traffic buying 1.06×.
+- The tiling diagnosis: less traffic buying 1.06× — 4.7× by the model,
+  2.55× when neuron-profile finally measured it.
 
 So the practice that finds these is the same one that finds kernel
 defects, and for the same reason. **A number on its own cannot be wrong.**

@@ -45,7 +45,8 @@ The cause is not operand bandwidth. That was the first diagnosis -- the
 streaming tiling re-reads every operand tile per (row, col), giving n^3
 traffic and a flat ~102 FLOP/byte, and 102 x memory_read's 256.2 GB/s
 lands on 26.1 almost exactly. It is a coincidence: the blocked tiling cuts
-operand traffic 4.7x and buys 1.06x. Whatever the ceiling is, it is not
+operand traffic 4.7x as modelled -- 2.55x as measured by neuron-profile at
+4096^3 -- and buys 1.06x. Whatever the ceiling is, it is not
 the one that arithmetic describes, and it has not been found yet.
 
 What is settled is that the kernel is correct and slow, which is the right
@@ -76,6 +77,7 @@ MOVING = 512                        # N per matmul call
 #                (row, col) pair re-reads every tile it touches.
 #   "blocked"    one column's rhs tiles held in SBUF across the row loop,
 #                so each is read once per column. 4.7x less operand traffic
+#                by the model, 2.55x by neuron-profile at 4096^3,
 #                at 8192^3, for 8 MiB of SBUF.
 #
 # **Streaming is the default, and the reason is a measurement that refuted
@@ -83,6 +85,7 @@ MOVING = 512                        # N per matmul call
 # TFLOPS at 8192^3 with implied operand traffic of 256.4 GB/s against
 # memory_read's 256.2 GB/s on the same part, and that 0.1% agreement looked
 # like a bandwidth wall. It was a coincidence. Cutting operand traffic 4.7x
+# (modelled; 2.55x measured at 4096^3)
 # moved throughput by 1.06x:
 #
 #     shape   streaming   blocked   traffic cut   speedup
@@ -251,7 +254,8 @@ def _build_kernel(dtype: str = "bf16", tiling_strategy: typing.Optional[str] = N
         102 becomes 482 FLOP/byte, for one SBUF block of
         k_tiles x CONTRACTION x MOVING -- 8 MiB at the pinned shape.
 
-        **That buys 6%, not the 4.7x the traffic figures suggest**, and
+        **That buys 6%, not the 4.7x the modelled traffic figures suggest** --
+        and the measured cut is smaller still, 2.55x at 4096^3, and
         measuring it is how the bandwidth explanation for this kernel's
         throughput was refuted. See TILING above. The kernel is kept
         because it is correct and marginally faster, not because the
@@ -391,7 +395,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
             else "FLOPs issued / wall time"
         ),
         "warning": None,
-        # Which tiling produced this figure. The two differ by ~4.7x in
+        # Which tiling produced this figure. The two differ by ~4.7x (modelled;
+        # 2.55x measured) in
         # operand traffic at the pinned shape, so a number without this
         # label is not comparable with one that has it.
         "tiling": strategy,

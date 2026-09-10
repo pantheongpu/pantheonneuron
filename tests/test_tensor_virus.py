@@ -559,3 +559,29 @@ def test_the_psum_constraint_is_recorded():
     doc = _finding_doc()
     assert "NCC_IBVF027" in doc
     assert "copied to SBUF" in doc
+
+
+def test_the_tiling_traffic_cut_is_stated_as_modelled_and_measured():
+    """The 4.7x was the model at 8192^3, and it was quoted as measured.
+
+    neuron-profile's full trace counted the transfers at 4096^3 on
+    trn1.2xlarge 2026-09-10: streaming moved 631.3 MB and blocked 248.0,
+    a 2.55x cut, where the model predicts 1,342 and 302, a 4.44x cut. A
+    doc presenting the model's figure as a measurement is the defect; the
+    fix is to say which is which wherever the number appears.
+    """
+    doc = _finding_doc()
+    assert "2.55" in doc
+    assert "631.3" in doc and "248.0" in doc
+    assert "never a measurement" in doc
+
+
+def test_the_transfer_count_finding_is_recorded_with_its_limits():
+    """Blocked matches XLA on bytes and makes 5.1x the transfers, and the
+    doc says that is a correlation rather than proof."""
+    doc = _finding_doc()
+    assert "34,031" in doc and "174,942" in doc
+    # \u00d7, the multiplication sign the doc uses; ruff (RUF001)
+    # flags a literal one in source as ambiguous with the letter x.
+    assert "5.1\u00d7 as many transfers" in doc
+    assert "not proof" in doc

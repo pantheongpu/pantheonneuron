@@ -51,7 +51,8 @@ intensity stays flat near 102 FLOP/byte at any shape. 102 × `memory_read`'s
 measured 256.2 GB/s is 26.1 TFLOPS, which lands on the observed figure
 almost exactly.
 
-It is a coincidence. The blocked tiling cuts operand traffic 4.7× and
+It is a coincidence. The blocked tiling cuts operand traffic — 4.7× by
+the model, **2.55× as measured** (see below) — and
 buys **1.06×**. A kernel genuinely against a bandwidth wall does not
 behave that way.
 
@@ -125,7 +126,8 @@ every (row, col) pair.
 
 **It does not fit the blocked-tiling result, and that tension is left
 standing rather than explained away.** Blocked tiling cut the modelled
-operand traffic 4.7× and bought 1.06×. If data movement dominates, cutting
+operand traffic 4.7× *by the model* and bought 1.06×. If data movement
+dominates, cutting
 it should have helped more. Two readings would reconcile them — DMA time
 set by transfer *count* and per-transfer overhead rather than by bytes,
 or blocked tiling's remaining lhs stream being no more efficient — and
@@ -143,6 +145,59 @@ Two things worth keeping from how this was found:
   hand-written kernel falls further behind as the problem grows, which is
   what a data-movement cost that scales faster than the compiler's would
   do.
+
+## Counting the transfers
+
+The profile above left `dma_transfer_count` empty for the NKI graph. The
+detail is in the full trace: `neuron-profile view --output-format json`
+writes a file called `ntff.json` **into the working directory** — not to
+stdout, which a first probe read as an empty trace — and its top-level
+`dma` list has one entry per transfer with its `transfer_size`,
+`duration` and queue. One execution each, 4096³ bf16, trn1.2xlarge
+2026-09-10, all three products exact:
+
+| graph | transfers | MB moved | mean size | Σ DMA time | TFLOPS |
+|---|--:|--:|--:|--:|--:|
+| streaming | 247,017 | 631.3 | 2.56 KB | 33.3 ms | 36.2 |
+| blocked | 174,942 | 248.0 | 1.42 KB | 14.5 ms | 38.3 |
+| XLA | **34,031** | 236.2 | 6.94 KB | 10.1 ms | **51.8** |
+
+Largest transfers: XLA made 128 over 64 KB. **Neither NKI tiling made
+any.**
+
+**The modelled traffic was wrong, and it had been quoted as measured.**
+`tools/compare_tiling.operand_traffic` predicts 1,342 MB for streaming
+and 302 MB for blocked at this shape, a 4.44× cut. The trace says 631
+and 248 — a **2.55×** cut. The "4.7× less traffic for 1.06×" repeated
+across this repo was the model's figure at 8192³, never a measurement.
+The argument it supported survives (2.55× less traffic for 6% more speed
+is still nowhere near proportional); the number did not.
+
+**Whether transfer count or bytes limits the kernel was the wrong
+question, because the answer is both, in turn:**
+
+- **Streaming → blocked: bytes.** Bytes fell to 0.39×, DMA time to 0.43×
+  — time follows bytes closely, and the transfer count (0.71×) much
+  less so. Streaming's first problem is moving too much data.
+- **Blocked → XLA: transfers.** At almost equal bytes (248 MB against
+  236), blocked makes **5.1× as many transfers**, spends 1.43× the DMA
+  time, and is 1.35× slower. Once the bytes are right, what is left
+  lines up with transfer count and size: the compiler moves the same
+  data in fewer, larger pieces.
+
+That last point is a correlation with a plausible mechanism, not proof.
+XLA's graph differs from the blocked kernel in more than transfer size —
+scheduling, overlap and instruction mix too — and nothing here isolates
+one. What the data does support is a direction: **the next version of this
+kernel should coalesce its loads into larger DMA transfers**, and the
+trace can tell whether it did.
+
+One thing still unexplained: blocked cut summed DMA time 2.3× and ran
+only 1.06× faster. Transfers on different queues overlap, so summed
+duration overstates wall time — DMA *active* time fell only from 59% to
+46% — but even so, the kernel did not get as much faster as its DMA got
+lighter. DMA is not the whole critical path, and what is has not been
+found.
 
 ## What is settled
 
