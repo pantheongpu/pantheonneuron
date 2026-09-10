@@ -312,6 +312,19 @@ def plan_coverage(counters: typing.Mapping[str, typing.Any],
 # one that moved a twentieth of it, and until 2026-09-10 only the low side
 # was checked. The bytes then divided by a real total_time and produced a
 # real-looking GB/s -- ten times too fast, and publishable.
+#
+# 2.0 rather than something tighter, on evidence: every
+# ``profiler_plan_coverage`` in every report on the trn1.2xlarge as of
+# 2026-09-10 reads exactly 1.0, so this leaves a factor of two of headroom
+# against the only values the capture has ever produced.
+#
+# The direction of caution matters here. A ceiling that is too tight
+# refuses a real capture and sends the row to the analytic fallback --
+# undoing the core reservation and compile-cache isolation that took two
+# days to make the declared profiler source work at all. A ceiling that is
+# too loose lets through a graph that is obviously wrong. Between those,
+# the second failure is louder, because the row still says which NEFF was
+# profiled and what fraction of the plan it covered.
 CEILING = 2.0
 
 

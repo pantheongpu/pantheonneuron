@@ -581,3 +581,23 @@ def test_select_by_plan_refuses_an_oversized_best_rather_than_returning_it():
     source = sourcecheck.function_code(profiler.select_by_plan)
     assert "verify_profile_covers_plan" in source
     assert 'best [ "plan_coverage" ] >= floor' not in source
+
+
+def test_the_ceiling_clears_every_coverage_ever_observed():
+    """Every profiler_plan_coverage on record reads exactly 1.0.
+
+    Checked against the reports on the trn1.2xlarge, 2026-09-10. So the
+    ceiling has a factor of two of headroom against the only values the
+    capture has produced -- which is the evidence for the number, and the
+    reason it is 2.0 rather than something tighter.
+
+    A ceiling that is too tight refuses a real capture and sends the row
+    to the analytic fallback, undoing the core reservation and
+    compile-cache isolation that made the declared profiler source work
+    at all.
+    """
+    observed = 1.0
+    assert profiler.CEILING >= 2 * observed
+    planned = 1 << 30
+    assert profiler.verify_profile_covers_plan(
+        _counters(int(planned * observed)), "read", planned) is None
