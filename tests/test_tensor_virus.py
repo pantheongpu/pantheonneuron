@@ -484,6 +484,23 @@ def test_the_comparison_tool_exists_and_verifies_before_it_divides():
     del raw
 
 
+def _finding_doc():
+    """The headline document, with line wrapping normalised away.
+
+    Two checks here matched "cause unknown" and broke when an edit moved
+    the phrase across a line break -- a check coupled to the formatting
+    rather than to the content, which is the shape in
+    docs/checks_that_pass_by_accident.md that matches a phrasing rather
+    than a claim. Collapsing whitespace is what makes them about the
+    prose.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs",
+                           "the_headline_number_is_the_kernel.md"),
+              encoding="utf-8") as handle:
+        return " ".join(handle.read().split())
+
+
 def test_the_bandwidth_explanation_is_recorded_as_falsified():
     """Two confident diagnoses were wrong; the third is "unknown".
 
@@ -493,11 +510,7 @@ def test_the_bandwidth_explanation_is_recorded_as_falsified():
     dropped the falsification would leave the next reader to believe the
     arithmetic all over again.
     """
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "docs",
-                           "the_headline_number_is_the_kernel.md"),
-              encoding="utf-8") as handle:
-        doc = handle.read()
+    doc = _finding_doc()
     assert "coincidence" in doc
     assert "4.7" in doc and "1.06" in doc
     assert "cause unknown" in doc.lower()
@@ -520,3 +533,29 @@ def test_the_tiling_tool_does_not_state_the_falsified_ceiling_as_fact():
     # And points at the larger open question rather than leaving the
     # tiling comparison looking like the whole of it.
     assert "compare_matmul_paths" in doc
+
+
+def test_three_falsified_explanations_are_all_recorded():
+    """A repo that keeps only its confirmed guesses keeps a biased sample.
+
+    Bandwidth, tiling volume and k-loop serialisation were each a
+    plausible mechanism for the 2.53x gap, and each was measured and
+    found wrong. The document keeps all three, because the next person to
+    have one of those ideas should find the measurement rather than
+    repeat it.
+    """
+    doc = _finding_doc()
+    assert "coincidence" in doc                 # bandwidth
+    assert "4.7" in doc and "1.06" in doc       # tiling volume
+    assert "0.99" in doc                        # k-loop serialisation
+    assert "cause unknown" in doc.lower()
+
+
+def test_the_psum_constraint_is_recorded():
+    """Two PSUM tensors cannot be added directly, which is what stopped
+    the split-accumulator variant compiling. A hardware fact worth
+    keeping for anyone writing NKI here.
+    """
+    doc = _finding_doc()
+    assert "NCC_IBVF027" in doc
+    assert "copied to SBUF" in doc

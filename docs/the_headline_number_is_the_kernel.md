@@ -55,11 +55,44 @@ It is a coincidence. The blocked tiling cuts operand traffic 4.7× and
 buys **1.06×**. A kernel genuinely against a bandwidth wall does not
 behave that way.
 
-So the ceiling is somewhere neither the arithmetic nor the tiling
-experiment has looked, and this document does not claim to know where.
-Saying "2.53× slower, cause unknown" is worth more than a third confident
-diagnosis — the first two were both wrong, and each was believed because
-a plausible number agreed with it.
+**Nor is it the k-loop's serialisation.** That was the third hypothesis,
+and it had a mechanism: the innermost loop uses `nl.sequential_range`,
+which declares a loop-carried dependency, so a scheduler that took that
+literally could not overlap the next iteration's `nl.load` with this
+iteration's `nl.matmul`. Testing it means running the same kernel with
+`nl.affine_range` at a shape small enough that the full unroll compiles.
+
+trn1.2xlarge 2026-09-10, 2048³ bf16, one process, both products exact:
+
+| k-loop | TFLOPS | passes |
+|---|--:|--:|
+| `sequential_range` | 23.67 | 16,532 |
+| `affine_range` (fully unrolled) | 23.51 | 16,419 |
+
+**0.99×.** Unrolling the loop entirely changes nothing, so the dependency
+is not costing anything and the scheduler was never the constraint.
+
+A third variant — two accumulators over interleaved k tiles, to halve the
+dependency chain while staying rolled — did not compile:
+
+```
+[NCC_IBVF027] Instruction can only read one of its non-scalar inputs
+from PSUM, but inputs 0, 1 are read from PSUM
+```
+
+Two PSUM tensors cannot be added directly; one has to be copied to SBUF
+first. Worth recording for anyone writing NKI here, and it means the
+split-accumulator idea costs a copy it was not budgeted for.
+
+So the ceiling is somewhere none of the three experiments has looked, and
+this document does not claim to know where. Saying "2.53× slower, cause
+unknown" is worth more than a fourth confident diagnosis — the first
+three were each believed because a plausible mechanism agreed with them,
+and each was wrong.
+
+The shape is not the story either: this kernel reaches 23.67 TFLOPS at
+2048³ and 26.19 at 8192³, so it is within 10% of its own ceiling across a
+64× range of problem sizes while `torch.matmul` is 2.5× above it at both.
 
 ## What is settled
 
