@@ -1797,3 +1797,31 @@ def test_omni_virus_scales_its_left_operand_and_checks_the_answer():
     assert "lhs = torch . ones (" not in code
     assert "equals_check" in code
     assert "output_check" not in code
+
+
+def test_read_back_detaches_before_taking_a_scalar():
+    """transformer_train_step samples a parameter, and a parameter carries
+    requires_grad=True.
+
+    torch warned "Converting a tensor with requires_grad=True to a scalar
+    may lead to unexpected behavior" on trn1.2xlarge 2026-09-10. The read
+    was correct and the warning was right to fire -- taking a scalar off
+    the autograd graph is exactly what read_back does, and saying so is
+    the difference between meaning it and getting away with it.
+
+    It only appears on hardware, so pytest's warnings-as-errors would
+    never have caught it; it was caught by reading a verification log.
+    """
+    code = sourcecheck.flat_function_code(transformer_ops.read_back)
+    assert "detach" in code
+
+
+def test_read_back_still_works_on_a_plain_object():
+    """detach() is guarded, because read_back is also handed values from
+    kernels that return something without one."""
+    class Flat:
+        def reshape(self, _):
+            return [2.5]
+
+    assert transformer_ops.read_back(Flat()) == 2.5
+    assert transformer_ops.read_back(None) is None

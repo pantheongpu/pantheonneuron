@@ -194,7 +194,20 @@ def read_back(tensor) -> typing.Optional[float]:
     if tensor is None:
         return None
     try:
-        return float(tensor.reshape(-1)[0])
+        # detach() before the scalar conversion. transformer_train_step
+        # samples a *parameter* to see whether the optimiser moved it, and
+        # a parameter carries requires_grad=True -- which made torch warn
+        # "Converting a tensor with requires_grad=True to a scalar may
+        # lead to unexpected behavior" on trn1.2xlarge 2026-09-10.
+        #
+        # The read was correct and the warning was right to fire: taking a
+        # scalar off the autograd graph is exactly what this does, and
+        # saying so explicitly is the difference between meaning it and
+        # getting away with it. It also matters now that pytest.ini treats
+        # warnings as errors -- this one only appears on hardware, so CI
+        # would never have caught it.
+        flat = tensor.reshape(-1)[0]
+        return float(flat.detach() if hasattr(flat, "detach") else flat)
     except Exception:  # materialisation failed; leave unverified
         return None
 
