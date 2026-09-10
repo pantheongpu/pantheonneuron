@@ -162,3 +162,34 @@ def test_the_records_are_named_where_a_reader_will_look():
         readme = handle.read()
     assert "data/hardware_runs.json" in readme
     assert "data/baselines.json" in readme
+
+
+def test_no_test_module_defines_the_same_name_twice():
+    """Twice in one session, appending to a test file shadowed a helper
+    already in it, and the second definition silently won.
+
+    Both times the failure was loud -- eight unrelated tests raised
+    TypeError -- but only because the signatures differed. Two helpers
+    with the *same* signature and different behaviour would have made
+    earlier tests quietly assert against the later one's semantics, which
+    is the version of this that does not announce itself.
+    """
+    import ast
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    offenders = []
+    for name in sorted(os.listdir(root)):
+        if not name.startswith("test_") or not name.endswith(".py"):
+            continue
+        with open(os.path.join(root, name), encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=name)
+        seen = set()
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                continue
+            # A parametrised or conditionally defined name is not a
+            # redefinition worth flagging; a plain duplicate is.
+            if node.name in seen:
+                offenders.append(f"{name}:{node.lineno} redefines {node.name}")
+            seen.add(node.name)
+    assert not offenders, offenders

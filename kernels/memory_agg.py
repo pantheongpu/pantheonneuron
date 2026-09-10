@@ -170,6 +170,20 @@ def concurrent_window(results: typing.Sequence[dict]) -> typing.Optional[float]:
     return max(0.0, earliest_finish - latest_start)
 
 
+def _no_overlap_at_all(results: typing.Sequence[dict],
+                       span: float) -> bool:
+    """Whether the workers shared no window at all.
+
+    Deliberately narrower than ``verify_workers_overlapped``: unknown is
+    not zero, and a short overlap is not none. Only a measured zero
+    invalidates the Score.
+    """
+    if len(results) < 2 or span <= 0:
+        return False
+    overlap = concurrent_window(results)
+    return overlap is not None and overlap <= 0
+
+
 def verify_workers_overlapped(results: typing.Sequence[dict], span: float,
                               floor: float = 0.5) -> typing.Optional[str]:
     """Flag an "aggregate" whose workers were not running together.
@@ -247,6 +261,22 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
     return {
         "cores": core_count,
         "cores_reporting": len(results),
+        # Zero overlap is not a weak aggregate, it is not an aggregate.
+        # The summed bandwidth of workers that never ran together is the
+        # sum of independent single-core runs, which is a real number for
+        # a different question -- and the workload's whole question is
+        # whether the cores contend for a shared path to memory.
+        #
+        # llm_prefill, llm_decode and speculative_decode were published as
+        # PASS with Scores while every one of them had produced a NaN: the
+        # check fired, the message reached the row's Detail, and nothing
+        # acted on it. This is that shape exactly, so it acts.
+        #
+        # Partial overlap stays a warning. A 19% overlap still measures
+        # something; it just is not what the name says, and the row saying
+        # so is the honest response. Only "no overlapping window" makes the
+        # number mean nothing at all.
+        "score_invalid": _no_overlap_at_all(results, span),
         "bytes_moved": total_bytes,
         "elapsed_s": elapsed,
         "worker_span_s": span,

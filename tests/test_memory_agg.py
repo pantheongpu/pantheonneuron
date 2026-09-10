@@ -199,3 +199,52 @@ def test_the_worker_records_when_it_finished():
     assert 'result [ "finished_at" ] = time . time ( )' in code
     # Wall clock, not monotonic: these are compared across processes.
     assert "time . monotonic" not in code
+
+
+# -- an aggregate whose workers never ran together ---------------------------
+
+def _timed(started, finished):
+    """Not _worker: this file already has one with a different signature.
+
+    Second time in one session that appending to a test file shadowed a
+    helper already in it. Grep before you append.
+    """
+    return {"started_at": started, "finished_at": finished,
+            "bytes_moved": 1 << 30, "elapsed_s": finished - started}
+
+
+def test_workers_that_never_overlapped_invalidate_the_score():
+    """Not a weak aggregate: not an aggregate.
+
+    The message already said "this is not an aggregate -- the cores may
+    have run one after another", and the Score was published anyway. That
+    is the shape that let llm_prefill, llm_decode and speculative_decode
+    publish Scores for runs that produced NaN.
+    """
+    sequential = [_timed(0.0, 5.0), _timed(6.0, 11.0)]
+    assert memory_agg._no_overlap_at_all(sequential, 11.0) is True
+
+
+def test_a_short_overlap_is_a_warning_not_an_invalidation():
+    """19% still measures something; it is just not what the name says."""
+    overlapping = [_timed(0.0, 10.0), _timed(8.1, 18.0)]
+    assert memory_agg._no_overlap_at_all(overlapping, 18.0) is False
+    assert memory_agg.verify_workers_overlapped(overlapping, 18.0) is not None
+
+
+def test_a_full_overlap_is_neither():
+    together = [_timed(0.0, 10.0), _timed(0.1, 10.1)]
+    assert memory_agg._no_overlap_at_all(together, 10.1) is False
+    assert memory_agg.verify_workers_overlapped(together, 10.1) is None
+
+
+def test_unknown_timing_is_not_zero_overlap():
+    """A worker that did not report when it ran says nothing either way,
+    and inventing a zero would fail a run for missing telemetry."""
+    silent = [{"bytes_moved": 1 << 30}, {"bytes_moved": 1 << 30}]
+    assert memory_agg._no_overlap_at_all(silent, 10.0) is False
+
+
+def test_one_worker_cannot_fail_to_overlap_with_itself():
+    assert memory_agg._no_overlap_at_all([_timed(0.0, 5.0)], 5.0) is False
+    assert memory_agg._no_overlap_at_all([], 5.0) is False
