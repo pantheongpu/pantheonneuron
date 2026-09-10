@@ -269,18 +269,29 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     run = _LAST_RUN.get(workload.name)
     if run and run.get("warning") and status == "PASS":
         detail = run["warning"]
-        if run.get("score_invalid"):
-            # The kernel says its own output could not be verified, so the
-            # throughput beside it is not a measurement of anything. The
-            # 2026-09-08 full-coverage run reported llm_prefill, llm_decode
-            # and speculative_decode as PASS with published Scores while
-            # every one of them had produced a NaN: the check fired, the
-            # message reached the row's Detail, and nothing acted on it.
-            #
-            # An unverifiable output is indistinguishable from a graph that
-            # never ran, which is the definition of a failed workload.
-            status = "FAIL"
-            score = None
+
+    # Deliberately not nested under the warning above, which is where it
+    # was. A kernel that invalidates its own Score without also setting a
+    # message was silently ignored -- the invalidation depended on the
+    # kernel happening to explain itself, and the two are separate
+    # decisions. Nothing had hit that yet, because every kernel setting
+    # score_invalid also set a warning; memory_agg's zero-overlap case is
+    # the first that computes the two independently.
+    if run and run.get("score_invalid") and status == "PASS":
+        # The kernel says its own output could not be verified, so the
+        # throughput beside it is not a measurement of anything. The
+        # 2026-09-08 full-coverage run reported llm_prefill, llm_decode
+        # and speculative_decode as PASS with published Scores while
+        # every one of them had produced a NaN: the check fired, the
+        # message reached the row's Detail, and nothing acted on it.
+        #
+        # An unverifiable output is indistinguishable from a graph that
+        # never ran, which is the definition of a failed workload.
+        status = "FAIL"
+        score = None
+        detail = detail or (
+            "the kernel reported its Score as invalid and gave no reason"
+        )
 
     # The wall time above includes compile and warm-up. What the reader
     # asked to bound is the measured window, which is the kernel's own

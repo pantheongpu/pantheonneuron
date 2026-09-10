@@ -215,3 +215,50 @@ def test_a_kernel_that_reports_bounded_by_is_not_told_twice():
     """
     code = sourcecheck.function_code(pantheon_neuron._measure_once)
     assert '"bounded_by" not in run_result' in code
+
+
+# -- an invalid Score must not depend on the kernel explaining itself --------
+
+def _row_for(result, monkeypatch):
+    """Run one workload with a canned kernel result."""
+    workload = next(w for w in registry.WORKLOADS
+                    if w.name == "allocation_fragmentation")
+    monkeypatch.setattr(pantheon_neuron, "_execute",
+                        lambda *a, **k: 1234.5)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name, result)
+    devices = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
+    return pantheon_neuron._measure_once(workload, devices, 1, 0.5)
+
+
+def test_an_invalid_score_with_no_warning_still_fails(monkeypatch):
+    """It used to pass, because the check was nested under the warning.
+
+    Invalidating a Score and explaining why are separate decisions, and
+    the invalidation depended on the kernel happening to do both. Nothing
+    had hit it because every kernel setting score_invalid also set a
+    warning -- memory_agg's zero-overlap case computes the two
+    independently and would have been the first.
+    """
+    row = _row_for({"score_invalid": True, "elapsed_s": 1.0}, monkeypatch)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "invalid" in row["Detail"]
+
+
+def test_an_invalid_score_with_a_warning_keeps_the_warning(monkeypatch):
+    row = _row_for(
+        {"score_invalid": True, "warning": "workers never overlapped",
+         "elapsed_s": 1.0}, monkeypatch)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "never overlapped" in row["Detail"]
+
+
+def test_a_warning_without_invalidation_still_passes(monkeypatch):
+    """The control: a warning is not a failure, or every row would fail."""
+    row = _row_for(
+        {"warning": "workers overlapped for only 19% of the span",
+         "elapsed_s": 1.0}, monkeypatch)
+    assert row["Status"] == "PASS"
+    assert row["Score"] == 1234.5
+    assert "19%" in row["Detail"]
