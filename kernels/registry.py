@@ -420,10 +420,30 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  formula='steps_completed / elapsed_s')),
 
     # -- runtime -----------------------------------------------------------
+    #
+    # 40,000 allocations, not the 10,000 this was pinned at until
+    # 2026-09-10. The count bounds the run, not the clock, so the pin *is*
+    # the measurement window and 10,000 of them finished in 3.98s. A sweep
+    # on trn1.2xlarge, three repeats each:
+    #
+    #      10,000    3.98s   2512.9 events/s   cv 0.083
+    #      40,000   16.66s   2400.7 events/s   cv 0.038
+    #     120,000   54.37s   2295.3 events/s   cv 0.025
+    #
+    # 40,000 halves the scatter for a window that is a real measurement
+    # rather than a moment, without a single workload taking a minute of a
+    # 23-workload pass. 120,000 is better still and is the pin to reach for
+    # when the number itself matters more than the pass duration.
+    #
+    # **The Score is not comparable across pins.** The rate falls as the
+    # count rises, because a longer run works a more fragmented allocator
+    # -- which is the thing being measured, not drift. Any figure quoted
+    # against a different allocation count is a different quantity, and the
+    # count travels with the Score in ``problem`` so that is visible.
     Workload("allocation_fragmentation", "runtime",
              "Device memory allocator under fragmentation pressure.", _HBM,
              unit="allocation-events/s",
-             problem={"allocations": 10000, "size_min": 1 << 12, "size_max": 1 << 24},
+             problem={"allocations": 40000, "size_min": 1 << 12, "size_max": 1 << 24},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'allocation_events',
@@ -523,6 +543,28 @@ NOT_COMPARABLE_WITH_GPU = {
     "speculative_decode": "verified-tokens/s",
     "transformer_train_step": "train-steps/s",
     "vision_encoder": "image-tiles/s",
+}
+
+# Workloads whose Score is a function of the pinned problem in a way that
+# makes two different pins two different quantities, rather than the same
+# quantity measured at two sizes.
+#
+# Every Score here depends on its problem -- that is what pinning is for --
+# but most vary the way a rate does: a bigger matmul at the same TFLOPS is
+# the same number. These do not. allocation_fragmentation's rate *falls* as
+# the allocation count rises, because the count bounds the run and a longer
+# run works a more fragmented allocator. 2512.9 events/s at 10,000
+# allocations and 2295.3 at 120,000 are not the same measurement disagreeing;
+# they are two measurements of different things.
+#
+# Declared rather than left in a comment because two textual checks in this
+# repo have passed on their own comments, and a third ended in `or True`.
+SCORE_DEPENDS_ON_PIN = {
+    "allocation_fragmentation": (
+        "the pinned allocations count bounds the run, and the event rate "
+        "falls as it rises -- a figure at a different count is a different "
+        "quantity, not a disagreeing one"
+    ),
 }
 
 # What pantheongpu reports for those names since v1.0.19.

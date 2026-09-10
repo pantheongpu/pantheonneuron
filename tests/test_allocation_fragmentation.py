@@ -19,8 +19,16 @@ def _workload():
 
 
 def test_sequence_length_matches_the_pinned_count():
-    sizes = fragmentation.size_sequence(_workload().problem)
-    assert len(sizes) == 10000
+    """Derived from the pin, not typed out.
+
+    This asserted `== 10000` and failed the moment the registry repinned
+    to 40,000 -- which is the check working, but for the wrong reason:
+    it was testing that nobody had changed the pin, when what it means to
+    test is that the sequence length follows it.
+    """
+    problem = _workload().problem
+    sizes = fragmentation.size_sequence(problem)
+    assert len(sizes) == problem["allocations"]
 
 
 def test_sizes_stay_within_the_pinned_bounds():
@@ -124,7 +132,17 @@ def test_the_drift_the_old_accounting_produced():
     held_new, tracked_new = replay(correct=True)
 
     assert tracked_new == held_new, "the fixed tally matches what is held"
-    assert abs(held_old - tracked_old) > 10 * 1024**2, "the old one drifts"
+
+    # Relative to the budget, not an absolute byte count. The threshold was
+    # 10 MiB and it stopped holding when the registry repinned from 10,000
+    # allocations to 40,000 -- the drift is real at both counts, but how
+    # many bytes it reaches depends on where the sequence happens to stop.
+    # A regression test whose threshold is a function of the pinned problem
+    # cannot be made to pass or fail by changing the pin.
+    drift = abs(held_old - tracked_old)
+    assert drift > LIVE_BUDGET_BYTES * 0.001, (
+        f"the old accounting drifts by {drift} bytes against a "
+        f"{LIVE_BUDGET_BYTES} budget")
 
 
 def test_every_distinct_size_is_warmed_before_the_clock():
@@ -192,3 +210,47 @@ def test_the_short_window_explains_the_residual_scatter():
     assert measured_window < MIN_WINDOW_SECONDS
     # Before the warm-up the spread was four times worse and ordered.
     assert 0.63 / 0.15 > 4
+
+
+# -- the pin is the measurement window ---------------------------------------
+
+def test_the_pinned_count_gives_a_window_worth_measuring():
+    """10,000 allocations finished in 3.98s, and that was the whole run.
+
+    This workload is bounded by its allocation count, not by --duration,
+    so the pin *is* the window. A sweep on trn1.2xlarge 2026-09-10, three
+    repeats each: 10,000 -> 3.98s cv 0.083; 40,000 -> 16.66s cv 0.038;
+    120,000 -> 54.37s cv 0.025.
+
+    Pinned at 40,000 because it halves the scatter for a window that is a
+    measurement rather than a moment, without one workload taking a
+    minute of a 23-workload pass.
+    """
+    pinned = {w.name: w for w in registry.WORKLOADS}
+    count = pinned["allocation_fragmentation"].problem["allocations"]
+    assert count >= 40000, (
+        f"pinned at {count}: below 40,000 the measured window is under "
+        "ten seconds and three repeats scatter at cv 0.08 or worse"
+    )
+
+
+def test_the_score_is_declared_incomparable_across_pins():
+    """The rate falls as the count rises, so two pins are two quantities.
+
+    2512.9, 2400.7 and 2295.3 events/s across the sweep above. That is
+    not drift -- a longer run works a more fragmented allocator, which is
+    what the workload measures -- but it does mean a figure quoted
+    against a different count is not this figure.
+    """
+    # Declared in the registry rather than asserted against a comment.
+    # Two textual checks in this repo have passed on their own comments,
+    # and the first draft of this one ended in `or True`, which is a test
+    # that cannot fail -- the same defect wearing a third hat.
+    assert "allocation_fragmentation" in registry.SCORE_DEPENDS_ON_PIN
+    reason = registry.SCORE_DEPENDS_ON_PIN["allocation_fragmentation"]
+    assert "allocations" in reason
+
+    # And the pin travels with the Score, which is what makes the
+    # incomparability visible to a reader rather than a footnote.
+    pinned = {w.name: w for w in registry.WORKLOADS}
+    assert "allocations" in pinned["allocation_fragmentation"].problem
