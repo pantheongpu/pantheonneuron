@@ -117,8 +117,9 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
 | `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
 | `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 3.89 GB/s | workload |
-| `serving_mix` | ⚠️ completes no decode request at 20 s | 0.0312 requests/s | workload |
-| `all_reduce` / `p2p_thrasher` | ❌ **cannot be run** — quota | — | `nccom-test` |
+| `serving_mix` | ⚠️ Score quantised to one request per 32 decode steps | 2.478 requests/s | workload |
+| `all_reduce` | ❌ **cannot be run** — needs 2+ devices, quota | — | `nccom-test` |
+| `p2p_thrasher` | ❌ **cannot be run** — needs 2+ devices, quota | — | `nccom-test` |
 
 Two rows carry a caveat the Score cannot express on its own.
 `pcie_bandwidth`'s 6× d2h/h2d split is now explained, and it is not a link

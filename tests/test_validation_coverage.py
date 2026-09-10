@@ -243,3 +243,26 @@ def test_every_verify_function_is_called_from_production_code():
     assert not unreachable, (
         f"defined and never called: {unreachable} -- either wire it in or "
         "delete it, but a check that does not run is not a check")
+
+
+def test_the_readme_status_table_lists_every_workload():
+    """It is hand-maintained, and a workload missing from it is invisible.
+
+    The figures in that table cannot be derived -- they are dated single
+    runs -- but its *membership* can, and a new workload silently absent
+    from the status table is a workload nobody knows has no status.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        readme = handle.read()
+
+    start = readme.index("| Workload | Status | Measured | Score source |")
+    end = readme.index("\n\n", start)
+    table = readme[start:end]
+
+    listed = set(re.findall(r"^\| `([^`]+)` \|", table, re.MULTILINE))
+    assert listed, "no rows parsed -- the table shape changed"
+
+    known = {workload.name for workload in registry.WORKLOADS}
+    assert not known - listed, f"missing from the status table: {known - listed}"
+    assert not listed - known, f"in the table but not the registry: {listed - known}"

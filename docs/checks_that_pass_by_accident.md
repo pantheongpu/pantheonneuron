@@ -117,6 +117,13 @@ number reporting it.
 This is the complement of an unstable Score, and much harder to notice,
 because it looks like the best row in the table.
 
+The same defect had already been seen from the other side and misread.
+An earlier status row recorded `serving_mix` as *"completes no decode
+request at 20 s — 0.0312 requests/s"*, filed as a duration problem. It is
+the same integer division: at 20 seconds the quotient had barely
+advanced. One symptom looked like an unusable Score and the other like an
+unusually good one, and they are the same arithmetic.
+
 ### 9. The comment describes a check that does not exist
 
 ```python
