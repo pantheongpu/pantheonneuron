@@ -523,6 +523,7 @@ of them could have been found by a workload reporting one rate and passing.
 | [Cross-platform comparability](docs/cross_platform_comparability.md) | Which workloads share a name with a pantheongpu row and must not be compared to it |
 | [Workload reference](docs/workload_counter_map.md) | Generated from the registry: units, Score sources, pinned problems, counters |
 | [Neuron counters](docs/neuron_counters.md) | The raw `neuron-profile` and `neuron-monitor` output the readers parse |
+| [Checks that pass by accident](docs/checks_that_pass_by_accident.md) | Ten of them, the four shapes they keep taking, and why a green run is evidence about the checks rather than the code |
 
 Two records back them:
 
