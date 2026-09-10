@@ -6,6 +6,7 @@ behind the analytic cross-check, and the correctness guard that separates a
 real GEMM from one the compiler reshaped.
 """
 
+import importlib.util
 import os
 
 import pytest
@@ -454,11 +455,32 @@ def test_the_comparison_tool_exists_and_verifies_before_it_divides():
     path = os.path.join(root, "tools", "compare_matmul_paths.py")
     assert os.path.exists(path), "the claim above has to stay re-runnable"
     with open(path, encoding="utf-8") as handle:
-        source = handle.read()
-    assert "INCORRECT PRODUCT" in source
-    # The check has to come before the division, not beside it.
-    assert source.index("INCORRECT PRODUCT") < source.index(
-        'ratio = xla["tflops"] / nki["tflops"]')
+        raw = handle.read()
+
+    # Through the comment-and-docstring filter, not the raw text. The
+    # first version of this read the file directly, and an ordering
+    # assertion over raw source is satisfied by the first *mention* of a
+    # string -- a line of prose above the code would have made it pass
+    # while saying nothing about the code. Three checks in this repo have
+    # already passed by accident; this one was written knowing that and
+    # still had to be fixed.
+    # main()'s own code, not the whole file. Matching "ratio =" across the
+    # module found nki_kernel's local `ratio = result.get(...)` first --
+    # an ordering assertion is only as good as the two things it orders,
+    # and one of mine was the wrong statement in a different function.
+    spec = importlib.util.spec_from_file_location("compare_matmul_paths",
+                                                  path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    code = sourcecheck.function_code(module.main)
+
+    assert "INCORRECT PRODUCT" in code
+    # The refusal has to come before the division, not beside it: a ratio
+    # between a correct kernel and a rounded one is not a slow kernel.
+    assert code.index("INCORRECT PRODUCT") < code.index(
+        'ratio = xla [ "tflops" ] / nki [ "tflops" ]')
+    assert "return 1" in code[:code.index("ratio =")]
+    del raw
 
 
 def test_the_bandwidth_explanation_is_recorded_as_falsified():

@@ -296,3 +296,46 @@ def test_the_pinned_size_is_known_to_be_past_the_cliff():
     h2d_peak, h2d_pinned = 11.55, 7.37
     assert d2h_small > 2.5 * d2h_large, "the cliff is real"
     assert h2d_pinned < h2d_peak, "h2d is past its peak at the pin too"
+
+
+def test_the_filter_drops_a_module_docstring_after_a_shebang():
+    """The fix for the dict-key bug caused this one.
+
+    Removing NL from the separator set stopped a docstring preceded by a
+    shebang or licence comment from looking like a docstring, so it
+    survived into the filtered output. tools/compare_matmul_paths.py
+    starts with a shebang, and an ordering assertion over its filtered
+    source matched text inside the docstring rather than the code --
+    which is exactly the accident this module exists to prevent, produced
+    by this module.
+    """
+    kept = sourcecheck.code_only(
+        '#!/usr/bin/env python3\n"""a docstring"""\nx = 1\n')
+    assert "a docstring" not in kept
+    assert "x" in kept
+
+
+def test_the_filter_drops_a_docstring_after_a_comment_inside_a_function():
+    """Same shape one level down."""
+    kept = sourcecheck.code_only(
+        'def f():\n    # a note\n    """a docstring"""\n    return 1\n')
+    assert "a docstring" not in kept
+    assert "return" in kept
+
+
+def test_the_dict_key_fix_still_holds():
+    """Both bugs at once, since fixing either one broke the other."""
+    kept = sourcecheck.code_only(
+        '#!/usr/bin/env python3\n'
+        '"""a docstring"""\n'
+        'x = {\n    "key": 1,\n    # a note\n    "other": 2,\n}\n')
+    assert "a docstring" not in kept
+    assert "a note" not in kept
+    assert '"key"' in kept and '"other"' in kept
+
+
+def test_a_string_operand_is_never_mistaken_for_a_docstring():
+    """The control: strings that are values must survive."""
+    kept = sourcecheck.code_only('x = "value"\nreturn_value = f("arg")\n')
+    assert '"value"' in kept
+    assert '"arg"' in kept
