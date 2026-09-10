@@ -1315,3 +1315,70 @@ def test_decode_omits_the_softmax_scale_and_nothing_can_see_it():
     assert "head_dim" not in decode, (
         "decode now references head_dim -- if it has adopted the scale, "
         "this test should be deleted rather than updated")
+
+
+# -- an encoder whose blocks could not move its output -----------------------
+
+def _bf16(value):
+    if value == 0:
+        return 0.0
+    ulp = 2.0 ** (math.floor(math.log2(abs(value))) - 7)
+    return round(value / ulp) * ulp
+
+
+def _walk(start, layers):
+    """The residual walk in bf16, where the rounding actually lands."""
+    x, gelu = start, _bf16(0.8413447460685429)
+    for _ in range(layers):
+        x = _bf16(x + 1.0)
+        x = _bf16(x + gelu)
+    return x
+
+
+def test_an_unscaled_patch_projection_makes_the_blocks_invisible():
+    """The defect, reproduced in arithmetic.
+
+    patch_projection was torch.ones, so the embedding was patch_dim --
+    588 at the pinned 14x14x3. bf16's ulp at 588 is 4.0, and each block
+    adds 1 + gelu(1) = 1.84. Every contribution rounded away.
+
+    The arithmetic ran: the FLOPs were issued and the throughput was
+    real. But the output was bit-identical to running zero blocks, so no
+    check on it could have distinguished a working twelve-block encoder
+    from a broken one.
+    """
+    patch_dim = 14 * 14 * 3
+    assert _walk(float(patch_dim), 12) == float(patch_dim), (
+        "the simulation no longer reproduces the defect")
+    assert 2.0 ** (math.floor(math.log2(patch_dim)) - 7) == 4.0
+
+
+def test_the_scaled_projection_puts_the_stack_where_it_can_be_checked():
+    """1/patch_dim gives an embedding of 1.0, like every other stack."""
+    walked = _walk(1.0, 12)
+    assert walked == pytest.approx(23.1, abs=0.1)
+    assert transformer_ops.verify_stack_computed_its_depth(walked, 12) is None
+
+
+def test_the_vision_encoder_scales_its_patch_projection():
+    code = sourcecheck.function_code(encoders.run_vision_encoder)
+    assert "torch . full (" in code
+    assert '1.0 / plan [ "patch_dim" ]' in code
+    assert "patch_projection = torch . ones (" not in code
+
+
+@pytest.mark.parametrize("function", ["run_rag_embedding",
+                                      "run_vision_encoder"])
+def test_both_encoders_check_their_depth(function):
+    code = sourcecheck.function_code(getattr(encoders, function))
+    assert "stack_check" in code
+    assert "output_check" not in code
+
+
+def test_the_defect_would_now_be_caught():
+    """The check has to actually reject the old behaviour, or scaling the
+    projection just moved the problem somewhere unobserved.
+    """
+    unscaled = _walk(float(14 * 14 * 3), 12)
+    message = transformer_ops.verify_stack_computed_its_depth(unscaled, 12)
+    assert message is not None

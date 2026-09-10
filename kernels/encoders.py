@@ -100,8 +100,9 @@ def run_rag_embedding(problem: typing.Mapping[str, typing.Any],
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "vectors embedded / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "embedding"),
+        # 12 blocks over ones -> 23.10. See transformer_ops.stack_check.
+        **transformer_ops.stack_check(
+            transformer_ops.read_back(sink), layers),
     }
 
 
@@ -161,8 +162,30 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         (plan["batch"], plan["patches"], plan["patch_dim"]),
         dtype=dtype, device=device,
     )
-    patch_projection = torch.ones(
-        (plan["patch_dim"], hidden), dtype=dtype, device=device
+    # Scaled by 1/patch_dim, the same fan_in argument transformer_ops.weights
+    # makes -- and for a sharper reason here than there.
+    #
+    # Unscaled, this produced an embedding of patch_dim (588 at the pinned
+    # 14x14x3). bf16's ulp at 588 is 4.0, and each transformer block adds
+    # 1 + gelu(1) = 1.84 to the residual. **Every block's contribution
+    # rounded away.** Simulating the residual walk in bf16 from 588 through
+    # twelve blocks returns 588.0 exactly: the output was bit-identical to
+    # running zero blocks.
+    #
+    # The arithmetic did run -- the FLOPs were issued and the throughput
+    # was real -- but no check on the output could have distinguished a
+    # working twelve-block encoder from a broken one, because the output
+    # did not depend on the blocks at all. That is the same defect that
+    # put llm_prefill into NaN, at the other end: there the residual grew
+    # until it left the range, here it was already so large that nothing
+    # could move it.
+    #
+    # Scaled, the embedding is 1.0 and the stack behaves like every other
+    # in this suite: 1 + 12 * 1.8413 = 23.10, which stack_check verifies.
+    # Same shapes, same graph, same FLOP count; only the values differ.
+    patch_projection = torch.full(
+        (plan["patch_dim"], hidden), 1.0 / plan["patch_dim"],
+        dtype=dtype, device=device,
     )
     params = transformer_ops.weights(hidden, dtype, device, heads=16)
     xm.mark_step()
@@ -209,6 +232,8 @@ def run_vision_encoder(problem: typing.Mapping[str, typing.Any],
         "patches_per_image": plan["patches"],
         "score_method": "workload",
         "analytic_basis": "image tiles / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "encoder output"),
+        # The patch projection is scaled to 1/patch_dim, so the embedding
+        # is 1.0 and the stack starts where every other one does.
+        **transformer_ops.stack_check(
+            transformer_ops.read_back(sink), layers),
     }
