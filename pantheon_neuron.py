@@ -793,12 +793,25 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     return sum(means) / len(means) / 1e12
 
 
-# Below this many samples, a mean over effective_flops is not stable. The
-# monitor samples across the whole run and drops the ones taken while the
-# workload is compiling, so a short run averages a handful -- and one caught
-# mid-ramp moves it a long way. Measured on trn1.2xlarge 2026-09-10 at
-# DURATION=10: tensor_virus repeated 17.74, 26.14 and 26.13 TFLOPS, and the
-# low figure is a mean over fewer good samples rather than a slow run.
+# Below this many samples a monitor-sourced mean is not a measurement.
+#
+# What that costs in wall time is not what the --monitor-period flag
+# suggests. Measured on trn1.2xlarge 2026-09-10, samples actually
+# delivered over a 20-second window:
+#
+#     requested 0.2s -> 11 samples, one every 1.82s   (9.1x slower)
+#     requested 1.0s ->  5 samples, one every 4.00s   (4.0x slower)
+#     requested 5.0s ->  5 samples, one every 4.00s
+#
+# **neuron-monitor has a floor around two seconds and does not deliver
+# the requested rate at or below one.** At the default period, five
+# samples takes roughly twenty seconds of *executing* -- not of
+# --duration, since samples taken while the workload compiles are
+# dropped.
+#
+# So the advice this suite gives -- "run longer or with a shorter
+# --monitor-period" -- is only half right, and the half that works is
+# running longer.
 MIN_FLOPS_SAMPLES = 5
 
 
@@ -830,8 +843,8 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
         return (
             f"the completion counter moved across {samples} sample(s); a "
             f"rate over fewer than {MIN_FLOPS_SAMPLES} moves with any one "
-            "of them, so run longer or with a shorter --monitor-period "
-            "before quoting this"
+            "of them, so run longer before quoting this -- neuron-monitor "
+            "floors around 2s per sample whatever --monitor-period asks for"
         )
 
     flops = metrics.get("effective_flops") or {}
@@ -842,7 +855,8 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
     return (
         f"effective_flops averaged over {min(counts)} sample(s); a mean over "
         f"fewer than {MIN_FLOPS_SAMPLES} moves with any one of them, so run "
-        "longer or with a shorter --monitor-period before quoting this"
+        "longer before quoting this -- neuron-monitor floors around 2s per "
+        "sample whatever --monitor-period asks for"
     )
 
 

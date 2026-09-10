@@ -421,3 +421,26 @@ def test_a_missing_counter_sample_count_is_not_thinness():
     assert pantheon_neuron.thin_monitor_sample(
         {"execution_samples": None}, _graph_replay()) is None
     assert pantheon_neuron.thin_monitor_sample({}, _graph_replay()) is None
+
+
+def test_the_thinness_advice_does_not_recommend_a_shorter_period():
+    """It did, and the shorter period does not deliver.
+
+    Measured on trn1.2xlarge 2026-09-10 over a 20-second window:
+    requesting 0.2s gave one sample every 1.82s, 1.0s gave one every
+    4.00s, and 5.0s also gave one every 4.00s. neuron-monitor floors
+    around two seconds and does not honour a request at or below one, so
+    "run with a shorter --monitor-period" was advice that cannot work.
+
+    Running longer does work, and is what both messages now say.
+    """
+    flops = pantheon_neuron.thin_monitor_sample(
+        {"effective_flops": {"0": {"samples": 2, "mean": 1.0}}})
+    counter = pantheon_neuron.thin_monitor_sample(
+        {"execution_samples": 2}, _graph_replay())
+
+    for message in (flops, counter):
+        assert message is not None
+        assert "run longer" in message
+        assert "shorter --monitor-period" not in message
+        assert "floors around 2s" in message
