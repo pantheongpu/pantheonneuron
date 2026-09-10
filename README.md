@@ -74,13 +74,16 @@ was found, and a single pass could never have shown that. `--repeat N` gives
 a row the range and coefficient of variation; `REPEAT=3 bash
 tools/validate_hardware.sh` does it for a whole pass.
 
-So far only two figures have been repeated, and they differ by seventy times
-in stability:
+**Every workload has now been repeated three times**, at `DURATION=30`
+(trn1.2xlarge, 2026-09-10), and none of them flagged. At `DURATION=10` six
+had. The two declared-profiler Scores show what a deterministic NEFF
+replay looks like when it is measured rather than assumed:
 
 | Workload | Repeats | Range | cv |
 |---|--:|---|--:|
-| `memory_read` | 3 | 255.966 – 256.175 GB/s | **0.0004** |
-| `tensor_virus` | 3 | 24.776 – 26.095 TFLOPS | **0.0289** |
+| `memory_read` | 3 | 256.044 – 256.126 GB/s | **0.0002** |
+| `memory_write` | 3 | 226.153 – 226.537 GB/s | **0.0009** |
+| `memory_read` (warm NEFF cache) | 3 | 255.942 – 256.453 GB/s | **0.0011** |
 
 A `neuron-profile` Score is a single deterministic NEFF replay; a
 `neuron-monitor` Score is an average over a sampled counter stream. That
@@ -96,28 +99,28 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
 | `memory_read` | ✅ scored from its declared source | 256.17 GB/s | `neuron-profile` |
-| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.69 GB/s | `neuron-profile` |
-| `memory_read_agg` | ✅ 98% worker overlap confirmed | 543.71 GB/s | workload |
-| `memory_write_agg` | ✅ 98% worker overlap confirmed | 507.06 GB/s | workload |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.50 GB/s | `neuron-profile` |
+| `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
+| `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
 | `tensor_virus` | ✅ at the pinned 8192³ | 25.88 TFLOPS | `neuron-monitor` |
-| `int_virus` | ✅ at the pinned 8192³, uint8 | 27.71 TOPS | `neuron-monitor` |
+| `int_virus` | ✅ at the pinned 8192³, uint8 | 31.58 TOPS | `neuron-monitor` |
 | `pulse_virus` | ✅ at the pinned 8192³, 50% duty | 13.85 TFLOPS | `neuron-monitor` |
-| `omni_virus` | ✅ at the pinned 8192³ | 48.13 TFLOPS | `neuron-monitor` |
-| `transformer_virus` | ✅ realistic instruction mix | 46.28 TFLOPS | `neuron-monitor` |
-| `graph_replay` | ✅ rate trimmed of compile time | 1,188.9 graph-steps/s | `neuron-monitor` |
-| `allocation_fragmentation` | ✅ | 539.3 events/s | workload |
-| `llm_prefill` | ✅ pre-normalised, no NaN | 3,808.5 prompt-tokens/s | workload |
-| `llm_decode` | ✅ | 20.62 tokens/s | workload |
-| `kv_cache_churn` | ✅ memory-bound at last | 97,167 cache-updates/s | workload |
-| `fused_attention` | ✅ | 6,036.6 attention-tiles/s | workload |
+| `omni_virus` | ✅ at the pinned 8192³ | 54.02 TFLOPS | `neuron-monitor` |
+| `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
+| `graph_replay` | ✅ rate trimmed of compile time | 3,040.2 graph-steps/s | `neuron-monitor` |
+| `allocation_fragmentation` | ✅ | 2,265.7 events/s | workload |
+| `llm_prefill` | ✅ pre-normalised, no NaN | 3,810.1 prompt-tokens/s | workload |
+| `llm_decode` | ✅ | 20.63 tokens/s | workload |
+| `kv_cache_churn` | ✅ memory-bound at last | 97,438 cache-updates/s | workload |
+| `fused_attention` | ✅ | 6,045.9 attention-tiles/s | workload |
 | `quantized_gemm` | ✅ | 18.44 TOPS | workload |
-| `moe_router` | ✅ balanced dispatch | 254,743 routed-tokens/s | workload |
+| `moe_router` | ✅ balanced dispatch | 255,225 routed-tokens/s | workload |
 | `speculative_decode` | ✅ verifies through the target model | 74.0 verified-tokens/s | workload |
-| `rag_embedding` | ✅ 12-layer encoder | 853.7 vectors/s | workload |
-| `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
+| `rag_embedding` | ✅ 12-layer encoder | 853.9 vectors/s | workload |
+| `vision_encoder` | ✅ 12-layer ViT | 58,141.8 image-tiles/s | workload |
 | `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
-| `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 3.89 GB/s | workload |
-| `serving_mix` | ⚠️ Score quantised to one request per 32 decode steps | 2.478 requests/s | workload |
+| `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 4.01 GB/s | workload |
+| `serving_mix` | ⚠️ Score quantised to one request per 32 decode steps | 2.480 requests/s | workload |
 | `all_reduce` | ❌ **cannot be run** — needs 2+ devices, quota | — | `nccom-test` |
 | `p2p_thrasher` | ❌ **cannot be run** — needs 2+ devices, quota | — | `nccom-test` |
 
@@ -702,6 +705,58 @@ of reporting a bandwidth.
 The lesson for the table above: **a short run is not a cheap run.** Ten
 seconds is long enough for every workload to pass and too short for six of
 them to mean anything.
+
+### A full pass at a duration long enough to mean something
+
+`DURATION=30 REPEAT=3`, trn1.2xlarge, 2026-09-10. **26 PASS, 0 FAIL**, and
+this time **no Score flagged itself as irreproducible** — the six that did
+at `DURATION=10` were thin monitor sampling and a warm-up, both fixed.
+
+| | `DURATION=10` | `DURATION=30` |
+|---|--:|--:|
+| `memory_read` cv | — | **0.0002** |
+| `memory_write` cv | — | **0.0009** |
+| `tensor_virus` cv | 0.21 | *no flag* |
+| `allocation_fragmentation` cv | 0.98 | *no flag* |
+
+**The NEFF search was exercised for the first time.** The 2026-09-08 run
+scored from `neuron-profile` on the first candidate out of a list of one —
+a fresh instance holds exactly one NEFF, so the ranking had nothing to
+rank and the search, the actual fix, went untested. Against a cache warmed
+by every workload above it, `memory_read` was found at **candidate 6 of
+7** and `memory_write` at **candidate 3 of 7**, both at coverage 1.0. The
+run also says that needing a late candidate means mtime ranking is weak.
+
+**`graph_replay` confirmed a hypothesis written down before the run.** See
+below.
+
+### `--duration` does not bound every workload, and the window can depend on the rate
+
+`graph_replay` is pinned to a replay count, and the count is reached long
+before the clock:
+
+```
+graph_replay  PASS  3040.1886 graph-steps/s  via analytic
+  measured a 3.3s window of a requested 30s, so this run was bounded by
+  its pinned problem rather than by --duration
+```
+
+3.3 seconds against a predicted 3.3. That explains the declared Score's
+apparent intermittence without either counter being wrong: 10,000 replays
+is 13.7 s at the 729 graph-steps/s of 2026-09-08, where neuron-monitor
+could form a delta from its sampled completion counter, and 3.3 s at the
+3040 of 2026-09-10, where it could not.
+
+**The window is inversely proportional to the rate.** A faster device
+measures itself over a shorter window and is *more* likely to lose its
+declared Score. Repinned to 60,000 replays, which holds up at twice the
+observed rate.
+
+`allocation_fragmentation` had the same shape and was repinned from 10,000
+to 40,000 allocations after a sweep: cv 0.083 at 3.98 s, 0.038 at 16.7 s,
+0.025 at 54.4 s. Its rate *falls* as the count rises — a longer run works
+a more fragmented allocator — so two pins are two quantities, declared in
+`registry.SCORE_DEPENDS_ON_PIN`.
 
 ### The headline TFLOPS figure is the kernel, not the part
 
