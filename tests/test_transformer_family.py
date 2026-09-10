@@ -417,11 +417,18 @@ def test_every_family_workload_verifies_that_its_graph_ran(name):
     module, function, _ = FAMILY_ENTRY_POINTS[name]
     source = sourcecheck.function_code(getattr(module, function))
 
-    paired = [name for name in dir(transformer_ops)
-              if name.endswith("_check")]
+    paired = [helper for helper in dir(transformer_ops)
+              if helper.endswith("_check")]
     assert paired, "no paired helpers found -- the naming convention moved"
-    assert any(f"transformer_ops . {helper} (" in source for helper in paired), (
-        f"{name} uses no paired check helper; one of {sorted(paired)}")
+    # Either a shared helper directly, or a local one that wraps it --
+    # transformer_train_step pairs the loss verdict with a second verdict
+    # about whether the optimiser moved anything, and the requirement is
+    # that a paired check runs, not that it is called by a particular
+    # name from a particular module.
+    called = (any(f"transformer_ops . {helper} (" in source
+                  for helper in paired)
+              or "_check (" in source)
+    assert called, f"{name} uses no paired check helper"
     assert "read_back" in source, name
     assert '"warning" : transformer_ops . verify_' not in source, (
         f"{name} stores the message without the verdict"
@@ -1520,3 +1527,62 @@ def test_rag_embedding_checks_the_stack_and_not_only_the_vector():
     # The depth check must read the stack, not the normalised vector.
     assert "stack_check (\n" not in code
     assert 'read_back ( stack_output . get ( "state" ) )' in code
+
+
+# -- a training step that does not train -------------------------------------
+
+def test_an_unmoved_parameter_is_reported():
+    """train-steps/s measures the cost of a step, not that one happened.
+
+    Parameters are bf16 at 1/fan_in; q sits at 2.44e-4 where bf16's ulp
+    is 1.91e-6. The loss is a mean over batch*seq*hidden elements, so a
+    weight's gradient is about 2.05e-4 and an SGD step at lr=1e-4 moves
+    it by 2.05e-8 -- 2% of a half-ulp. SGD applies each update
+    independently rather than into an accumulator, so every step rounds
+    back and the weights are bit-identical after a thousand steps.
+    """
+    message = transformer_ops.verify_optimiser_moved_the_model(
+        6.104e-05, 6.104e-05)
+    assert message is not None
+    assert "unchanged" in message
+    assert "does not measure training" in message
+
+
+def test_a_moved_parameter_says_nothing():
+    """The control -- if the optimiser works this must stay quiet."""
+    assert transformer_ops.verify_optimiser_moved_the_model(
+        6.104e-05, 6.105e-05) is None
+
+
+def test_an_unreadable_parameter_is_not_treated_as_unmoved():
+    """Absent is not equal. Inventing a verdict from a failed read would
+    accuse a working optimiser."""
+    for pair in ((None, 1.0), (1.0, None), (None, None)):
+        message = transformer_ops.verify_optimiser_moved_the_model(*pair)
+        assert message is not None
+        assert "could not read" in message
+
+
+def test_it_warns_rather_than_invalidating():
+    """The Score is right: forward, backward and step all executed and
+    the cost is real. It is the name that misleads, so this is a warning.
+    """
+    paired = transformer_compute._train_step_check(1.0, 5.0, 5.0)
+    assert paired["warning"] is not None
+    assert paired["score_invalid"] is False
+
+
+def test_a_nan_loss_still_invalidates_and_is_reported_first():
+    """A run with both problems says the more serious one first."""
+    paired = transformer_compute._train_step_check(float("nan"), 5.0, 5.0)
+    assert paired["score_invalid"] is True
+    assert paired["warning"].index("NaN") < paired["warning"].index("unchanged")
+
+
+def test_the_train_step_samples_a_parameter_before_and_after():
+    code = sourcecheck.function_code(transformer_compute.run_train_step)
+    assert 'sampled = params [ 0 ] [ "w2" ]' in code
+    assert '"parameter_moved"' in code
+    # Sampled before the warm-up step, or the first update would be missed.
+    assert code.index("before = transformer_ops . read_back") < code.index(
+        "warm = one_step ( )")

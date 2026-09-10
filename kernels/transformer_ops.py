@@ -376,6 +376,50 @@ def stack_check(observed: typing.Optional[float],
     return {"warning": message, "score_invalid": message is not None}
 
 
+def verify_optimiser_moved_the_model(
+    before: typing.Optional[float],
+    after: typing.Optional[float],
+) -> typing.Optional[str]:
+    """Check a training step actually changed a parameter.
+
+    A workload called ``transformer_train_step`` runs a forward pass, a
+    backward pass and an optimiser step, and reports train-steps/s. Every
+    one of those executes. **None of them is evidence that the model was
+    updated**, and until 2026-09-10 nothing here asked.
+
+    The arithmetic says it is not. Parameters are bf16 at ``1/fan_in``;
+    ``q`` sits at 2.44e-4 where bf16's ulp is 1.91e-6. The loss is a mean
+    over batch*seq*hidden elements, so a weight's gradient is about
+    2.05e-4 and an SGD step at lr=1e-4 moves it by 2.05e-8 -- **2% of a
+    half-ulp.** SGD applies each update independently rather than into an
+    accumulator, so every step rounds back to the same value and the
+    weights are bit-identical after a thousand steps as after none.
+
+    That does not make the Score wrong. train-steps/s measures the cost of
+    forward, backward and step, and that cost is real -- the gradients are
+    computed and the FLOPs are issued. It makes the Score's *name*
+    misleading to anyone who reads "train" as "learns", and it means no
+    check on the output could tell a working optimiser from one wired to
+    nothing.
+
+    So this warns rather than invalidating. A run that measured the right
+    cost is a result; a run whose optimiser is decorative is a result the
+    reader has to be told about.
+    """
+    if before is None or after is None:
+        return "could not read a parameter back to see whether it moved"
+    if before != after:
+        return None
+    return (
+        f"the sampled parameter is unchanged at {before:.6g} after the "
+        "whole run -- an SGD step at this learning rate moves a bf16 "
+        "weight by a small fraction of one ulp, so the optimiser rounds "
+        "to no change and the model never updates. The Score still "
+        "measures what a training step costs; it does not measure "
+        "training"
+    )
+
+
 def verify_attention_is_uniform(
     observed: typing.Optional[float],
     expected: float = 1.0,

@@ -960,6 +960,13 @@ _PROVENANCE_KEYS = (
     # is the only figure in the row that can see the encoder.
     "embedding_element",
     "expected_embedding_element",
+    # transformer_train_step: whether the model moved. "train-steps/s"
+    # measures the cost of a step and says nothing about whether the
+    # optimiser changed anything, and at bf16 with these weights it does
+    # not -- an SGD step is a small fraction of one ulp.
+    "parameter_before",
+    "parameter_after",
+    "parameter_moved",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",

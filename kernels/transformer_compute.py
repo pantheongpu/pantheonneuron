@@ -137,6 +137,13 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     inputs = torch.ones((batch, seq, hidden), dtype=dtype, device=device)
     xm.mark_step()
 
+    # One parameter element, sampled before any step runs. Nothing else in
+    # this workload can tell a working optimiser from a decorative one:
+    # the forward, the backward and the step all execute either way, and
+    # the loss is a function of parameters that may never have moved.
+    sampled = params[0]["w2"]
+    before = transformer_ops.read_back(sampled)
+
     def one_step():
         optimiser.zero_grad()
         state = inputs
@@ -167,6 +174,7 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     elapsed = time.perf_counter() - started
 
     observed = transformer_ops.read_back(sink)
+    after = transformer_ops.read_back(sampled)
     # Backward costs roughly twice the forward: one pass for input
     # gradients and one for weight gradients.
     forward = steps * layers * transformer_ops.block_flops(hidden, seq, batch)
@@ -177,7 +185,34 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
         "train_steps_per_s": steps / elapsed if elapsed else 0.0,
         "flops_issued": forward * 3,
         "implied_tflops": (forward * 3) / elapsed / 1e12 if elapsed else 0.0,
+        # Whether the model moved, which "train-steps/s" does not say.
+        "parameter_before": before,
+        "parameter_after": after,
+        "parameter_moved": (before is not None and after is not None
+                            and before != after),
         "score_method": "workload",
         "analytic_basis": "optimiser steps / wall time",
-        **transformer_ops.output_check(observed, "loss"),
+        # Two things, and only one of them invalidates a Score.
+        #
+        # A NaN loss means nothing ran usefully, so output_check's verdict
+        # stands. A model that never moved is a different statement: the
+        # forward, the backward and the step all executed and the Score
+        # correctly measures what they cost. It is the *name* that
+        # misleads, so it warns.
+        **_train_step_check(observed, before, after),
     }
+
+
+def _train_step_check(observed, before, after):
+    """Pair the loss verdict with the did-it-train verdict.
+
+    Order matters. A NaN loss invalidates the Score and is reported
+    first; an unmoved model does not invalidate anything and is appended,
+    so a run with both says the more serious thing first.
+    """
+    result = transformer_ops.output_check(observed, "loss")
+    moved = transformer_ops.verify_optimiser_moved_the_model(before, after)
+    if moved:
+        result["warning"] = "; ".join(
+            part for part in (result.get("warning"), moved) if part)
+    return result
