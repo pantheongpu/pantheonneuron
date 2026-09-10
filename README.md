@@ -777,9 +777,18 @@ saw it — `rag_embedding`'s, above.
 
 ### A full pass at a duration long enough to mean something
 
-`DURATION=30 REPEAT=3`, trn1.2xlarge, 2026-09-10. **26 PASS, 0 FAIL**, and
+`DURATION=30 REPEAT=3`, trn1.2xlarge, 2026-09-10. **24 PASS, 0 FAIL**, and
 this time **no Score flagged itself as irreproducible** — the six that did
 at `DURATION=10` were thin monitor sampling and a warm-up, both fixed.
+
+*(That said 26 until the summary was corrected. `validate_hardware.sh`
+globbed every report file on the machine with no date filter, so rows from
+runs a fortnight earlier were counted into this one — including
+`all_reduce` and `p2p_thrasher`, which cannot run on a single-device part
+at all. The summary now filters to reports written after the run started,
+and says how many it ignored. A summary that mixes runs is worse than
+none: every figure in it reads as a statement about the run that just
+finished, and this one had been copied here before anyone noticed.)*
 
 | | `DURATION=10` | `DURATION=30` |
 |---|--:|--:|

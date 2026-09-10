@@ -44,7 +44,7 @@
         {
           "date": "2026-09-10",
           "evidence": "README.md#what-repeating-the-whole-pass-found",
-          "note": "DURATION=10 REPEAT=3 full pass: 23 PASS, 0 FAIL. The two 2026-09-08 failures are fixed and verified here.",
+          "note": "DURATION=10 REPEAT=3 full pass: 23 PASS, 0 FAIL. The two 2026-09-08 failures are fixed and verified here. A second pass the same day at DURATION=30 REPEAT=3 gave 24 PASS, 0 FAIL with no Score flagging itself irreproducible, and exercised the NEFF search against a warm cache for the first time: memory_read found at candidate 6 of 7, memory_write at 3 of 7, both at coverage 1.0.",
           "passed": [
             "allocation_fragmentation", "fused_attention", "graph_replay",
             "int_virus", "kv_cache_churn", "llm_decode", "llm_prefill",

@@ -429,3 +429,29 @@ def test_the_readme_headings_are_unique():
         headings = re.findall(r"^#+ (.+)$", handle.read(), re.MULTILINE)
     duplicates = sorted({h for h in headings if headings.count(h) > 1})
     assert not duplicates, duplicates
+
+
+def test_the_validation_summary_only_counts_this_run():
+    """It counted every report on the machine, from any run, ever.
+
+    The 2026-09-10 pass reported "Workloads run: 26, PASS 26" for a run
+    that ran 24. all_reduce, p2p_thrasher and baseline_metrics were rows
+    from earlier runs whose reports were still on disk -- and the first
+    two cannot run on a single-device part at all, so the summary
+    credited the run with passing two workloads the hardware refuses.
+
+    A summary that mixes runs is worse than none: every figure in it
+    reads as a statement about the run that just finished, and that one
+    was copied into the README before anyone noticed.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "tools", "validate_hardware.sh"),
+              encoding="utf-8") as handle:
+        script = handle.read()
+
+    assert "RUN_STARTED=$(date +%s)" in script
+    assert "export RUN_STARTED" in script
+    # The filter itself, and the count of what it discarded -- silently
+    # ignoring reports would trade one wrong number for a missing one.
+    assert "os.path.getmtime(p) >= started" in script
+    assert "from earlier runs on this machine ignored" in script
