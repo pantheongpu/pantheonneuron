@@ -17,8 +17,21 @@ runtime cannot batch the replays into one execution or prove them dead. The
 chain is what makes each replay a separate completion for the counter to
 see.
 
-HYPOTHESIS, recorded 2026-09-10 before the run that tests it, so it
-cannot be retrofitted to whatever came back.
+**CONFIRMED**, trn1.2xlarge 2026-09-10 at --duration 30 --repeat 3. The
+prediction below was written before the run and is reproduced unchanged.
+The row came back:
+
+    graph_replay  PASS  3040.1886 graph-steps/s  via analytic
+      measured a 3.3s window of a requested 30s, so this run was bounded
+      by its pinned problem rather than by --duration
+
+3.3 seconds against a predicted 3.3, the declared monitor Score absent,
+the analytic fallback published in its place. All three parts held.
+
+So the "variance" in this workload's declared Score was never variance in
+the device: it is a window whose length is inversely proportional to the
+rate being measured, crossing the monitor's sampling threshold in one
+direction on 2026-09-08 and the other on 2026-09-10.
 
 This workload is bounded by ``replays`` (pinned at 10,000) as well as by
 ``duration``, and the count is reached first. **The measured window is
@@ -38,11 +51,11 @@ allocation_fragmentation scattered: a window of a few seconds is not a
 measurement, and here the window shortens precisely when the device is
 fast.
 
-**Prediction:** at ``--duration 30 --repeat 3``, this run will report a
-window near 3 seconds rather than 30, ``short_window`` will fire, and the
-declared monitor Score will be absent or unstable. If the window comes
-back near 30 seconds the hypothesis is wrong and the replay count is not
-what bounds this.
+**Prediction (before the run):** at ``--duration 30 --repeat 3``, this
+run will report a window near 3 seconds rather than 30, ``short_window``
+will fire, and the declared monitor Score will be absent or unstable. If
+the window comes back near 30 seconds the hypothesis is wrong and the
+replay count is not what bounds this.
 
 STATUS: VERIFIED ON HARDWARE as a workload, trn1.2xlarge 2026-09-08
 and 2026-09-10. What is **not** settled is its declared Score source: the

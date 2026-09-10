@@ -453,7 +453,25 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("graph_replay", "runtime",
              "Repeated replay of a compiled NEFF graph.", _COMPUTE,
              unit="graph-steps/s",
-             problem={"hidden": 2048, "replays": 10000, "dtype": "bf16"},
+             # 60,000, not the 10,000 this was pinned at until 2026-09-10.
+             # The replay count bounds the run before --duration does, so
+             # the pin is the measurement window -- and 10,000 replays at
+             # the 3040 graph-steps/s this part reaches is 3.3 seconds,
+             # measured, whatever duration is asked for.
+             #
+             # 3.3 seconds is below what neuron-monitor needs to form a
+             # delta from its sampled completion counter, which is why the
+             # declared Score fired on 2026-09-08 (13.7s window at the
+             # 729 steps/s that run reached) and degraded to the analytic
+             # fallback on 2026-09-10. The Score source was never
+             # intermittent; the window was.
+             #
+             # **The window is inversely proportional to the rate**, which
+             # is the uncomfortable part: a faster device measures itself
+             # over a shorter window and is more likely to lose its
+             # declared Score. 60,000 gives about 20 seconds at the
+             # observed rate and would still give 13 at half of it.
+             problem={"hidden": 2048, "replays": 60000, "dtype": "bf16"},
              score_source=ScoreSource(MONITOR,
                  counters=(
                      'execution_stats.execution_summary.completed',
