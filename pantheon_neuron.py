@@ -321,10 +321,17 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
                                 or _wants_execution_rate(workload)):
             counter = ("effective_flops" if _wants_monitor_score(workload)
                        else "execution rate")
-            detail = detail or (
+            # neuron_monitor.execution_rate says which of the three reasons
+            # it was -- no samples, one sample, or a counter that never
+            # advanced. Those need different responses and the generic
+            # message covered all three: graph_replay degraded on
+            # 2026-09-10 and the row said only that the rate was absent.
+            because = metrics.get("execution_rate_absent")
+            detail = detail or "; ".join(filter(None, [
                 f"neuron-monitor reported no {counter}, so this run has "
-                "no Score from its declared source"
-            )
+                "no Score from its declared source",
+                because,
+            ]))
 
     # "Score" and "Unit" mirror the pantheongpu report schema exactly so a
     # cross-platform comparison can join on (Test Name, Unit). "Problem"

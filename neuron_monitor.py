@@ -83,17 +83,41 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int]],
     either dilutes a rate with time no execution happened in, and the
     leading one is the larger error because compiles are slow.
 
-    Returns an empty dict when there is nothing to measure: fewer than two
-    samples, or a counter that never moved at all. A rate over a counter
-    that never advanced is not a slow rate, it is no measurement.
+    When there is nothing to measure it says which nothing it is, because
+    the three cases need different responses from a reader:
+
+    - **No samples carried the counter** -- telemetry is missing or the
+      counter does not exist on this part.
+    - **One sample carried it** -- the run was too short for a delta. Raise
+      the duration or lower the monitor period.
+    - **The counter never moved** -- the samples are there and the device
+      completed nothing. That is a failing workload, not a slow one.
+
+    ``graph_replay`` produced a Score from this counter on 2026-09-08 and
+    degraded to the analytic fallback on 2026-09-10, and the row said only
+    "neuron-monitor reported no execution rate" -- which is true of all
+    three and actionable in none of them. A rate over a counter that never
+    advanced is not a slow rate; it is no measurement, and a row that
+    cannot tell a reader which of the three it hit is not much better.
     """
     if len(series) < 2:
-        return {}
+        return {"execution_samples": len(series),
+                "execution_rate_absent": (
+                    "no sample carried the completion counter"
+                    if not series else
+                    "only one sample carried the completion counter, so "
+                    "there is no delta to divide -- raise --duration or "
+                    "lower the monitor period")}
 
     first_count = series[0][1]
     last_count = series[-1][1]
     if last_count <= first_count:
-        return {"executions_delta": last_count - first_count}
+        return {"executions_delta": last_count - first_count,
+                "execution_samples": len(series),
+                "execution_rate_absent": (
+                    f"the completion counter did not advance across "
+                    f"{len(series)} samples, so the device completed "
+                    "nothing measurable")}
 
     # Last sample before the counter moved, and first sample after it
     # stopped: the window in which work was actually being completed.
