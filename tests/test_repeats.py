@@ -352,3 +352,83 @@ def test_this_is_the_opposite_check_to_unstable_and_they_cannot_both_fire():
         "checks could fire on the same row and each would be right")
     assert pantheon_neuron.quantised_agreement(
         {"cv": unstable_cv + 0.01}, resolution) is None
+
+
+# -- the resolution comes from the declared formula --------------------------
+
+def _named(name):
+    """Not _workload: this file already has one, with a different signature.
+
+    Shadowing it made eight unrelated tests fail with a TypeError -- a
+    reminder that appending to a test file is editing it.
+    """
+    return next(w for w in registry.WORKLOADS if w.name == name)
+
+
+def test_a_counted_score_resolves_to_one_of_the_things_it_counts():
+    """No kernel has to remember to say so; the formula already does.
+
+    transformer_train_step declares `steps_completed / elapsed_s`, so a
+    run of 109 steps cannot resolve anything finer than 1 in 109.
+    """
+    resolution = pantheon_neuron.score_resolution(
+        _named("transformer_train_step"), {"steps_completed": 109})
+    assert resolution == pytest.approx(1 / 109)
+
+
+def test_a_kernel_declaration_wins_over_the_formula():
+    """serving_mix counts completed requests, which advance once per 32
+    decode steps. The formula cannot know that; the kernel does.
+    """
+    resolution = pantheon_neuron.score_resolution(
+        _named("serving_mix"),
+        {"requests_completed": 149, "score_resolution": 0.25})
+    assert resolution == 0.25
+
+
+def test_a_continuous_score_has_no_resolution():
+    """A bandwidth is not a count of anything, so the question does not
+    apply -- and answering it anyway would flag every steady one."""
+    assert pantheon_neuron.score_resolution(
+        _named("memory_read"), {"bytes_moved": 8 << 30}) is None
+    assert pantheon_neuron.score_resolution(
+        _named("tensor_virus"), {"passes": 598}) is None
+
+
+def test_a_missing_or_nonsense_count_resolves_to_nothing():
+    workload = _named("transformer_train_step")
+    assert pantheon_neuron.score_resolution(workload, {}) is None
+    assert pantheon_neuron.score_resolution(
+        workload, {"steps_completed": 0}) is None
+    assert pantheon_neuron.score_resolution(
+        workload, {"steps_completed": 2.5}) is None
+    # bool is an int in Python, and a flag would resolve to 1.0.
+    assert pantheon_neuron.score_resolution(
+        workload, {"steps_completed": True}) is None
+
+
+def test_every_internal_workload_either_resolves_or_says_why():
+    """A sweep, so a new counted Score cannot quietly skip the check.
+
+    Each INTERNAL workload's declared numerator either names a counter the
+    kernel returns -- in which case the resolution is derivable -- or the
+    formula is not a count over wall time, which this asserts explicitly
+    rather than leaving as a silent None.
+    """
+    counted, continuous = [], []
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if not source or source.source != registry.INTERNAL:
+            continue
+        formula = source.formula or ""
+        numerator, _, denominator = formula.partition("/")
+        if denominator.split("#")[0].strip() == "elapsed_s":
+            counted.append((workload.name, numerator.strip()))
+        else:
+            continuous.append(workload.name)
+
+    assert counted, "no counted Scores found -- the parse is broken"
+    for name, numerator in counted:
+        resolution = pantheon_neuron.score_resolution(
+            _named(name), {numerator: 100})
+        assert resolution == pytest.approx(0.01), (name, numerator)

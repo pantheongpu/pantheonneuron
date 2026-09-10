@@ -420,7 +420,7 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
             # agree more closely than the Score can resolve.
             quantised = quantised_agreement(
                 row["Repeats"],
-                (_LAST_RUN.get(workload.name) or {}).get("score_resolution"))
+                score_resolution(workload, _LAST_RUN.get(workload.name) or {}))
             if quantised:
                 row["Detail"] = "; ".join(
                     filter(None, [row.get("Detail"), quantised]))
@@ -440,6 +440,41 @@ def _median_provenance(rows, scores, published):
         if candidate.get("Score") == published:
             return candidate.get("Measurement")
     return None
+
+
+def score_resolution(workload, result) -> typing.Optional[float]:
+    """The fraction of the Score that one more counted unit would move it.
+
+    Derived from the declared formula rather than reported per kernel.
+    Most Scores here are ``<counter> / elapsed_s`` where the counter is an
+    integer count of things finished, and such a Score cannot resolve
+    anything finer than one of them -- so the resolution is ``1 / count``,
+    for every one of them, without each kernel remembering to say so.
+
+    A kernel may still declare ``score_resolution`` itself, and that wins:
+    ``serving_mix``'s Score counts *completed requests*, which advance once
+    per 32 decode steps, and the formula alone cannot know that.
+
+    Returns None when the Score is not a count over time -- a bandwidth or
+    a FLOPS figure is continuous and this question does not apply to it.
+    """
+    declared = result.get("score_resolution")
+    if declared is not None:
+        return declared
+
+    source = getattr(workload, "score_source", None)
+    formula = getattr(source, "formula", None) if source else None
+    if not formula or "/" not in formula:
+        return None
+    numerator, _, denominator = formula.partition("/")
+    if denominator.split("#")[0].strip() != "elapsed_s":
+        return None
+
+    count = result.get(numerator.strip())
+    # bool is an int and would give a resolution of 1.0 for a flag.
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        return None
+    return 1.0 / count
 
 
 def quantised_agreement(spread, resolution) -> typing.Optional[str]:
