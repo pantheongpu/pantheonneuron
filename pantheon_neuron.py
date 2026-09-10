@@ -328,6 +328,11 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             disagreement = override_disagreement(score, declared, counter)
             if disagreement:
                 detail = "; ".join(filter(None, [detail, disagreement]))
+            overhang = span_outran_the_kernel(
+                metrics.get("execution_span_s"),
+                (_LAST_RUN.get(workload.name) or {}).get("elapsed_s"))
+            if overhang:
+                detail = "; ".join(filter(None, [detail, overhang]))
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
@@ -466,6 +471,48 @@ def _median_provenance(rows, scores, published):
 # kernel issued -- and small disagreements are expected. It is the factor
 # of four that needs saying.
 OVERRIDE_DISAGREEMENT = 1.5
+
+
+# How far the monitor's execution span may exceed the kernel's own
+# measured window before the row says so. The two brackets different
+# things -- the monitor starts before the workload and stops after it --
+# so a small overhang is expected and is not the counter's fault.
+SPAN_OVERHANG = 1.1
+
+
+def span_outran_the_kernel(span, elapsed) -> typing.Optional[str]:
+    """Say so when a rate's denominator is longer than the run it describes.
+
+    ``execution_rate`` trims a leading flat run (the workload compiling)
+    and a trailing one (the workload finished while the monitor sampled),
+    so its span should sit inside the kernel's own window.
+
+    On trn1.2xlarge 2026-09-10 it did not: graph_replay measured a 20.47s
+    window and the monitor reported a 24.99s span, 22% longer, with
+    ``execution_idle_fraction`` at 0.0 -- meaning nothing was trimmed at
+    either end. Every extra second is time no replay was running, divided
+    into a completion count that stopped growing, so the declared Score
+    came out low by the same 22%.
+
+    That matters here beyond the arithmetic. graph_replay's declared and
+    analytic figures differ by about four, and a denominator inflated by a
+    fifth is exactly the sort of thing that gets offered as the
+    explanation for a discrepancy it is far too small to explain.
+    """
+    if not isinstance(span, (int, float)) or span <= 0:
+        return None
+    if not isinstance(elapsed, (int, float)) or elapsed <= 0:
+        return None
+    if span <= elapsed * SPAN_OVERHANG:
+        return None
+    return (
+        # Fixed decimals, not %g: 24.9954 renders as "25" at four
+        # significant figures, which reads as a round number where the
+        # point is that it is 4.5 seconds too long.
+        f"the monitor's execution span is {span:.2f}s against the kernel's "
+        f"{elapsed:.2f}s window, so the declared rate is divided by "
+        f"{span / elapsed:.2f}x the time the workload actually ran"
+    )
 
 
 def override_disagreement(analytic, declared,

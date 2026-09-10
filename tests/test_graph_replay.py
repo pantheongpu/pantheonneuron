@@ -195,3 +195,36 @@ def test_mock_mode_invents_no_score(monkeypatch):
     )
     assert row["Score"] is None
     assert row["Unit"] == "graph-steps/s"
+
+
+# -- the chain does not prevent coalescing -----------------------------------
+
+def test_the_docstring_no_longer_claims_replays_cannot_be_batched():
+    """Measured trn1.2xlarge 2026-09-10, both counters from one run:
+    60,000 replays submitted, 14,737 executions completed, ratio 4.07.
+
+    The chain prevents the replays being proved dead. It does not prevent
+    them being batched, and the docstring said it did.
+    """
+    doc = graph_replay.__doc__
+    assert "cannot batch the replays into one execution" not in doc
+    assert "It does batch them" in doc
+    assert "4.07" in doc
+
+
+def test_the_measured_ratio_is_reported_as_a_disagreement():
+    """A factor of four between the two figures has to reach the row.
+
+    Which of them is right is not settled here and cannot be from off
+    hardware. What a row can do is say it published one of two numbers
+    that differ by four.
+    """
+    message = pantheon_neuron.override_disagreement(
+        2931.7326, 589.5893, "the completion counter")
+    assert message is not None
+    assert "factor of 5" in message
+
+    # And from the counts rather than the rates, which is the cleaner
+    # comparison because the monitor's span outruns the kernel's window.
+    assert pantheon_neuron.override_disagreement(
+        60000, 14737, "the completion counter") is not None

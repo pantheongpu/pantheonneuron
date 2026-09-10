@@ -314,3 +314,54 @@ def test_cross_check_flags_zero_analytic_throughput():
     message = pantheon_neuron.override_disagreement(0.0, 10.0, "c")
     assert message is not None
     assert "issued no arithmetic" in message
+
+
+# -- a rate divided by more time than the run took ---------------------------
+
+def test_a_span_inside_the_window_says_nothing():
+    """The control. The monitor brackets the workload, so its trimmed
+    span should sit inside the kernel's own measured window."""
+    assert pantheon_neuron.span_outran_the_kernel(19.8, 20.47) is None
+    assert pantheon_neuron.span_outran_the_kernel(20.47, 20.47) is None
+
+
+def test_a_span_that_outran_the_window_is_reported():
+    """graph_replay, trn1.2xlarge 2026-09-10: a 24.99s span against a
+    20.47s window, with execution_idle_fraction at 0.0 -- nothing was
+    trimmed at either end. Every extra second is time no replay ran,
+    divided into a count that had stopped growing.
+    """
+    message = pantheon_neuron.span_outran_the_kernel(24.9954, 20.4657)
+    assert message is not None
+    # 24.9954 rounds to 25.00, which is what a reader sees. The first
+    # version of this asserted "24.99" -- the test expecting truncation
+    # where the code rounds, which is the test being wrong about the code
+    # rather than the other way round.
+    assert "25.00s" in message and "20.47s" in message
+    assert "1.22x" in message
+
+
+def test_a_small_overhang_is_tolerated():
+    """The two brackets differ by design; only a real gap is a finding."""
+    assert pantheon_neuron.span_outran_the_kernel(21.0, 20.0) is None
+    assert pantheon_neuron.span_outran_the_kernel(22.5, 20.0) is not None
+
+
+def test_missing_figures_are_not_an_overhang():
+    for absent in (None, 0, -1.0, "n/a"):
+        assert pantheon_neuron.span_outran_the_kernel(absent, 20.0) is None
+        assert pantheon_neuron.span_outran_the_kernel(20.0, absent) is None
+
+
+def test_the_overhang_is_far_too_small_to_explain_the_coalescing_gap():
+    """Which is why both are reported rather than one being offered as
+    the cause of the other.
+
+    graph_replay's two figures differ by about four. A denominator
+    inflated by a fifth is exactly the kind of thing that gets proposed
+    as the explanation for a discrepancy it cannot account for.
+    """
+    inflation = 24.9954 / 20.4657
+    assert inflation < 1.3
+    assert 60000 / 14737 > 3.5
+    assert inflation * 1.5 < 60000 / 14737

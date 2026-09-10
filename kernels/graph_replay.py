@@ -13,9 +13,31 @@ than by the arithmetic inside it.
 
 The graph is deliberately trivial and deliberately *not* eliminable: a
 single small matmul whose result feeds the next iteration's input, so the
-runtime cannot batch the replays into one execution or prove them dead. The
-chain is what makes each replay a separate completion for the counter to
-see.
+runtime cannot prove the replays dead.
+
+**It does batch them, and this docstring said otherwise for a fortnight.**
+Measured on trn1.2xlarge 2026-09-10, both counters from one run:
+
+    replays submitted        60,000
+    executions completed     14,737   (neuron-monitor)
+    ratio                      4.07
+
+So roughly four replays reach the device as one NEFF execution. The chain
+prevents elimination; it does not prevent coalescing, and the claim that
+"the chain is what makes each replay a separate completion" was wrong.
+
+That the two figures differed by about four was visible from 2026-09-08
+(729.3 graph-steps/s from the counter) and 2026-09-10 (3051.2 from the
+kernel) -- but those were different runs, and two numbers from two runs
+can differ for any reason. Taking both from one run is what turned it
+from a suspicion into a measurement.
+
+**Neither figure is "graph steps" in the sense the unit implies.** The
+kernel counts what the loop asked for; the counter counts what the device
+finished; and a reader wanting dispatch cost needs to know which, because
+they differ by four. ``pantheon_neuron.override_disagreement`` puts the
+gap in the row rather than letting whichever figure wins be read as the
+answer.
 
 **CONFIRMED**, trn1.2xlarge 2026-09-10 at --duration 30 --repeat 3. The
 prediction below was written before the run and is reproduced unchanged.
