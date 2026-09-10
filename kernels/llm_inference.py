@@ -91,8 +91,15 @@ def run_prefill(problem: typing.Mapping[str, typing.Any], duration: int) -> dict
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "prompt tokens / wall time",
-        **transformer_ops.output_check(
-            observed, "prefill output"),
+        # Not output_check. The input is all ones and the weights are
+        # scaled by 1/fan_in, so a 32-layer stack must produce 59.92 --
+        # derived, and independently agreeing with rms_norm's "about 2 per
+        # block". This is also the only check in the suite that verifies
+        # the layer count: flops_issued multiplies by `layers` whether or
+        # not that many ran, so a stack executing half its depth reports
+        # the full arithmetic at twice the throughput and reads as good
+        # news.
+        **transformer_ops.stack_check(observed, layers),
     }
 
 

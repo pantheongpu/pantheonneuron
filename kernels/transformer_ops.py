@@ -198,6 +198,94 @@ def read_back(tensor) -> typing.Optional[float]:
         return None
 
 
+# GELU of one, which is what every MLP branch in this suite computes.
+#
+# The exact (erf) form, which is torch's default. The tanh approximation
+# gives 0.841192 -- 0.02% away, far inside the tolerance below, so which
+# one a build uses does not change the verdict.
+_GELU_OF_ONE = 0.8413447460685429
+
+
+def stacked_block_output(layers: int, start: float = 1.0) -> float:
+    """What a stack of ``layers`` blocks over all-ones input must produce.
+
+    Derived, not measured. The kernels feed ``torch.ones`` through
+    ``block`` with ``weights`` scaled by ``1/fan_in``, and every step of
+    that is analytically determined:
+
+        normed    = rms_norm(x)              -> ones, whatever x is
+        q,k,v     = normed @ W(1/hidden)     -> ones
+        attended  = attention(1, 1, 1)       -> ones (uniform softmax)
+        h         = x + attended @ W         -> x + 1
+        normed2   = rms_norm(h)              -> ones
+        expanded  = normed2 @ W1(1/hidden)   -> ones
+        activated = gelu(ones)               -> gelu(1)
+        out       = h + activated @ W2       -> h + gelu(1)
+
+    So each block adds ``1 + gelu(1) = 1.8413`` regardless of depth, and
+    the answer is ``start + layers * 1.8413``. For llm_prefill's 32
+    layers that is 59.92.
+
+    **Two independent routes agree on this.** ``rms_norm``'s docstring
+    says, from the reasoning that motivated it, that the residual stream
+    "grows additively rather than multiplicatively -- about 2 per block
+    instead of a factor of 4". 1.8413 is that 2.
+
+    Pre-norm is what makes it depth-independent: the input to every matmul
+    is unit scale however deep the stack, so neither branch's contribution
+    depends on x. A stack that had lost its normalisation would grow
+    multiplicatively and miss this by orders of magnitude.
+    """
+    return start + layers * (1.0 + _GELU_OF_ONE)
+
+
+def verify_stack_computed_its_depth(
+    observed: typing.Optional[float],
+    layers: int,
+    tolerance: float = 0.1,
+) -> typing.Optional[str]:
+    """Check a block stack produced the value its depth implies.
+
+    Until 2026-09-10 these kernels checked only that the output was a
+    readable number and not a NaN. That admits a stack that ran the wrong
+    number of layers, dropped a residual, lost its normalisation, or
+    scaled its weights wrongly -- each produces a finite number, and one
+    of them (unscaled weights) had already put llm_prefill into NaN, which
+    is the same defect at a magnitude loud enough to notice.
+
+    **This is the check that verifies the layer count.** Nothing else in
+    the suite does: the FLOP figure multiplies by ``layers`` whether or
+    not that many ran, so a stack executing half its depth reports the
+    full arithmetic at twice the throughput and looks like good news.
+
+    The tolerance is 10%. bf16 carries about three decimal digits and the
+    sum reaches ~60 over 32 accumulations, so a few percent of drift is
+    expected and is not a defect; the failures this catches are factors,
+    not percentages.
+    """
+    if observed is None:
+        return "stack output could not be read back to verify"
+    if observed != observed:
+        return "stack output is NaN"
+    expected = stacked_block_output(layers)
+    if abs(observed - expected) > tolerance * expected:
+        ran = (observed - 1.0) / (1.0 + _GELU_OF_ONE)
+        return (
+            f"a {layers}-layer stack over all-ones input must produce "
+            f"{expected:.4g} and produced {observed:.6g} -- consistent with "
+            f"about {ran:.1f} layers, or with a residual or normalisation "
+            "that is not doing what the arithmetic assumes"
+        )
+    return None
+
+
+def stack_check(observed: typing.Optional[float],
+                layers: int) -> typing.Dict[str, typing.Any]:
+    """The paired form, for the same reason ``output_check`` is paired."""
+    message = verify_stack_computed_its_depth(observed, layers)
+    return {"warning": message, "score_invalid": message is not None}
+
+
 def verify_attention_is_uniform(
     observed: typing.Optional[float],
     expected: float = 1.0,

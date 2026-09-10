@@ -80,7 +80,11 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "block FLOPs issued / wall time",
-        **transformer_ops.output_check(observed, "block output"),
+        # One block over all-ones input, so the answer is 1 + gelu(1) =
+        # 2.8413 exactly. Checking it verifies the residuals and the
+        # normalisation actually ran, which a finiteness check cannot:
+        # every way of getting this wrong produces a finite number.
+        **transformer_ops.stack_check(observed, 1),
     }
 
 

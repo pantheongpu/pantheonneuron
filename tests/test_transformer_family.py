@@ -1161,3 +1161,90 @@ def test_the_expected_value_follows_from_the_pinned_problem():
     code = sourcecheck.function_code(inference_mix.run_fused_attention)
     assert "v = torch . ones (" in code
     assert "attention_check ( transformer_ops . read_back ( sink ) )" in code
+
+
+# -- the stack's answer follows from its depth -------------------------------
+
+def test_the_per_block_increment_is_one_plus_gelu_of_one():
+    """Derived from the block, and independently from rms_norm's own note.
+
+    rms_norm's docstring says the residual stream "grows additively
+    rather than multiplicatively -- about 2 per block instead of a factor
+    of 4", reasoning that predates this check. 1.8413 is that 2.
+    """
+    step = (transformer_ops.stacked_block_output(1)
+            - transformer_ops.stacked_block_output(0))
+    assert step == pytest.approx(1.8413447, rel=1e-6)
+    assert "about 2 per block" in transformer_ops.rms_norm.__doc__
+
+
+@pytest.mark.parametrize("layers,expected", [
+    (0, 1.0), (1, 2.8413447), (4, 8.3653790), (32, 59.9230319)])
+def test_the_stack_output_is_linear_in_depth(layers, expected):
+    """Pre-norm is what makes it depth-independent: the input to every
+    matmul is unit scale however deep the stack, so neither branch's
+    contribution depends on x. A stack that had lost its normalisation
+    would grow multiplicatively and miss this by orders of magnitude.
+    """
+    assert transformer_ops.stacked_block_output(layers) == pytest.approx(
+        expected, rel=1e-6)
+
+
+def test_a_stack_that_ran_the_declared_depth_passes():
+    for slack in (1.0, 0.95, 1.05):
+        assert transformer_ops.verify_stack_computed_its_depth(
+            59.923 * slack, 32) is None
+
+
+def test_a_stack_that_ran_half_its_depth_is_caught():
+    """The check nothing else in the suite makes.
+
+    flops_issued multiplies by `layers` whether or not that many ran, so
+    a stack executing half its depth reports the full arithmetic at twice
+    the throughput and reads as good news.
+    """
+    message = transformer_ops.verify_stack_computed_its_depth(
+        transformer_ops.stacked_block_output(16), 32)
+    assert message is not None
+    assert "about 16" in message
+
+
+@pytest.mark.parametrize("wrong,why", [
+    (1.0, "no block ran at all"),
+    (2.8413, "one block ran where 32 were declared"),
+    (1e6, "multiplicative growth -- the normalisation is gone"),
+    (float("inf"), "saturation; finite is not the test here"),
+])
+def test_finite_wrong_answers_are_rejected(wrong, why):
+    assert transformer_ops.verify_stack_computed_its_depth(wrong, 32), why
+
+
+def test_a_nan_and_an_unreadable_output_are_still_caught():
+    assert "NaN" in transformer_ops.verify_stack_computed_its_depth(
+        float("nan"), 32)
+    assert "could not be read" in transformer_ops.verify_stack_computed_its_depth(
+        None, 32)
+
+
+def test_the_tolerance_admits_bf16_drift_and_nothing_larger():
+    """bf16 carries about three decimal digits and the sum reaches ~60
+    over 32 accumulations, so a few percent is expected. The failures
+    this catches are factors, not percentages.
+    """
+    expected = transformer_ops.stacked_block_output(32)
+    assert transformer_ops.verify_stack_computed_its_depth(
+        expected * 1.09, 32) is None
+    assert transformer_ops.verify_stack_computed_its_depth(
+        expected * 1.11, 32) is not None
+
+
+@pytest.mark.parametrize("module,function", [
+    ("llm_inference", "run_prefill"),
+    ("transformer_compute", "run_virus"),
+])
+def test_the_stacks_use_the_depth_check(module, function):
+    import importlib
+    target = importlib.import_module(f"kernels.{module}")
+    code = sourcecheck.function_code(getattr(target, function))
+    assert "stack_check" in code
+    assert "output_check" not in code
