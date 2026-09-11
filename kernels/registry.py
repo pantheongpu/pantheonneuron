@@ -712,6 +712,22 @@ PEAK_FOR_UNIT = {
     "TFLOPS": "bf16_tflops",
 }
 
+# GB/s workloads whose bytes do not cross the HBM path, so the HBM ceiling
+# is not theirs. The unit matched and the column divided anyway: the
+# 2026-09-10 --test all on trn1.2xlarge printed pcie_bandwidth at "0.44%
+# of 880.5 GB/s" -- a host-to-device PCIe rate as a share of device
+# memory bandwidth, which is not a fraction of anything. No PCIe or
+# NeuronLink ceiling has been verified for these parts, so they get none
+# rather than a borrowed one.
+NO_PUBLISHED_PEAK = {
+    "pcie_bandwidth": "host-to-device PCIe transfers; the HBM ceiling is not "
+                      "on this path and no PCIe ceiling has been verified",
+    "all_reduce": "a collective's bus bandwidth between cores; no NeuronLink "
+                  "or on-chip interconnect ceiling has been verified",
+    "p2p_thrasher": "device-to-device transfers; no NeuronLink ceiling has "
+                    "been verified",
+}
+
 # What pantheongpu reports for those names since v1.0.19.
 GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 

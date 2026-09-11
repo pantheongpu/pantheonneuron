@@ -461,6 +461,14 @@ class NeuronMonitor:
                         sink.append(float(value))
 
             hw = (sample.get("system_data") or {}).get("neuron_hw_counters") or {}
+            # max() is right only if these are totals since driver load --
+            # and then a device's past events are charged to this run. If
+            # they are per-period tallies, as execution_summary.completed
+            # turned out to be, max() undercounts and the sum is right.
+            # The AWS guide does not say, and no ECC event has been
+            # observed on these parts to settle it the way completed was
+            # settled (by watching it at a boundary). Recorded, not acted
+            # on: nothing in the harness reads these to pass or fail a row.
             for device in (hw.get("neuron_devices") or []):
                 for key in ecc:
                     value = device.get(key)

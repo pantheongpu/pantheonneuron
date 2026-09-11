@@ -726,6 +726,10 @@ def peak_share(workload, devices, telemetry=None) -> typing.Optional[dict]:
     if peak is None:
         return None
 
+    # The unit picks the ceiling, unless the workload's bytes never use the
+    # path that ceiling describes -- see registry.NO_PUBLISHED_PEAK.
+    if workload.name in registry.NO_PUBLISHED_PEAK:
+        return None
     field = registry.PEAK_FOR_UNIT.get(workload.unit)
     if field is None or peak.get(field) is None:
         return None
