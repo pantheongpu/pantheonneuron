@@ -1,0 +1,73 @@
+The completion-counter rate: the busy block, and how many runtimes report --
+trn1.2xlarge 2026-09-11 (rate_probe.py, which prints every sample's completions
+summed over runtimes, then the row).
+
+Two defects, both in the path that scores graph_replay:
+
+1. The rate took the interior of the FIRST-TO-LAST busy period. Setup work
+   completes before the timed loop with a compile between them, so the setup
+   blip takes the "first" slot and the loop's partly busy first period stays in
+   the average. whole_periods was fixed for exactly this on the flops and
+   utilisation series (where it moved memory_read's utilisation from 88.7% to
+   99.4%); the completion series still had it. It now uses the longest
+   uninterrupted block, and the row carries both counts.
+
+2. The series took one entry per runtime, not per sample. neuron-monitor
+   reports every runtime on the device, so a second one -- a neuron-profile
+   capture, an aggregate's worker -- put two entries at the same instant, and
+   the rate divided one period's completions by two periods' worth of time.
+   _completed_in and await_idle_period already summed over runtimes; the
+   series now does too.
+
+graph_replay, --duration 30, after the fix:
+
+    === graph_replay
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> graph_replay
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_222003.json
+      runtimes per sample: {1: 87}
+      completed per sample (summed over runtimes): [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2799, 3046, 3055, 2998, 3003, 2996, 2993, 2997, 3015, 3027, 3046, 3052, 3029, 3068, 3064, 3034, 3059, 3033, 3034, 3012, 2988, 3021, 3059, 2997, 3091, 3027, 2987, 2983, 3000, 3017, 235, 0]
+      Score 3025.2151 graph-steps/s  method neuron-monitor
+      {'execution_errors': 0, 'execution_samples': 87, 'executions_total': 90765, 'execution_active_periods': 31, 'execution_block_periods': 31, 'execution_samples_used': 29, 'execution_span_s': 28.9999, 'executions_per_s': 3025.215124928228, 'execution_tail_reported': True}
+      kernel's own: {}
+      Detail: 
+
+A second graph_replay run, with the kernel's own figure beside the monitor's:
+
+    runtimes per sample: {0: 1, 1: 37}
+    completed per sample: [None, 0, 0, 0, 0, 0, 1691, 2985, 2613, 1697, 2208, 2885, 3031, 3003,
+                           3038, 3047, 3081, 3044, 3023, 3080, 3071, 3016, 3034, 3017, 3009, 3103,
+                           2996, 3035, 2956, 2991, 3050, 3024, 3034, 2962, 2934, 3043, 1301, 0]
+    Score 2931.3846 graph-steps/s (neuron-monitor), block 31 periods, 29 used, span 29.0 s
+    executions_total 88002
+    kernel result: replays 88001, elapsed 30.0009 s, graph_steps_per_s 2933.2828
+
+  The monitor's rate and the kernel's own clock are 0.06% apart, and the device
+  completed one execution more than the replays submitted -- the setup graph.
+  This run's block is unbroken, so the first fix does not move it; the run below
+  is where the shape appears.
+
+memory_read, --duration 30 (its Score is neuron-profile; the counter is only recorded):
+    === memory_read
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.04% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_222211.json
+      runtimes per sample: {0: 1, 1: 310, 2: 32}
+      completed per sample (summed over runtimes): [None, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      Score 273.1315 GB/s  method neuron-profile
+      {'execution_errors': 0, 'execution_samples': 342, 'executions_total': 954, 'execution_active_periods': 36, 'execution_block_periods': 33, 'execution_samples_used': 31, 'execution_span_s': 31.0005, 'executions_per_s': 30.612439217265266}
+      kernel's own: {"profiler_neff": "model.neff", "profiler_plan_coverage": 1.0, "profiler_candidates_tried": 2, "profiler_candidates_available": 3, "hbm_read_bytes": 8589934592, "profiler_total_time_s": 0.033532365448, "profiler_time_basis": "total_active_time", "profiler_startup_s": 0.002082552, "analytic_gbps": 271.00207806750797, "consumer_engine_active": 0.6505363991642014, "dma_active": 0.937720105363919, "read_verified_ratio": 1.0}
+      Detail: 
+
+  Both defects are visible here in one run:
+    - runtimes per sample {0: 1, 1: 310, 2: 32}: 32 samples carry TWO runtimes,
+      the neuron-profile capture running beside the harness's own runtime. The
+      second entry per sample is not hypothetical on this suite's own runs.
+    - execution_active_periods 36 against execution_block_periods 33: an isolated
+      setup execution (the lone "1" at sample 14, zeros either side) sits outside
+      the loop's block. First-to-last would have started there.

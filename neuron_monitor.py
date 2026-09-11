@@ -76,6 +76,24 @@ def period_string(seconds: float) -> str:
     return f"{max(1, round(seconds))}s"
 
 
+def _longest_busy_block(counts: typing.Sequence[float]) -> typing.List[int]:
+    """Indices of the longest uninterrupted run of nonzero readings.
+
+    The index-level form of what whole_periods does with values, for a
+    series whose readings are counts rather than rates.
+    """
+    best: typing.List[int] = []
+    current: typing.List[int] = []
+    for index, count in enumerate(counts):
+        if count > 0:
+            current.append(index)
+            if len(current) > len(best):
+                best = list(current)
+        else:
+            current = []
+    return best
+
+
 def _scrub(sample: dict) -> dict:
     """Remove host identifiers from one neuron-monitor sample, recursively."""
     if not isinstance(sample, dict):
@@ -116,11 +134,24 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
     replays per NEFF execution" graph_replay documented came from the same
     misreading -- one period's 14,737 set against the run's 60,000.
 
-    The rate is taken over the **interior** of the active run: the first
-    and last periods with completions are only partly busy (6657 and 7465
-    above, against ~15,300 for a full one), and including them dilutes
-    the rate by the idle part of each. Interior periods are wholly inside
-    the execution, so their completions over their periods is the rate.
+    The rate is taken over the **interior of the longest uninterrupted run
+    of busy periods**: the first and last periods with completions are only
+    partly busy (6657 and 7465 above, against ~15,300 for a full one), and
+    including them dilutes the rate by the idle part of each. Interior
+    periods are wholly inside the execution, so their completions over
+    their periods is the rate.
+
+    Longest run rather than first-to-last busy, which is what this did
+    until 2026-09-11. Setup work completes before the timed loop and a
+    compile sits between them, so a run can read
+
+        3 (setup), 0 x 46 (compile), 6657, 15409, 15273, 15199, 7465, 0
+
+    and first-to-last hands the "first" slot to the setup blip, leaving
+    the loop's partly busy 6657 inside the average. That is the same
+    defect whole_periods was fixed for on the flops and utilisation
+    series, where it moved memory_read's utilisation from 88.7% to 99.4%,
+    and the two series now follow the same rule.
 
     When there is nothing to measure it says which nothing it is:
 
@@ -148,11 +179,16 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
             "so the device completed nothing measurable")
         return summary
 
+    block = _longest_busy_block(
+        [count for _, count, _ in series])
     active = [i for i, (_, count, _) in enumerate(series) if count > 0]
-    interior = [series[i] for i in active[1:-1]]
+    interior = [series[i] for i in block[1:-1]]
     usable = [(count, period) for _, count, period in interior
               if isinstance(period, (int, float)) and period > 0]
     summary["execution_active_periods"] = len(active)
+    # The block the rate comes from, beside the total busy count: the two
+    # differing is a run that paused, and says so rather than hiding it.
+    summary["execution_block_periods"] = len(block)
     summary["execution_samples_used"] = len(usable)
     if not usable:
         summary["execution_rate_absent"] = (

@@ -156,3 +156,40 @@ def test_the_delivered_period_is_reported():
     monitor._samples = [sample(0.004), sample(5.0), sample(5.001), sample(4.999)]
     monitor._sample_times = [0.0, 5.0, 10.0, 15.0]
     assert monitor.aggregate()["sample_period_s"] == 5.0
+
+
+# -- a setup execution before the compile is not the run's first period ----
+
+def _series(counts, period=1.0):
+    return [(i, c, period) for i, c in enumerate(counts)]
+
+
+def test_setup_work_before_the_compile_does_not_take_the_first_slot():
+    """The shape whole_periods was fixed for, on the completion counter:
+    a setup graph completes, a long compile reads zero, then the loop. Taking
+    first-to-last busy let the setup blip be the "first" period, so the loop's
+    partly busy first period stayed in the average and diluted it."""
+    counts = [3] + [0] * 46 + [6657, 15409, 15273, 15199, 7465]
+    summary = execution_rate(_series(counts))
+    # 15409, 15273, 15199 -- the loop's whole periods, not 6657 as well.
+    assert summary["executions_per_s"] == pytest.approx((15409 + 15273 + 15199) / 3)
+    assert summary["execution_samples_used"] == 3
+    assert summary["execution_active_periods"] == 6
+    assert summary["execution_block_periods"] == 5
+
+
+def test_an_uninterrupted_run_is_unchanged():
+    """The measured 2026-09-10 series has no gap, so the fix must not move it."""
+    counts = [0] * 15 + [6657, 15409, 15273, 15199, 7465, 0, 0]
+    summary = execution_rate(_series(counts, period=5.0))
+    assert summary["executions_per_s"] == pytest.approx(
+        (15409 + 15273 + 15199) / 15.0)
+    assert summary["execution_active_periods"] == 5
+    assert summary["execution_block_periods"] == 5
+
+
+def test_the_two_counts_differ_exactly_when_the_run_paused():
+    counts = [4, 4, 4]
+    summary = execution_rate(_series(counts))
+    assert summary["execution_active_periods"] == summary["execution_block_periods"] == 3
+
