@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-three of them, and they are collected
+would go. This repo has now produced twenty-four of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -496,6 +496,30 @@ check rejects the copy graph. **When a check needs a wide margin, find
 out what is using the margin.** A bias absorbed into a tolerance does
 not go away. It becomes the check's blind spot.
 
+### 24. The tool's limit was the argument we passed it
+
+The harness asked neuron-monitor for a sample every second, and got one
+every five. It measured that, found it consistent across requests
+(0.2 s, 1.0 s, 5.0 s all came back slow), and recorded it as a property
+of the tool: "neuron-monitor floors around two seconds and does not
+deliver the requested rate at or below one." The finding went into a
+comment, both thinness warnings, and a test that required every warning
+to repeat it.
+
+The request was `f"{period}s"`, and the default period is the float 1.0,
+so it went out as `"1.0s"`. neuron-monitor accepts whole seconds only and
+ignores anything else in favour of its 5 s default. Measured with the
+harness's own config on inf2.xlarge 2026-09-11: `"1.0s"` delivered 5.0 s
+periods, `"1s"` delivered 1.0 s. The 2026-08-26 schema probe had written
+`"1s"` and been receiving one-second samples the whole time. Its output
+was in the repo.
+
+Every sample carries its own `period` field, so the second quantity was
+available all along: requested 1, delivered 5. Nothing compared them, so
+the gap was explained instead of detected. The row now reports
+`sample_period_s`. **Before recording a limit of a tool, check that the
+tool received the argument you think you sent.**
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -516,4 +540,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-three above were found by reading what a passing check had filtered out.
+twenty-four above were found by reading what a passing check had filtered out.

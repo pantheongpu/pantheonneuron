@@ -53,6 +53,29 @@ _HOST_IDENTIFIER_FIELDS = frozenset(
 _DEFAULT_PERIOD_SECONDS = 1.0
 
 
+def period_string(seconds: float) -> str:
+    """The period as neuron-monitor will honour it: whole seconds, at least 1.
+
+    **It ignores anything else and falls back to its 5-second default.**
+    Measured with this module's own config on inf2.xlarge 2026-09-11, the
+    period each sample reported:
+
+        "1.0s"   5.0 s   (3 samples in 16 s)    <- what this module sent
+        "1s"     1.0 s   (13 samples in 16 s)
+        "0.5s"   5.0 s
+        "5.0s"   5.0 s
+        "500ms"  no samples at all
+
+    This built the string as f"{seconds}s", so the default of 1.0 went out
+    as "1.0s" and every run since sampled five times more coarsely than it
+    asked. The suite recorded the result as a property of the tool --
+    "neuron-monitor floors around two seconds whatever --monitor-period
+    asks for" -- while the 2026-08-26 schema probe, which wrote "1s", had
+    been receiving 1.0 s periods all along.
+    """
+    return f"{max(1, round(seconds))}s"
+
+
 def _scrub(sample: dict) -> dict:
     """Remove host identifiers from one neuron-monitor sample, recursively."""
     if not isinstance(sample, dict):
@@ -284,6 +307,14 @@ class NeuronMonitor:
             self._thread.start()
             return True
 
+        honoured = period_string(self.period_seconds)
+        if float(honoured[:-1]) != self.period_seconds:
+            self._warn_once(
+                "period",
+                f"neuron-monitor honours whole seconds only; sampling every "
+                f"{honoured} rather than {self.period_seconds}s.",
+            )
+
         binary = shutil.which("neuron-monitor")
         if binary is None:
             self._warn_once(
@@ -294,7 +325,7 @@ class NeuronMonitor:
 
         config = json.dumps(
             {
-                "period": f"{self.period_seconds}s",
+                "period": period_string(self.period_seconds),
                 "neuron_runtimes": [
                     {
                         "tag_filter": ".*",
@@ -493,6 +524,7 @@ class NeuronMonitor:
         }
 
         completed_series: typing.List[typing.Tuple[int, int, typing.Any]] = []
+        periods: typing.List[float] = []
 
         for index, sample in enumerate(self._samples):
             # One reading per core per sample, the largest any runtime
@@ -508,6 +540,9 @@ class NeuronMonitor:
             sample_flops: typing.Dict[str, float] = {}
             for runtime in (sample.get("neuron_runtime_data") or []):
                 report = runtime.get("report") or {}
+                period = (report.get("neuroncore_counters") or {}).get("period")
+                if isinstance(period, (int, float)) and period > 0.5:
+                    periods.append(float(period))
                 cores = (report.get("neuroncore_counters") or {}).get(
                     "neuroncores_in_use"
                 ) or {}
@@ -590,6 +625,11 @@ class NeuronMonitor:
 
         summary = {
             "samples": len(self._samples),
+            # The period the monitor actually delivered, from the samples'
+            # own `period` field -- the second quantity that would have
+            # shown "1.0s" being ignored (requested 1, delivered 5).
+            "sample_period_s": (round(statistics.median(periods), 3)
+                                if periods else None),
             "execution_errors": errors,
             "total_executions": executions,
             # Over whole busy periods, like effective_flops. The mean was

@@ -1126,23 +1126,13 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 
 # Below this many samples a monitor-sourced mean is not a measurement.
 #
-# What that costs in wall time is not what the --monitor-period flag
-# suggests. Measured on trn1.2xlarge 2026-09-10, samples actually
-# delivered over a 20-second window:
-#
-#     requested 0.2s -> 11 samples, one every 1.82s   (9.1x slower)
-#     requested 1.0s ->  5 samples, one every 4.00s   (4.0x slower)
-#     requested 5.0s ->  5 samples, one every 4.00s
-#
-# **neuron-monitor has a floor around two seconds and does not deliver
-# the requested rate at or below one.** At the default period, five
-# samples takes roughly twenty seconds of *executing* -- not of
-# --duration, since samples taken while the workload compiles are
-# dropped.
-#
-# So the advice this suite gives -- "run longer or with a shorter
-# --monitor-period" -- is only half right, and the half that works is
-# running longer.
+# This block used to say neuron-monitor "has a floor around two seconds and
+# does not deliver the requested rate at or below one", from samples-per-
+# window counts on trn1.2xlarge 2026-09-10. It was the config, not the tool:
+# the period went out as "1.0s", which neuron-monitor ignores in favour of
+# its 5 s default, while "1s" delivers 1 s periods (inf2.xlarge 2026-09-11;
+# see neuron_monitor.period_string). --monitor-period works in whole
+# seconds, and 1 is both the default and the smallest it honours.
 #
 # **The five was set against a symptom of something else.** The spread it
 # guarded against -- 17.74, 26.14, 26.13 -- was a partly busy edge period
@@ -1150,7 +1140,7 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 # the whole periods of one tensor_virus run read 72.34, 72.35, 71.02,
 # 72.35, 72.57, and the two edges 18.25 and 53.43. The mean is now over
 # whole periods only (neuron_monitor.whole_period_flops), each already a
-# 5-second average of a steady kernel, and two is the least that lets one
+# whole-period average of a steady kernel, and two is the least that lets one
 # be checked against another -- the same reasoning as MIN_RATE_PERIODS.
 MIN_FLOPS_SAMPLES = 2
 
@@ -1202,9 +1192,7 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
     return (
         f"effective_flops averaged over {min(counts)} whole sampling "
         f"period(s); fewer than {MIN_FLOPS_SAMPLES} leaves no second period "
-        "to check it against, so run longer before quoting this -- "
-        "neuron-monitor floors around 2s per sample whatever "
-        "--monitor-period asks for"
+        "to check it against, so run longer before quoting this"
     )
 
 
@@ -1618,7 +1606,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--monitor-period",
         type=float,
         default=1.0,
-        help="neuron-monitor sampling period in seconds",
+        help="neuron-monitor sampling period in whole seconds (1 is the "
+             "smallest it honours; other values are rounded)",
     )
     parser.add_argument(
         "--mock",

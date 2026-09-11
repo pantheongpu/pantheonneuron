@@ -120,3 +120,39 @@ def test_a_period_the_monitor_did_not_report_is_not_divided_by():
     rate = execution_rate(series)
     assert rate["execution_samples_used"] == 1
     assert rate["executions_per_s"] == 100.0
+
+
+# -- the period neuron-monitor will actually honour -------------------------
+
+from neuron_monitor import NeuronMonitor, period_string  # noqa: E402
+
+
+def test_the_period_goes_out_in_whole_seconds():
+    """inf2.xlarge 2026-09-11: "1.0s" and "0.5s" were ignored in favour of
+    the 5 s default; "1s" delivered 1 s periods."""
+    assert period_string(1.0) == "1s"
+    assert period_string(5.0) == "5s"
+    assert period_string(0.5) == "1s"
+    assert period_string(0.2) == "1s"
+    assert period_string(2.6) == "3s"
+    for value in (0.2, 0.5, 1.0, 2.6, 5.0):
+        text = period_string(value)
+        assert "." not in text and text.endswith("s") and int(text[:-1]) >= 1
+
+
+def test_the_config_uses_the_honoured_string():
+    import inspect
+    source = inspect.getsource(NeuronMonitor.start)
+    assert '"period": period_string(self.period_seconds)' in source
+    assert 'f"{self.period_seconds}s"' not in source
+
+
+def test_the_delivered_period_is_reported():
+    def sample(period):
+        return {"neuron_runtime_data": [{"report": {"neuroncore_counters": {
+            "period": period, "neuroncores_in_use": {
+                "0": {"effective_flops": 7e13, "neuroncore_utilization": 99.0}}}}}]}
+    monitor = NeuronMonitor(mock=True)
+    monitor._samples = [sample(0.004), sample(5.0), sample(5.001), sample(4.999)]
+    monitor._sample_times = [0.0, 5.0, 10.0, 15.0]
+    assert monitor.aggregate()["sample_period_s"] == 5.0
