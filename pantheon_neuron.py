@@ -401,7 +401,9 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             # advanced. Those need different responses and the generic
             # message covered all three: graph_replay degraded on
             # 2026-09-10 and the row said only that the rate was absent.
-            because = metrics.get("execution_rate_absent")
+            because = metrics.get("execution_rate_absent"
+                                  if _wants_execution_rate(workload)
+                                  else "effective_flops_absent")
             detail = detail or "; ".join(filter(None, [
                 f"neuron-monitor reported no {counter}, so this run has "
                 "no Score from its declared source",
@@ -1073,7 +1075,7 @@ def _wants_monitor_score(workload) -> bool:
 def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     """The Score its registry entry declares, read from monitor telemetry.
 
-    The compute workloads declare ``mean(effective_flops) / 1e12``. That
+    The compute workloads declare ``mean(effective_flops over whole busy periods) / 1e12``. That
     counter exists only in the neuron-monitor stream: it is absent from the
     CloudWatch metric set, and sysfs leaves ``flop_count`` at zero. So the
     figure has to be taken from the telemetry the run just collected rather
@@ -1131,7 +1133,16 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 # So the advice this suite gives -- "run longer or with a shorter
 # --monitor-period" -- is only half right, and the half that works is
 # running longer.
-MIN_FLOPS_SAMPLES = 5
+#
+# **The five was set against a symptom of something else.** The spread it
+# guarded against -- 17.74, 26.14, 26.13 -- was a partly busy edge period
+# pulling the mean down, not too few readings: on trn1.2xlarge 2026-09-10
+# the whole periods of one tensor_virus run read 72.34, 72.35, 71.02,
+# 72.35, 72.57, and the two edges 18.25 and 53.43. The mean is now over
+# whole periods only (neuron_monitor.whole_period_flops), each already a
+# 5-second average of a steady kernel, and two is the least that lets one
+# be checked against another -- the same reasoning as MIN_RATE_PERIODS.
+MIN_FLOPS_SAMPLES = 2
 
 # The completion rate needs fewer, because each of its samples is not a
 # reading but a tally: execution_summary.completed counts every execution
@@ -1179,10 +1190,11 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
     if not counts or min(counts) >= MIN_FLOPS_SAMPLES:
         return None
     return (
-        f"effective_flops averaged over {min(counts)} sample(s); a mean over "
-        f"fewer than {MIN_FLOPS_SAMPLES} moves with any one of them, so run "
-        "longer before quoting this -- neuron-monitor floors around 2s per "
-        "sample whatever --monitor-period asks for"
+        f"effective_flops averaged over {min(counts)} whole sampling "
+        f"period(s); fewer than {MIN_FLOPS_SAMPLES} leaves no second period "
+        "to check it against, so run longer before quoting this -- "
+        "neuron-monitor floors around 2s per sample whatever "
+        "--monitor-period asks for"
     )
 
 

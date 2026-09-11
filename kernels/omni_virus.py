@@ -1,6 +1,6 @@
 """All engines at once: tensor, vector, scalar and GpSimd.
 
-Score: **TFLOPS**, from ``mean(effective_flops) / 1e12``, with per-engine
+Score: **TFLOPS**, from ``mean(effective_flops over whole busy periods) / 1e12``, with per-engine
 ``active_time_percent`` recorded alongside as the registry declares.
 
 Every other compute workload leans on one engine. `tensor_virus` saturates

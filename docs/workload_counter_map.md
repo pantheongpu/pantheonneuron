@@ -45,7 +45,7 @@ A `—` in an instance column means the capability gate skips it: `all_reduce` a
 
 ## How a monitor-sourced Score is read
 
-The five compute workloads declare `mean(effective_flops) / 1e12`. That counter exists only in the neuron-monitor stream — it is absent from the CloudWatch metric set, and sysfs leaves `flop_count` at zero — so unlike the bandwidth kernels, their Score cannot come from the kernel. `pantheon_neuron.monitor_score` reads it from the telemetry the run just collected, after the monitor stops.
+The five compute workloads declare `mean(effective_flops over whole busy periods) / 1e12`. That counter exists only in the neuron-monitor stream — it is absent from the CloudWatch metric set, and sysfs leaves `flop_count` at zero — so unlike the bandwidth kernels, their Score cannot come from the kernel. `pantheon_neuron.monitor_score` reads it from the telemetry the run just collected, after the monitor stops.
 
 `mean` is across NeuronCores. A part reports one series per core, and a workload that saturates the device runs on all of them; summing would make a two-core part look twice as fast as the same silicon reported per core.
 

@@ -118,7 +118,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12')),
     # dtype is uint8, not int8, and the difference is measured rather than
     # stylistic. trn1's Tensor Engine rejects signed int8 outright --
     # `nc_matmul does not support stationary.dtype=int8`, 2026-09-08 -- and
@@ -145,7 +145,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12   # uint8 ops, reported as TOPS')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12   # uint8 ops, reported as TOPS')),
     Workload("pulse_virus", "core",
              "Duty-cycled load to provoke power/clock transients.", _COMPUTE,
              unit="TFLOPS",
@@ -156,7 +156,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'neuroncore_counters.*.effective_flops',
                      'throttle_active_nc0_time_ns',
                  ),
-                 formula='mean(effective_flops) / 1e12; throttle_active_nc0_time_ns recorded alongside')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12; throttle_active_nc0_time_ns recorded alongside')),
     Workload("transformer_virus", "core",
              "Full transformer block under sustained load.", _COMPUTE,
              unit="TFLOPS",
@@ -165,7 +165,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12')),
     Workload("omni_virus", "core",
              "All engines concurrently: tensor, vector, scalar, GpSimd.", _COMPUTE,
              unit="TFLOPS",
@@ -179,7 +179,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'scalar_engine_active_time_percent',
                      'gpsimd_engine_active_time_percent',
                  ),
-                 formula='mean(effective_flops) / 1e12; per-engine active_time_percent recorded alongside')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12; per-engine active_time_percent recorded alongside')),
 
     # -- memory: HBM bandwidth --------------------------------------------
     Workload("memory_read", "memory",

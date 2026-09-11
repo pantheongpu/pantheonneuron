@@ -77,7 +77,7 @@ def _prose():
     return [
         "## How a monitor-sourced Score is read",
         "",
-        "The five compute workloads declare `mean(effective_flops) / 1e12`. "
+        "The five compute workloads declare `mean(effective_flops over whole busy periods) / 1e12`. "
         "That counter exists only in the neuron-monitor stream — it is absent "
         "from the CloudWatch metric set, and sysfs leaves `flop_count` at zero "
         "— so unlike the bandwidth kernels, their Score cannot come from the "

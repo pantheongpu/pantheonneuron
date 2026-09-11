@@ -1,7 +1,7 @@
 """The Score path for workloads that declare neuron-monitor as their source.
 
 Five core workloads -- tensor_virus, int_virus, pulse_virus,
-transformer_virus, omni_virus -- declare ``mean(effective_flops) / 1e12``.
+transformer_virus, omni_virus -- declare ``mean(effective_flops over whole busy periods) / 1e12``.
 That counter lives only in the neuron-monitor stream, so unlike the
 bandwidth kernels the Score cannot come from the kernel: it has to be read
 out of telemetry after the monitor stops. These tests cover that arithmetic
@@ -379,7 +379,7 @@ def _tensor_virus():
 
 
 def test_a_flops_scored_workload_is_told_about_effective_flops():
-    metrics = {"effective_flops": {"0": {"samples": 3, "mean": 1.0}}}
+    metrics = {"effective_flops": {"0": {"samples": 1, "mean": 1.0}}}
     message = pantheon_neuron.thin_monitor_sample(metrics, _tensor_virus())
     assert message is not None
     assert "effective_flops" in message
@@ -414,7 +414,7 @@ def test_graph_replay_with_enough_counter_samples_is_quiet():
 def test_the_flops_path_still_applies_without_a_workload():
     """The old signature keeps working, which is what every caller but
     the orchestrator uses."""
-    metrics = {"effective_flops": {"0": {"samples": 2, "mean": 1.0}}}
+    metrics = {"effective_flops": {"0": {"samples": 1, "mean": 1.0}}}
     assert "effective_flops" in pantheon_neuron.thin_monitor_sample(metrics)
 
 
@@ -436,7 +436,7 @@ def test_the_thinness_advice_does_not_recommend_a_shorter_period():
     Running longer does work, and is what both messages now say.
     """
     flops = pantheon_neuron.thin_monitor_sample(
-        {"effective_flops": {"0": {"samples": 2, "mean": 1.0}}})
+        {"effective_flops": {"0": {"samples": 1, "mean": 1.0}}})
     counter = pantheon_neuron.thin_monitor_sample(
         {"execution_samples_used": 1}, _graph_replay())
 

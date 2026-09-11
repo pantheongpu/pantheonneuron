@@ -106,10 +106,10 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.50 GB/s | `neuron-profile` |
 | `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
 | `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
-| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 71.80 TFLOPS | `neuron-monitor` |
+| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 72.46 TFLOPS | `neuron-monitor` |
 | `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
-| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 37.42 TFLOPS | `neuron-monitor` |
-| `omni_virus` | ✅ at the pinned 8192³ | 54.02 TFLOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 36.17 TFLOPS | `neuron-monitor` |
+| `omni_virus` | ✅ at the pinned 8192³ | 54.12 TFLOPS | `neuron-monitor` |
 | `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
 | `graph_replay` | ✅ per-period completion tallies, cv 0.006 | 3,038.8 graph-steps/s | `neuron-monitor` |
 | `allocation_fragmentation` | ✅ | 2,265.7 events/s | workload |
@@ -203,7 +203,7 @@ part.
 
 ### The pinned problem compiles, and neuron-monitor finally scored
 
-`tensor_virus` and its four relatives declare `mean(effective_flops) / 1e12`
+`tensor_virus` and its four relatives declare `mean(effective_flops over whole busy periods) / 1e12`
 from neuron-monitor. **That source had never once produced a Score**, and the
 reason was not the monitor: the pinned 8192³ problem had never compiled, so
 the compute workloads had only ever been run by hand at a reduced shape,
@@ -867,12 +867,19 @@ how many chips an instance carries.
 | `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
 | `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
 | `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
-| `pulse_virus` | 37.42 TFLOPS | 1 of 2, 50% duty | **78.8%** |
-| `tensor_virus` | 71.80 TFLOPS | 1 of 2 | **75.6%** |
+| `tensor_virus` | 72.46 TFLOPS | 1 of 2 | **76.3%** |
+| `pulse_virus` | 36.17 TFLOPS | 1 of 2, 50% duty | **76.2%** |
 | `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |
-| `omni_virus` | 54.0 TFLOPS | 1 of 2 | 56.8% |
+| `omni_virus` | 54.12 TFLOPS | 1 of 2 | 57.0% |
 | `transformer_virus` | 53.2 TFLOPS | 1 of 2 | 56.0% |
 | `tensor_virus`, `streaming` tiling (before 2026-09-10) | 26.1 TFLOPS | 1 of 2 | 27.5% |
+
+The monitor-sourced figures above are means over **whole** sampling
+periods (trn1.2xlarge 2026-09-10). Until then the mean included the
+partly busy first and last periods: one `tensor_virus` run averaged 61.76
+that way against 72.13 over its whole periods. The repeats now agree to
+cv 0.0005 (`tensor_virus`) and below 0.0001 (`omni_virus`). See
+[`docs/neuron_counters.md`](docs/neuron_counters.md).
 
 "Cores it had" is what the run exposed, not what the problem says. The
 profiler reservation sets `NEURON_RT_VISIBLE_CORES=0` on every

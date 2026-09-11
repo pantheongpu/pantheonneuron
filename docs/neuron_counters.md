@@ -141,6 +141,25 @@ which is right for per-period tallies and inconsistent with treating
 `completed` as a total. That inconsistency sat in one function the whole
 time.
 
+### `effective_flops` is a rate per period, and the edge periods read low
+
+The AWS guide defines `effective_flops` as operations per second during
+the captured period, which is right. But the first and last periods of a
+run are only partly busy, so they report a fraction of the rate.
+Measured on trn1.2xlarge 2026-09-10, `tensor_virus` 8192³ for 30 s:
+
+```
+effective_flops (TFLOPS):  18.25, 72.34, 72.35, 71.02, 72.35, 72.57, 53.43
+utilisation (%):           25,    99,    99,    97,    99,    99.5,  73
+```
+
+The mean of all seven is 61.76. The mean of the five whole periods is
+72.13, against the kernel's own analytic 71.93. The declared Score was
+the first, and how low it read depended on where the monitor's 5-second
+grid fell against the run. That is the spread the repeats kept showing.
+The Score is now the mean over whole periods, and the all-sample mean
+is reported beside it (`mean_all_samples`).
+
 ## sysfs counters that stay zero
 
 `stats/other_info/` exposes `flop_count`, `inference_count`,

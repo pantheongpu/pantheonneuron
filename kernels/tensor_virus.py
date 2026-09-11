@@ -1,6 +1,6 @@
 """Dense matmul kernel for the ``tensor_virus`` workload.
 
-Score: **TFLOPS**, from ``mean(effective_flops) / 1e12`` as declared in the
+Score: **TFLOPS**, from ``mean(effective_flops over whole busy periods) / 1e12`` as declared in the
 registry. That counter comes from neuron-monitor rather than from this
 kernel, so the Score is read by the orchestrator after the monitor stops --
 see ``pantheon_neuron.monitor_score``. What this module returns is the

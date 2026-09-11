@@ -145,6 +145,45 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
     return summary
 
 
+def whole_period_flops(values: typing.Sequence[float]) -> typing.Dict[str, typing.Any]:
+    """mean(effective_flops) over the periods the core was busy throughout.
+
+    ``values`` are one core's nonzero readings in arrival order. Each is a
+    rate over its sampling period, so the first and last busy periods --
+    which the work only partly filled -- read low. Measured on
+    trn1.2xlarge 2026-09-10, tensor_virus 8192^3 for 30 s, one sample per
+    ~5 s:
+
+        18.25, 72.34, 72.35, 71.02, 72.35, 72.57, 53.43 TFLOPS
+        utilisation 25%, then 97-99.5%, then 73%
+
+    Mean of all seven: 61.76. Mean of the five whole periods: 72.13,
+    against the kernel's own analytic 71.93 from the same run. The Score
+    was the first, low by as much as the edges happened to cover -- which
+    varies with where the monitor's grid falls against the run, and is
+    what the repeats' spreads were (65.05 to 71.94 on one run, rising).
+
+    The same rule execution_rate applies to the completion tallies. The
+    all-sample mean is kept beside it so the difference stays visible.
+    """
+    summary: typing.Dict[str, typing.Any] = {
+        "peak": int(max(values)),
+        "samples_all": len(values),
+        "mean_all_samples": int(statistics.fmean(values)),
+    }
+    whole = list(values[1:-1])
+    # How many whole periods the mean is over.
+    summary["samples"] = len(whole)
+    if whole:
+        summary["mean"] = int(statistics.fmean(whole))
+    else:
+        summary["absent"] = (
+            f"the core was busy across {len(values)} sampling period(s) and "
+            "none of them throughout, so no period measures its rate -- run "
+            "longer")
+    return summary
+
+
 def _completed_in(sample: dict) -> typing.Optional[int]:
     """The completion tally one sample carries, summed over runtimes."""
     total = None
@@ -494,25 +533,12 @@ class NeuronMonitor:
             }
         if flops:
             summary["effective_flops"] = {
-                core_id: {
-                    "mean": int(statistics.fmean(values)),
-                    "peak": int(max(values)),
-                    # How many samples the mean is over. The declared
-                    # formula is mean(effective_flops), and the monitor
-                    # samples across the whole run -- compile included,
-                    # where the counter reads nothing and the sample is
-                    # dropped. A short run therefore averages a handful of
-                    # samples, and one caught mid-ramp moves the mean a
-                    # long way.
-                    #
-                    # Measured on trn1.2xlarge 2026-09-10 at DURATION=10:
-                    # tensor_virus repeated 17.74, 26.14, 26.13 TFLOPS.
-                    # The low one is not a slow run, it is a mean over
-                    # fewer good samples.
-                    "samples": len(values),
-                }
+                core_id: whole_period_flops(values)
                 for core_id, values in sorted(flops.items())
             }
+            if not any("mean" in core for core in summary["effective_flops"].values()):
+                summary["effective_flops_absent"] = next(
+                    core["absent"] for core in summary["effective_flops"].values())
         if latency_p50:
             summary["device_latency_seconds"] = {
                 "p50_mean": round(statistics.fmean(latency_p50), 6),

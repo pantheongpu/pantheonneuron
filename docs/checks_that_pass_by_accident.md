@@ -460,6 +460,14 @@ schema probe's baseline in `data/baselines.json` is derived as
 written later read the same field another way, and nothing compared the
 two.
 
+Once the periods were visible, the same flaw showed up in the other
+counter. `effective_flops` is correctly a rate per period, but the
+TFLOPS Score averaged every busy period, including the partly busy
+first and last. On one `tensor_virus` run the edges read 18.25 and 53.43
+against ~72.3 in between, which put the Score 14% low. The five-sample
+minimum had been set against that same symptom (17.74 / 26.14 / 26.13)
+and attributed to thin sampling. It was the edges.
+
 The same function had summed the `error_summary` counts from the same
 stats block, which only makes sense if they are per-period. Two
 readings of one block's semantics sat a few lines apart. **When a counter
