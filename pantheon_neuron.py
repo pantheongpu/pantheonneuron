@@ -280,6 +280,39 @@ def short_window(measured: typing.Optional[float],
     )
 
 
+def monitor_period_for(workload, requested: float) -> float:
+    """The sampling period to ask neuron-monitor for, for this workload.
+
+    The request, except for a pulsed workload, which is sampled over whole
+    pulse cycles: the smallest whole-second multiple of its ``period_s``
+    that is at least the request.
+
+    pulse_virus loads for half of every 2 s and idles for the other half.
+    On 5 s periods every sample mixed both halves. Once the period was
+    honoured at 1 s, each sample covered half a cycle, and on trn1.2xlarge
+    2026-09-11 the readings beat against the pulse: 68.13, 14.31, 52.74,
+    16.49 ... TFLOPS. The mean of 28 contiguous periods was still right
+    (38.76), but a period landing wholly inside an idle half reads zero,
+    and a zero ends the busy block the Score is averaged over
+    (neuron_monitor.whole_periods) -- the Score would then cover whichever
+    stretch happened to be longest. A sample spanning whole cycles cannot
+    read zero while the workload runs. Measured at 2 s the same day, the
+    Score sat 0.03% and 1.5% from the kernel's own FLOPs on two runs,
+    against 3-4% low at 1 s. The residual is the cycle's real length,
+    ~2.07 s, sliding against the 2 s window.
+
+    A pulse period that is not a whole number of seconds has no whole-
+    second multiple to sample at below a few cycles, and none is pinned,
+    so it keeps the request.
+    """
+    pulse = (workload.problem or {}).get("period_s")
+    if not isinstance(pulse, (int, float)) or pulse <= 0 or pulse != int(pulse):
+        return requested
+    pulse = int(pulse)
+    cycles = max(1, -(-round(requested) // pulse))
+    return float(cycles * pulse)
+
+
 def _measure_once(workload, devices, duration: int, monitor_period: float) -> dict:
     """One execution of one workload, scored. See ``run_workload``."""
     skip = workload.skip_reason(devices)
@@ -309,7 +342,8 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             "Telemetry": {"samples": 0},
         }
 
-    monitor = neuron_monitor.NeuronMonitor(period_seconds=monitor_period)
+    monitor = neuron_monitor.NeuronMonitor(
+        period_seconds=monitor_period_for(workload, monitor_period))
     telemetry_started = monitor.start([device.index for device in devices])
 
     started = time.time()

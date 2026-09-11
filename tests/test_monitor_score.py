@@ -477,3 +477,38 @@ def test_the_rate_threshold_rests_on_the_measured_periods():
     assert pantheon_neuron.MIN_RATE_PERIODS == 2
     assert pantheon_neuron.thin_monitor_sample(
         {"execution_samples_used": 2}, _graph_replay()) is None
+
+
+# -- a pulsed workload is sampled over whole cycles ------------------------
+
+def _pulse():
+
+    return next(w for w in registry.WORKLOADS if w.name == "pulse_virus")
+
+
+def test_a_pulsed_workload_is_sampled_over_whole_cycles():
+    """At 1 s a sample covers half of pulse_virus's 2 s cycle, and one that
+    falls inside an idle half reads zero and splits the busy block."""
+    assert pantheon_neuron.monitor_period_for(_pulse(), 1.0) == 2.0
+
+
+def test_the_whole_cycle_period_is_at_least_the_request():
+    assert pantheon_neuron.monitor_period_for(_pulse(), 2.0) == 2.0
+    assert pantheon_neuron.monitor_period_for(_pulse(), 3.0) == 4.0
+    assert pantheon_neuron.monitor_period_for(_pulse(), 5.0) == 6.0
+
+
+def test_a_steady_workload_keeps_the_request():
+
+    steady = next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+    assert pantheon_neuron.monitor_period_for(steady, 1.0) == 1.0
+
+
+def test_every_pinned_pulse_period_is_whole_seconds():
+    """neuron-monitor takes whole seconds; a fractional pulse would get no
+    whole-cycle period and fall back to half-cycle samples."""
+
+    for workload in registry.WORKLOADS:
+        pulse = (workload.problem or {}).get("period_s")
+        if pulse is not None:
+            assert pulse == int(pulse), workload.name

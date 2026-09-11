@@ -520,6 +520,18 @@ the gap was explained instead of detected. The row now reports
 `sample_period_s`. **Before recording a limit of a tool, check that the
 tool received the argument you think you sent.**
 
+The fix moved a check that had depended on the wrong argument. The busy
+block that monitor Scores are averaged over ends at a zero reading, and
+its docstring said no workload pauses long enough to produce one, since
+pulse_virus "cycles every 2 s, inside the monitor's ~5 s period". At an
+honoured 1 s, each sample covered half a cycle and the readings beat
+against the pulse (68.13, 14.31, 52.74, 16.49 ...). The Score came out
+3-4% under the kernel's own FLOPs over the same run (38.76 against 40.02),
+and a sample falling wholly in an idle half would have split the block.
+Sampled over whole 2 s cycles, every period read 40.67-40.69, and the
+Score landed within 0.03% of the kernel's figure (1.5% on a second run,
+where the 2.07 s cycle slid against the 2 s window).
+
 ### 25. Seventeen tests, and none of them ran the command
 
 `kernels/collectives.py` had seventeen tests, all green, and a

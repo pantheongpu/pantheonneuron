@@ -188,8 +188,11 @@ def whole_periods(values: typing.Sequence[float]) -> typing.Tuple[list, list]:
 
     The trade-off, stated rather than hidden: a workload that paused for a
     whole sampling period mid-run would be measured over its longest
-    uninterrupted stretch. None does -- pulse_virus cycles every 2 s,
-    inside the monitor's ~5 s period.
+    uninterrupted stretch. This used to say none does because pulse_virus
+    cycles every 2 s "inside the monitor's ~5 s period" -- a period that
+    was 5 s only because the config was ignored. At the honoured 1 s its
+    idle halves can fill a period, so the orchestrator samples it over
+    whole cycles instead (pantheon_neuron.monitor_period_for).
     """
     best, current = [], []
     for value in values:
