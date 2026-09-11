@@ -30,6 +30,24 @@ and both earlier diagnoses were wrong.
 size of the cache, not to the number of tokens appended. For anyone serving
 on this hardware that is a larger finding than the workload it came from.
 
+### Counted, 2026-09-11
+
+The evidence above is timing and compile time. neuron-profile counts HBM
+bytes per execution directly. For `kv_cache_churn`'s eight ring-slot write
+graphs at the pinned problem (134.22 MB of K and V resident), trn1.2xlarge:
+
+| per slot write | bytes | × resident |
+|---|--:|--:|
+| read | 268.47 MB | 2.00 |
+| written | 247.46 MB | 1.84 |
+
+That confirms the whole-cache copy, and shows the copy happens **twice**.
+The workload had charged one copy (2 × resident, read plus write), so its
+`cache_gbps` reported 102 GB/s for 196 GB/s of actual traffic. Why twice is
+not measured. A plausible reading is torch-xla copying the functional
+result back into the mutated tensor's buffer. Appending 16.8 MB of K and
+V moves 516 MB.
+
 ## Where else the assumption is made
 
 ### `pcie_bandwidth` — suspected, unverified

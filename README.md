@@ -684,7 +684,14 @@ hidden, a 128 MiB cache and a 256 MiB step — and `bytes_per_step` reports the
 copy rather than the slice, because counting the slice would report a
 sixteenth of what the hardware moves.
 
-**Unverified at this size.** The 2 GiB version never finished compiling.
+**Counted at this size, 2026-09-11, and it is twice what was assumed.**
+neuron-profile on every ring-slot graph at the pinned problem: **268.47 MB
+read and 247.46 MB written per step**, against a 134.22 MB cache. The
+caches are read twice and very nearly rewritten twice, so each append
+moves about 3.8 times the cache it updates. `cache_gbps` counted one copy
+and reported 102 GB/s; the hardware moves **196 GB/s**. That is a
+memory-bound double copy, not an update running at a third of the read
+bandwidth.
 
 ### What repeating the whole pass found
 

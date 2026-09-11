@@ -212,6 +212,27 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     }
 
 
+# HBM traffic of one ring-slot write, as multiples of the resident K+V
+# caches -- counted by neuron-profile on trn1.2xlarge 2026-09-11, all
+# eight slot graphs at the pinned problem (134.22 MB resident):
+#
+#     read  268.47 MB per execution  = 2.000 x resident
+#     write 247.46 MB per execution  = 1.844 x resident
+#     active 2.49-2.56 ms; the timed loop runs 2.63 ms per step
+#
+# This plan charged 2 x resident -- one read of the cache, one write of the
+# new one -- from the finding that XLA has no in-place write, which was
+# established from timings. The counter confirms the whole-cache copy and
+# says it is **twice** that: the caches are read twice and very nearly
+# rewritten twice, so cache_gbps reported 102 GB/s for 197 GB/s of real
+# traffic. Why twice is not measured here (a plausible reading is torch-
+# xla copying the functional result back into the mutated tensor's
+# buffer). Measured at the pinned shape only; other shapes are assumed to
+# copy the same way.
+COPY_READS_PER_RESIDENT = 268.47 / 134.22
+COPY_WRITES_PER_RESIDENT = 247.46 / 134.22
+
+
 def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int]:
     """Cache geometry, and the traffic one append actually costs.
 
@@ -235,8 +256,10 @@ def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int
     true, everything else follows.
 
     So ``bytes_per_step`` reports the copy, not the slice. A workload that
-    counted the slice would be reporting a twentieth of the traffic the
+    counted the slice would be reporting a sixteenth of the traffic the
     hardware moves, which is the mistake this kernel has now made twice.
+    It then counted one copy where the hardware makes two -- see
+    COPY_READS_PER_RESIDENT, which neuron-profile settled.
 
     Pure, so the sizing can be checked without a device.
     """
@@ -260,7 +283,10 @@ def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int
     resident = 2 * layers * context * hidden * width
     # What the slice appears to write, and what the copy really costs.
     slice_bytes = tokens * layers * 2 * hidden * width
-    per_step = 2 * resident        # read the cache, write a new one
+    # Counted, not inferred: see COPY_READS_PER_RESIDENT.
+    read_bytes = round(COPY_READS_PER_RESIDENT * resident)
+    write_bytes = round(COPY_WRITES_PER_RESIDENT * resident)
+    per_step = read_bytes + write_bytes
 
     return {
         "hidden": hidden, "context": context, "layers": layers,
@@ -268,14 +294,18 @@ def cache_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, int
         "element_bytes": width,
         "resident_bytes": resident,
         "slice_bytes": slice_bytes,
+        "read_bytes_per_step": read_bytes,
+        "write_bytes_per_step": write_bytes,
         "bytes_per_step": per_step,
     }
 
 
-# Single-core HBM read bandwidth measured by memory_read on trn1.2xlarge,
-# 2026-09-08. Used only to judge whether this workload is timing memory or
-# timing the runtime -- not to score anything.
-MEASURED_HBM_GBPS = 256.2
+# Single-core HBM read bandwidth measured by memory_read on trn1.2xlarge.
+# Used only to judge whether this workload is timing memory or timing the
+# runtime -- not to score anything. 256.2 until 2026-09-10, when the
+# profiler's 2.08 ms idle startup stopped counting as transfer time; see
+# profiler.bandwidth_gbps.
+MEASURED_HBM_GBPS = 272.9
 
 
 def verify_memory_bound(bytes_per_s: float,

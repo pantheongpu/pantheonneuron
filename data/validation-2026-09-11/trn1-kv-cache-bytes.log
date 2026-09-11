@@ -1,0 +1,21 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. How many HBM bytes does one kv_cache_churn
+# update move? PREDICTED: whole-cache copy -> ~134 MB read + ~134 MB written per step;
+# in-place slice -> ~16.8 MB written, little read.
+# 1. run_cache_churn for 10 s on core 0 (own compile cache), then every NEFF profiled on core 1.
+run: 3811 steps in 10.01s = 380.9 steps/s; plan charges 268.4 MB/step (slice 16.8 MB); cache_gbps 102.2; cache_element 2.0; warning None
+  MODULE_11150657618145712045+e3 read      0.00 MB  write      0.00 MB  total    2.087 ms  active    0.003 ms
+  MODULE_11745126291861248874+e3 read    268.47 MB  write    247.46 MB  total    4.576 ms  active    2.490 ms
+  MODULE_14053505439863387110+e3 read    268.47 MB  write    247.46 MB  total    4.580 ms  active    2.494 ms
+  MODULE_17342210190898298512+e3 read    268.47 MB  write    247.46 MB  total    4.607 ms  active    2.516 ms
+  MODULE_1765986646780341220+e30 read    268.47 MB  write    247.46 MB  total    4.597 ms  active    2.508 ms
+  MODULE_3187552729892665894+e30 read    269.00 MB  write    247.99 MB  total    4.654 ms  active    2.563 ms
+  MODULE_3620361301019757567+e30 read    268.47 MB  write    247.46 MB  total    4.605 ms  active    2.517 ms
+  MODULE_4043728451285477583+e30 read    269.00 MB  write    247.99 MB  total    4.655 ms  active    2.558 ms
+  MODULE_7045515199482539716+e30 read    268.47 MB  write    247.46 MB  total    4.607 ms  active    2.516 ms
+  MODULE_9510334173366681712+e30 read    134.22 MB  write    142.61 MB  total    2.873 ms  active    0.787 ms
+
+## 2. Harness after cache_plan charges the counted traffic, --duration 20 --repeat 3
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    3 repeats: 97161.5896 to 97402.3378, median 97298.2756, cv 0.0012
+   Score 97298.2756 | Detail: ''
+   Measurement {'cache_gbps': 196.0869121300906, 'cache_fill': 1.0, 'entry_fill': 2.0, 'cache_element': 2.0}
