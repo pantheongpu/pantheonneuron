@@ -25,6 +25,7 @@ import os
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import registry, tiling
 from neuron_device import NeuronDevice
 
@@ -178,16 +179,34 @@ def test_row_carries_score_unit_and_problem(mock_env):
     assert "Score" in row
 
 
-def test_mock_mode_never_fabricates_a_score(mock_env):
+# Mock mode sleeps for the requested duration -- `time.sleep(min(duration,
+# 2))` in pantheon_neuron._execute -- so a test looping over every workload
+# at duration=1 spends a real second per workload doing nothing.
+#
+# That one test took 26 of the suite's 59 seconds. The duration is not what
+# it is testing: the assertion is that mock mode returns no Score, which is
+# true at any duration. A test suite people wait a minute for is a test
+# suite people stop running before pushing.
+MOCK_DURATION = 0.02
+
+
+@pytest.mark.parametrize(
+    "workload",
+    [w for w in registry.WORKLOADS if w.runnable_on(TRN1)],
+    ids=lambda w: w.name,
+)
+def test_mock_mode_never_fabricates_a_score(workload, mock_env):
     """A synthetic Score would flow into a report and be compared against
-    real GPU numbers."""
-    for workload in registry.WORKLOADS:
-        if not workload.runnable_on(TRN1):
-            continue
-        row = pantheon_neuron.run_workload(
-            workload, TRN1, duration=1, monitor_period=0.01
-        )
-        assert row["Score"] is None, f"{workload.name} invented a Score in mock mode"
+    real GPU numbers.
+
+    Parametrised rather than looped, so a failure names the workload
+    without needing the assertion message to, and so the cases can be
+    distributed across workers.
+    """
+    row = pantheon_neuron.run_workload(
+        workload, TRN1, duration=MOCK_DURATION, monitor_period=0.01
+    )
+    assert row["Score"] is None, f"{workload.name} invented a Score in mock mode"
 
 
 def test_skipped_row_still_declares_its_unit(mock_env):
@@ -253,3 +272,146 @@ def test_the_register_does_not_change_what_joins():
                   if name not in registry.NOT_COMPARABLE_WITH_GPU}
     assert set(registry.SAME_UNIT_DIFFERENT_QUANTITY) <= comparable
     assert len(comparable) >= 12
+
+
+# -- a pinned dtype is a claim that the engine will run it --------------------
+#
+# The first version of this asserted against a single table transcribed from
+# a prose comment, and a probe falsified it the same afternoon: it had
+# fp8_e4m3 as an accepted operand, and neuronx-cc refuses it outright. The
+# tables now record what was measured, split by the path that measured it,
+# because NKI and XLA do not accept the same set -- int8 runs through XLA
+# and nc_matmul rejects it.
+
+# Every workload with a pinned dtype except int_virus reaches the engine
+# through XLA. int_virus is the NKI kernel, and it is why the split exists.
+_NKI_WORKLOADS = frozenset({"tensor_virus", "int_virus", "pulse_virus",
+                            "omni_virus", "transformer_virus",
+                            "memory_read", "memory_write",
+                            "memory_read_agg", "memory_write_agg"})
+
+
+def _path(name):
+    return "nki" if name in _NKI_WORKLOADS else "xla"
+
+
+def test_no_pinned_problem_names_a_dtype_its_path_refuses():
+    offenders = []
+    for workload in registry.WORKLOADS:
+        dtype = (workload.problem or {}).get("dtype")
+        if dtype is None:
+            continue
+        path = _path(workload.name)
+        if not tiling.engine_accepts(dtype, path):
+            why = tiling.refusal(dtype, path) or "not an operand on this path"
+            offenders.append(f"{workload.name} pins {dtype} on {path}: {why}")
+    assert not offenders, "; ".join(offenders)
+
+
+def test_the_two_paths_do_not_accept_the_same_set():
+    """Collapsing them is what made the first version of this wrong."""
+    assert tiling.NKI_OPERANDS != tiling.XLA_OPERANDS
+    assert "int8" in tiling.XLA_OPERANDS
+    assert "int8" not in tiling.NKI_OPERANDS
+    assert tiling.engine_accepts("int8", "xla")
+    assert not tiling.engine_accepts("int8", "nki")
+
+
+def test_fp8_is_not_claimed_as_an_operand_on_either_path():
+    """It was, on the strength of a comment. neuronx-cc says otherwise."""
+    assert "fp8_e4m3" not in tiling.XLA_OPERANDS
+    assert "fp8_e4m3" not in tiling.NKI_OPERANDS
+    assert "NCC_ESPP047" in tiling.refusal("fp8_e4m3", "xla")
+
+
+def test_every_refusal_is_keyed_by_the_path_that_refused():
+    for key, why in tiling.OPERAND_REFUSALS.items():
+        path, dtype = key
+        assert path in ("nki", "xla"), key
+        assert not tiling.engine_accepts(dtype, path), key
+        # A refusal without a date is a claim, not a measurement.
+        assert "2026-" in why, key
+
+
+def test_eight_bit_is_not_a_throughput_win_on_this_part():
+    """The assumption a workload named "quantized" invites, measured.
+
+    int8 through XLA is the slowest path on the part -- 18.46 T-ops/s
+    against bf16's 70.38 at the same 4096^3 shape in the same process --
+    and uint8 only matches bf16. Anyone reading quantized_gemm's Score as
+    an acceleration figure is reading it backwards, so the relationship
+    is pinned here rather than left in a comment.
+    """
+    rates = tiling.OPERAND_RATES_4096
+    assert rates["int8"] < rates["bf16"], rates
+    assert rates["int8"] / rates["bf16"] < 0.3, rates
+    assert 0.95 < rates["uint8"] / rates["bf16"] < 1.1, rates
+
+
+# -- a declared counter its source cannot supply -----------------------------
+
+def _reader_source():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = ""
+    for path in ("neuron_monitor.py", "kernels/profiler.py",
+                 "kernels/collectives.py"):
+        with open(os.path.join(root, path), encoding="utf-8") as handle:
+            text += sourcecheck.code_only(handle.read())
+    return text
+
+
+def test_every_declared_counter_is_read_by_something_or_declared_absent():
+    """The counters tuple is the published answer to "where does this
+    number come from", and five of them named a stream that does not
+    carry them.
+
+    Read through the comment filter, so a counter mentioned in a
+    docstring about counters does not vouch for itself.
+    """
+    readers = _reader_source()
+    assert readers, "no reader source read -- the sweep is broken"
+
+    unsupplied = []
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if not source or source.source == registry.INTERNAL:
+            continue
+        known_absent = registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.get(
+            workload.name, ())
+        for counter in source.counters:
+            leaf = counter.rsplit(".", 1)[-1]
+            if leaf in known_absent:
+                continue
+            if f'"{leaf}"' not in readers and f"'{leaf}'" not in readers:
+                unsupplied.append(f"{workload.name}: {counter}")
+
+    assert not unsupplied, (
+        f"declared but unread: {unsupplied} -- either the reader should "
+        "parse it, or it belongs in "
+        "COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY with the evidence")
+
+
+def test_the_absent_list_only_names_counters_that_are_declared():
+    """A stale entry there would silently excuse a counter nobody asks for."""
+    declared = set()
+    for workload in registry.WORKLOADS:
+        if workload.score_source:
+            declared.update(c.rsplit(".", 1)[-1]
+                            for c in workload.score_source.counters)
+    for name, counters in (
+            registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.items()):
+        workload = next((w for w in registry.WORKLOADS if w.name == name), None)
+        assert workload is not None, name
+        for counter in counters:
+            assert counter in declared, (name, counter)
+
+
+def test_the_absent_counters_really_are_absent():
+    """The control. Without it the list could excuse anything, including
+    counters the readers do parse -- which is how a gap becomes a habit.
+    """
+    readers = _reader_source()
+    for name, counters in (
+            registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.items()):
+        for counter in counters:
+            assert f'"{counter}"' not in readers, (name, counter)

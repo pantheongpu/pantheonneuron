@@ -10,6 +10,7 @@ optimised-away kernel actually fires.
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import memory_read, nki_backend, registry
 from neuron_device import NeuronDevice
 
@@ -200,3 +201,63 @@ def test_missing_neff_says_why(tmp_path):
 
     with pytest.raises(prof.ProfilerUnavailable, match="compiler_workdir"):
         prof.find_neff(str(tmp_path))
+
+
+# -- the reduction must not be what the bandwidth measures -------------------
+
+def test_the_shipped_consumer_is_not_flagged():
+    """cast + sum, trn1.2xlarge 2026-09-10: vector 0.55 at 2 GiB, and 0.65
+    at the pinned 8 GiB through the harness (DMA 0.94, 256.10 GB/s)."""
+    assert memory_read.verify_consumer_not_binding(0.5473) is None
+    assert memory_read.verify_consumer_not_binding(0.6504) is None
+
+
+def test_a_consumer_bound_read_is_flagged():
+    """cast + t*t + sum: vector 0.88, 136.8 GB/s -- half the bandwidth, the
+    same bytes, coverage 1.000000. Only the engine counter could tell."""
+    why = memory_read.verify_consumer_not_binding(0.8819)
+    assert why and "88%" in why and "reduction" in why
+
+
+def test_the_threshold_sits_between_the_measurements():
+    shipped = (0.5473, 0.6504)
+    heavy = (0.8819, 0.9672)
+    assert max(shipped) < memory_read.CONSUMER_BOUND < min(heavy)
+
+
+def test_no_profile_means_no_verdict():
+    """A fraction read as a percentage was this suite's mistake once; a
+    missing counter must not be read as zero either."""
+    assert memory_read.verify_consumer_not_binding(None) is None
+
+
+def test_the_profile_records_both_engines():
+    code = sourcecheck.flat_function_code(memory_read._profile)
+    assert '"vector_engine_active_time_percent"' in code
+    assert '"dma_active_time_percent"' in code
+
+
+def test_run_checks_the_consumer_only_for_an_attributed_profile():
+    """A diverged profile may be another graph's, so its engine counters
+    say nothing about this kernel."""
+    code = sourcecheck.flat_function_code(memory_read.run)
+    assert code.index("divergence = verify_against_analytic") < code.index(
+        "verify_consumer_not_binding")
+
+
+def test_the_report_carries_both_engine_fractions():
+    """Below the threshold too: which side set the rate is worth reading
+    in every report, not only in the ones that warn."""
+    for key in ("consumer_engine_active", "dma_active"):
+        assert key in pantheon_neuron._PROVENANCE_KEYS
+
+
+def test_an_unattributed_profile_takes_its_engine_counters_with_it():
+    """Two 8 GiB kernels, one compile workdir: the selector held the other
+    kernel's NEFF, the Score fell back to analytic, and the row still
+    carried vector 0.97 from the foreign graph."""
+    code = sourcecheck.flat_function_code(memory_read.run)
+    branch = code[code.index("if _touched_the_whole_plan"):]
+    branch = branch[:branch.index("return result")]
+    assert 'result [ "consumer_engine_active" ] = None' in branch
+    assert 'result [ "dma_active" ] = None' in branch

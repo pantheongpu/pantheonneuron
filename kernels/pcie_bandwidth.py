@@ -50,9 +50,11 @@ registry decision and is left open: 16 MiB measures the link, 1 GiB
 measures what a large transfer actually costs, and those are different
 questions. What is no longer true is that the number is unexplained.
 
-STATUS: verified on both parts 2026-09-08; the pinning and alternating-
-source controls are UNTESTED. No NKI: this is torch tensor movement, so it
-depends on the runtime rather than on a compiled kernel.
+STATUS: VERIFIED ON HARDWARE, both parts 2026-09-08 and trn1.2xlarge
+2026-09-10, including the preallocation and alternating-source controls --
+the size sweep above was taken through this kernel with both in place. No
+NKI: this is torch tensor movement, so it depends on the runtime rather
+than on a compiled kernel.
 """
 
 import time
@@ -116,14 +118,14 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         except (RuntimeError, NotImplementedError, AssertionError):
             return plain, False
 
-    host, pinned_source = host_buffer(1.0)
+    host, pinned_source = host_buffer(SOURCE_FILL)
     # ALTERNATING SOURCES. If the runtime can tell that h2d copies the same
     # bytes every pass, it may serve the copy without moving them, which
     # would inflate h2d rather than depress d2h -- and the two are
     # indistinguishable from the ratio alone. Two sources with different
     # contents, alternating, remove that explanation.
-    host_alt, _ = host_buffer(2.0)
-    landing, pinned_landing = host_buffer(0.0)
+    host_alt, _ = host_buffer(ALT_FILL)
+    landing, pinned_landing = host_buffer(LANDING_FILL)
 
     resident = host.to(device)
     xm.mark_step()
@@ -178,6 +180,11 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     elapsed = time.perf_counter() - started
     total_moved = sum(leg["bytes"] for leg in per_direction.values())
 
+    try:
+        landing_value = float(landing.reshape(-1)[0])
+    except Exception:  # materialisation failed; leave unverified
+        landing_value = None
+
     return {
         "elapsed_s": elapsed,
         "bytes_transferred": total_moved,
@@ -198,9 +205,67 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "h2d_sources_alternate": True,
         "score_method": "workload",
         "analytic_basis": "bytes transferred / wall time",
-        "warning": verify_directions_are_balanced(per_direction),
+        # What actually arrived, not just how fast. Read once at the end
+        # rather than per pass, so the check costs nothing the measurement
+        # would notice.
+        "landing_value": landing_value,
+        "warning": "; ".join(part for part in (
+            verify_transfer_arrived(landing_value, plan["directions"]),
+            verify_directions_are_balanced(per_direction),
+        ) if part) or None,
         "plan": plan,
     }
+
+
+# The three buffer fills, named so the arrival check can derive what a
+# completed transfer must leave behind rather than repeating a literal.
+#
+# They were literals, and nothing read any of them back: the kernel timed
+# copies and never looked at what arrived. A d2h leg that moved no bytes
+# would leave `landing` at its initial fill and report full bandwidth,
+# because bandwidth here is bytes-requested over wall time and the bytes
+# requested are a constant.
+SOURCE_FILL = 1.0
+ALT_FILL = 2.0
+LANDING_FILL = 0.0
+
+
+def verify_transfer_arrived(
+    landing_value: typing.Optional[float],
+    directions: typing.Sequence[str],
+) -> typing.Optional[str]:
+    """Check the host landing buffer holds bytes the device sent.
+
+    ``landing`` starts at ``LANDING_FILL`` and the two device-side sources
+    are ``SOURCE_FILL`` and ``ALT_FILL``, so after a d2h leg it must hold
+    one of the latter. Still holding its own initial fill means nothing
+    arrived -- and every figure in the row would be unchanged, because
+    the Score counts bytes requested rather than bytes observed.
+
+    Says nothing when d2h did not run: a plan of h2d alone leaves the
+    landing buffer untouched by design, and accusing it then would be a
+    check that fires on a correct run.
+    """
+    if "d2h" not in directions:
+        return None
+    if landing_value is None:
+        return "the landing buffer could not be read back to verify"
+    if landing_value != landing_value:
+        return "the landing buffer is NaN"
+    if landing_value == LANDING_FILL:
+        return (
+            f"the landing buffer still reads {LANDING_FILL:g} after the "
+            "d2h leg, where a completed transfer leaves "
+            f"{SOURCE_FILL:g} or {ALT_FILL:g} -- no bytes arrived, and the "
+            "Score counts bytes requested rather than bytes observed"
+        )
+    if landing_value not in (SOURCE_FILL, ALT_FILL):
+        return (
+            f"the landing buffer reads {landing_value:g}, which is neither "
+            f"source fill ({SOURCE_FILL:g} or {ALT_FILL:g}) -- the bytes "
+            "that arrived are not the bytes that were sent"
+        )
+    return None
 
 
 def verify_directions_are_balanced(

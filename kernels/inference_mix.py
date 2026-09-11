@@ -25,7 +25,13 @@ What separates them, since sharing a module is not sharing a measurement:
                         run, which is what a real server does and what makes
                         it a distinct test.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-10, all five
+workloads. ``moe_router`` failed on 2026-09-08 (``Expected an array
+shape. Got (bf16[1024], u32[1024])`` from ``torch.topk``) and is fixed.
+
+``quantized_gemm``'s figure is the one to read carefully: int8 runs at
+0.254x bf16 on this part, so it is a footprint number rather than a
+throughput win. See docs/a_dtype_the_engine_refuses.md.
 """
 
 import time
@@ -79,11 +85,29 @@ def run_fused_attention(problem: typing.Mapping[str, typing.Any],
         "elapsed_s": elapsed,
         "attention_tiles_per_s": tiles / elapsed if elapsed else 0.0,
         "flops_issued": flops,
+        # The rate, not just the total. A tile count cannot be checked
+        # against anything; a TFLOPS figure can be held next to the ~26
+        # this part reaches on a dense matmul, and attention running at
+        # half that is a result rather than a number.
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "attention tiles / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "attention output"),
+        # Not output_check. q, k and v are all ones, so every score is
+        # identical, softmax is exactly uniform, and the context is v's own
+        # value -- the answer is known in advance and this is a
+        # correctness check rather than a plausibility one. A saturated
+        # softmax, a transposed head reshape or a mask applied by mistake
+        # each produce a finite number that is not 1.0, and every one of
+        # them passed the previous check.
+        **transformer_ops.attention_check(transformer_ops.read_back(sink)),
     }
+
+
+# The per-tensor dequantisation factor. Named so the kernel's expected
+# output can be derived from it rather than from a literal repeated in two
+# places -- an all-ones GEMM over K terms reaches K, and this takes it to
+# K * SCALE.
+SCALE = 0.02
 
 
 def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
@@ -103,12 +127,21 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
     # matters: a bare int8 matmul without dequantisation is not a path any
     # deployed model takes, and it would skip the conversion this workload
     # exists to measure.
-    scale = torch.ones((1,), dtype=torch.float32, device=device) * 0.02
+    scale = torch.ones((1,), dtype=torch.float32, device=device) * SCALE
     xm.mark_step()
 
     def gemm():
-        # int32 accumulation, then scaled back. int8 accumulators overflow
-        # at K far below 4096.
+        # int32 accumulation, then scaled back. An int8 accumulator would
+        # overflow at K far below 4096, so the width has to be widened --
+        # but **XLA has already widened it**, and this call is a no-op.
+        # Measured trn1.2xlarge 2026-09-10 at 4096^3: with the conversion
+        # 18.46 T-ops/s, without it 18.45. Identical to three digits.
+        #
+        # It is kept because it states the accumulator width the
+        # correctness of this kernel depends on, at the point that
+        # depends on it. What is not kept is the claim that it prevents
+        # anything: it does not, and a comment that says otherwise would
+        # have a reader believe the overflow is guarded here.
         product = torch.matmul(lhs.to(torch.int32), rhs.to(torch.int32))
         return product.to(torch.float32) * scale
 
@@ -143,10 +176,34 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
         # run printed 18442342834453.8 and it says nothing at a glance.
         # Recorded beside it, never instead of it.
         "quantized_tops": rate / 1e12,
+        # The second quantity, and the one that matters most here,
+        # because the first invites exactly the wrong reading.
+        #
+        # "quantized" suggests a fast path. On this part it is the slow
+        # one. All five dtypes at 4096^3 in one process, trn1.2xlarge
+        # 2026-09-10: int8 18.46 T-ops/s, uint8 72.78, bf16 70.38, and
+        # neuronx-cc refuses fp8_e4m3 outright. int8 is 0.26x bf16 --
+        # the slowest path measured on the device, not the fastest.
+        #
+        # So this row's Score is a footprint-and-accuracy figure, never
+        # a throughput win, and reporting the ratio beside it is what
+        # stops it being read as one. See kernels/tiling.py for the
+        # table and docs/a_dtype_the_engine_refuses.md for the run.
+        "ratio_to_bf16": round(
+            (rate / 1e12) / tiling.OPERAND_RATES_4096["bf16"], 3),
+        "reference_bf16_tops": tiling.OPERAND_RATES_4096["bf16"],
         "score_method": "workload",
         "analytic_basis": "quantised ops / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "quantised output"),
+        # The answer is exact. lhs and rhs are all-ones int8 over K
+        # terms, so the int32 product is K, and the dequantisation scale
+        # takes it to K * scale -- 4096 * 0.02 = 81.92 at the pinned
+        # problem. A saturated accumulator, a dropped scale, a wrong
+        # contraction, or a matmul the compiler folded away each produce a
+        # finite number that is not that.
+        "expected_output": k * float(SCALE),
+        **transformer_ops.equals_check(
+            transformer_ops.read_back(sink), k * float(SCALE),
+            "quantised output"),
     }
 
 
@@ -179,7 +236,7 @@ def routing_balance(tokens: int, experts: int,
 
     Pure arithmetic so the balance can be asserted without a device.
     """
-    counts = {expert: 0 for expert in range(experts)}
+    counts = dict.fromkeys(range(experts), 0)
     for token in range(tokens):
         counts[token % experts] += 1
         if top_k > 1:
@@ -285,19 +342,28 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
 
     sink = None
     routed = 0
+    passes = 0
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
         sink = route()
         xm.mark_step()
         routed += tokens
+        passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+
+    # One matmul per expert over its capacity of token vectors. Counted so
+    # the routed-token rate has something beside it: a token count says
+    # nothing about whether the dispatch did the arithmetic it should.
+    flops = passes * experts * 2 * capacity * hidden * hidden
 
     return {
         "routed_tokens": routed,
         "elapsed_s": elapsed,
         "routed_tokens_per_s": routed / elapsed if elapsed else 0.0,
+        "flops_issued": flops,
+        "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "experts": experts,
         "top_k": top_k,
         # Slots per expert. The dispatch is one matmul of this many token
@@ -305,7 +371,12 @@ def run_moe_router(problem: typing.Mapping[str, typing.Any],
         "capacity": capacity,
         "score_method": "workload",
         "analytic_basis": "routed tokens / wall time",
-        **transformer_ops.output_check(
+        # Not output_check. The destination is torch.zeros_like, so a
+        # dispatch that routed nothing leaves it at 0.0 -- and 0.0 is a
+        # number, which is all output_check was asking. The expert matmul
+        # sums `hidden` terms of an input that is never zero, so any
+        # element the dispatch touches is far from zero.
+        **transformer_ops.scatter_check(
             transformer_ops.read_back(sink), "router output"),
     }
 
@@ -332,8 +403,31 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
     # decoding only pays off when drafting is cheap, and a draft the same
     # size as the target would make this workload a slower copy of decode.
     draft_hidden = hidden // 4
-    draft_w = torch.ones((draft_hidden, draft_hidden), dtype=dtype, device=device)
-    project_up = torch.ones((draft_hidden, hidden), dtype=dtype, device=device)
+    # Both scaled by 1/fan_in, the same argument transformer_ops.weights
+    # makes. Unscaled they were the third and most extreme instance of one
+    # defect in this suite.
+    #
+    # draft_w unscaled turns each drafting step into a multiply by
+    # draft_hidden, so the chain grows as 1024^draft_len: 1.1e15 after four
+    # steps, and it would overflow bf16 at thirteen. project_up multiplied
+    # that by another 1024. bf16's ulp at 1.1e15 is 8.8e12, and each of the
+    # 32 target blocks adds 1 + gelu(1) = 1.84 -- **nine orders of
+    # magnitude below the resolution of the number carrying it.**
+    #
+    # So every one of the 32 blocks of the target model contributed
+    # nothing observable to the output, in the workload that was
+    # deliberately repinned from one block to 32 because running one made
+    # the expensive half of speculative decoding a thirty-second of its
+    # real cost. The FLOPs were issued and the throughput was real; the
+    # output simply did not depend on them.
+    #
+    # Scaled, a drafting step maps ones to ones, project_up maps ones to
+    # ones, and the target stack runs from 1.0 to 59.92 where
+    # stack_check can see it.
+    draft_w = torch.full((draft_hidden, draft_hidden), 1.0 / draft_hidden,
+                         dtype=dtype, device=device)
+    project_up = torch.full((draft_hidden, hidden), 1.0 / draft_hidden,
+                            dtype=dtype, device=device)
     target = transformer_ops.weights(hidden, dtype, device, heads=32)
 
     draft_state = torch.ones((1, 1, draft_hidden), dtype=dtype, device=device)
@@ -376,6 +470,7 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         verified += draft_len
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    verify_flops = layers * transformer_ops.block_flops(hidden, draft_len)
 
     return {
         "verified_tokens": verified,
@@ -386,18 +481,28 @@ def run_speculative_decode(problem: typing.Mapping[str, typing.Any],
         # amortising. A cycle count alone cannot show whether the target
         # model was actually run.
         "verify_blocks_per_cycle": layers,
-        "verify_flops_per_cycle": layers * transformer_ops.block_flops(
-            hidden, draft_len),
+        "verify_flops_per_cycle": verify_flops,
         "elapsed_s": elapsed,
         "verified_tokens_per_s": verified / elapsed if elapsed else 0.0,
+        # Per-cycle cost was already here and is not a rate: it is the same
+        # number every run, so it cannot disagree with a measurement. The
+        # total and the rate can, which is the point -- a run that skipped
+        # the target model produces the same cycle count and a very
+        # different implied_tflops.
+        "flops_issued": cycles * verify_flops,
+        "implied_tflops": (cycles * verify_flops / elapsed / 1e12
+                           if elapsed else 0.0),
         "score_method": "workload",
         # Every drafted token is verified here; acceptance rate is a
         # property of a real model's agreement with its draft, which a
         # synthetic workload cannot honestly simulate. The number is
         # verification throughput, not end-to-end speculative speedup.
         "analytic_basis": "verified tokens / wall time",
-        **transformer_ops.output_check(
-            transformer_ops.read_back(sink), "verification output"),
+        # The target stack runs from ones through `layers` blocks, so its
+        # output is 1 + layers * 1.8413. Checking it is what makes the
+        # target model's execution observable at all.
+        **transformer_ops.stack_check(transformer_ops.read_back(sink),
+                                      layers),
     }
 
 
@@ -420,7 +525,7 @@ def interleave_period(ratio: float) -> int:
         raise ValueError(f"prefill_ratio must be in [0, 1], got {ratio}")
     if not ratio:
         return 0
-    return max(int(round(1 / ratio)), 1)
+    return max(round(1 / ratio), 1)
 
 def serving_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, typing.Any]:
     """What one scheduler step costs, and when a request is actually done.
@@ -594,6 +699,27 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         # The rate the scheduler actually sustained. A request is many
         # steps, so these differ by a large factor and both are wanted.
         "scheduler_steps_per_s": steps / elapsed if elapsed else 0.0,
+        # How coarse the Score is, which is not the same question as how
+        # stable it is -- and on 2026-09-10 the two were confused.
+        #
+        # requests_completed is an integer division: decode_tokens //
+        # decode, so it advances once per decode/batch steps and not at
+        # all in between. Three repeats at DURATION=60 reported 2.4776,
+        # 2.4781 and 2.4780 requests/s, cv 0.0001 -- by a wide margin the
+        # most reproducible Score in the suite, and read as evidence this
+        # workload was exceptionally steady.
+        #
+        # It is evidence of nothing of the sort. The three runs landed on
+        # the same integer request count, so the only thing varying was
+        # the wall clock in the denominator. Real variation in the work
+        # done was below the resolution of the number reporting it.
+        #
+        # score_resolution is the fraction of the Score that one more or
+        # fewer completed request would move it. A cv far below that is
+        # quantisation, not agreement -- and scheduler_steps_per_s is the
+        # quantity that can actually show the difference.
+        "steps_per_request": plan["decode_steps_per_request"],
+        "score_resolution": (1.0 / requests if requests else None),
         "decode_tokens": decode_tokens,
         "decode_length": plan["decode"],
         "blocks_executed": steps * layers,
@@ -603,10 +729,16 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
         "plan": plan,
         "score_method": "workload",
         "analytic_basis": "requests completed / wall time",
+        # Both batches are ones and both go through `layers` blocks, so
+        # the last one to run leaves 1 + layers * 1.8413 -- 59.92 at the
+        # pinned 32. A scheduler that ran a single block per "request" was
+        # the original defect here, and this is the check that would have
+        # caught it: one block leaves 2.84, not 59.92.
+        "expected_output": transformer_ops.stacked_block_output(layers),
         **_mix_warning(
             steps, period, prefills, decode_steps, decode_requests,
-            transformer_ops.output_check(
-                transformer_ops.read_back(sink), "serving output")),
+            transformer_ops.stack_check(
+                transformer_ops.read_back(sink), layers)),
     }
 
 

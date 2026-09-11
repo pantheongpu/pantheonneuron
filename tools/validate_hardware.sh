@@ -42,6 +42,22 @@ GEMM_SHAPE=${GEMM_SHAPE:-2048}
 
 hr() { printf '\n========== %s ==========\n' "$*"; }
 
+# When this run began, so the summary at the bottom can tell this run's
+# reports from every earlier run's.
+#
+# It could not, and the 2026-09-10 pass published the difference. The
+# summary globs database/*.json and keeps the newest row per workload
+# name, with no date filter -- so on an instance carrying reports from
+# 2026-08-27 onwards it reported "Workloads run: 26, PASS 26" for a run
+# that ran 24. all_reduce, p2p_thrasher and baseline_metrics were rows
+# from previous runs, and the first two cannot run on a single-device
+# part at all.
+#
+# A summary that mixes runs is worse than no summary: every figure in it
+# reads as a statement about the run that just finished.
+RUN_STARTED=$(date +%s)
+export RUN_STARTED
+
 hr "part"
 neuron-ls 2>/dev/null | sed -n '1,10p'
 cat /sys/devices/virtual/neuron_device/neuron0/info/architecture/arch_type 2>/dev/null
@@ -209,12 +225,18 @@ hr "summary: which Score sources fired"
 $PY - <<'PYEOF'
 import glob, json, os
 
-# Every report this run wrote, not the last four: the orchestrated list is
-# now the whole registry, so a window that truncates hides workloads.
-reports = sorted(glob.glob("database/pantheon_neuron_report_*.json"),
-                 key=os.path.getmtime)
+# Every report *this run* wrote, not the last four: the orchestrated list
+# is now the whole registry, so a window that truncates hides workloads --
+# and not every report on disk, which is what it did until 2026-09-10.
+started = float(os.environ.get("RUN_STARTED", 0))
+everything = sorted(glob.glob("database/pantheon_neuron_report_*.json"),
+                    key=os.path.getmtime)
+reports = [p for p in everything if os.path.getmtime(p) >= started]
+stale = len(everything) - len(reports)
 if not reports:
     print("  no reports written")
+elif stale:
+    print(f"  ({stale} report(s) from earlier runs on this machine ignored)")
 seen = {}
 for path in reports:
     with open(path, encoding="utf-8") as handle:

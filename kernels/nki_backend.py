@@ -45,7 +45,7 @@ def probe() -> typing.Dict[str, typing.Optional[str]]:
         pass
 
     try:
-        import neuronxcc.nki  # type: ignore  # noqa: F401
+        import neuronxcc.nki  # type: ignore
 
         found["nki"] = found["neuronxcc"]
     except ImportError:

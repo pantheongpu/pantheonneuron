@@ -24,6 +24,86 @@ def is_integer(dtype: str) -> bool:
     return dtype in INTEGER_DTYPES
 
 
+# Which dtypes the part will run, by the path the kernel takes to reach it.
+#
+# These are two different questions and the first draft of this table
+# collapsed them, which is the same mistake it exists to prevent. The
+# NKI operand list was transcribed from a prose comment rather than
+# measured, and a probe on trn1.2xlarge 2026-09-10 falsified it for the
+# XLA path within the hour.
+
+# NKI path -- kernels calling nc_matmul directly (tensor_virus and the
+# workloads built on it).
+#
+# `nc_matmul does not support stationary.dtype=int8`, trn1.2xlarge
+# 2026-09-08. That refusal is why int_virus pins uint8.
+NKI_OPERANDS = frozenset({"bf16", "fp16", "fp32", "uint8"})
+
+# XLA path -- kernels expressing a matmul in torch and letting
+# neuronx-cc compile it (everything in inference_mix, llm_inference,
+# encoders, transformer_compute).
+#
+# int8 is here and absent from NKI_OPERANDS, which is the finding: the
+# two paths do not accept the same set, so "the engine supports X" is
+# not a well-formed claim without saying which path asked.
+#
+# fp8_e4m3 was in the first draft of this table on the strength of a
+# prose comment and is not here, because neuronx-cc refuses it:
+# `[NCC_ESPP047] Data type F8E4M3FN is not supported`, trn1.2xlarge
+# 2026-09-10, libneuronxla 2.2.15515.0.
+XLA_OPERANDS = frozenset({"bf16", "fp16", "fp32", "int8", "uint8"})
+
+# Measured T-ops/s at 4096^3, all five in one process so nothing differs
+# but the dtype (trn1.2xlarge, 2026-09-10, 20s each, product verified
+# exact against all-ones arithmetic in every case):
+#
+#     int8 -> int32     18.46      0.26x bf16
+#     int8 direct       18.45      0.26x bf16
+#     uint8 -> int32    72.78      1.03x bf16
+#     bf16              70.38      1.00x
+#     fp8_e4m3          refused by neuronx-cc
+#
+# Two things follow, and both contradict what a reader assumes about a
+# workload named "quantized":
+#
+# 1. int8 through XLA is **the slowest path on the part**, not the
+#    fastest. Eight-bit is an accuracy and footprint decision here, not
+#    a throughput one.
+# 2. uint8 merely matches bf16. There is no 8-bit speedup to measure in
+#    either direction, because the operands are promoted to int32 before
+#    the matmul and int32 is the width the arithmetic actually runs at.
+#
+# `int8 direct` and `int8 -> int32` agreeing to three digits is the
+# evidence for that promotion: an explicit `.to(torch.int32)` on the
+# operands changes nothing, because XLA had already inserted it.
+OPERAND_RATES_4096 = {
+    "int8": 18.46, "uint8": 72.78, "bf16": 70.38,
+}
+
+OPERAND_REFUSALS = {
+    ("nki", "int8"): ("nc_matmul does not support stationary.dtype=int8 "
+                      "(trn1.2xlarge, 2026-09-08) -- use uint8"),
+    ("xla", "fp8_e4m3"): ("[NCC_ESPP047] Data type F8E4M3FN is not "
+                          "supported (trn1.2xlarge, 2026-09-10)"),
+}
+
+
+def engine_accepts(dtype: str, path: str = "xla") -> bool:
+    """Whether ``path`` will run ``dtype`` as a matmul operand.
+
+    ``path`` is required in spirit and defaulted in practice: every
+    workload with a pinned dtype except int_virus reaches the engine
+    through XLA.
+    """
+    table = NKI_OPERANDS if path == "nki" else XLA_OPERANDS
+    return dtype in table
+
+
+def refusal(dtype: str, path: str = "xla") -> typing.Optional[str]:
+    """The measurement that rejected ``dtype`` on ``path``, if any."""
+    return OPERAND_REFUSALS.get((path, dtype))
+
+
 def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
     """Split a requested byte count into whole tiles.
 

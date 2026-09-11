@@ -12,6 +12,7 @@ import os
 
 import pytest
 
+import sourcecheck
 from kernels import profiler
 
 
@@ -518,3 +519,85 @@ def test_an_explicit_compile_cache_is_not_overridden(monkeypatch):
     code = sourcecheck.function_code(memory_read.run)
     assert "setdefault" in code
     assert "os . environ [ cores . COMPILE_CACHE ] =" not in code
+
+
+# -- the bound was one-sided ------------------------------------------------
+
+def _counters(read_bytes):
+    return {"hbm_read_bytes": read_bytes, "total_time": 1.0}
+
+
+def test_a_graph_far_larger_than_the_plan_is_refused():
+    """It was accepted, and published as a bandwidth ten times too fast.
+
+    select_by_plan tested `plan_coverage >= floor`, which bounds only the
+    low side. A profile carrying ten times the planned bytes divides by a
+    real total_time and produces a real-looking GB/s -- worse than an
+    error, because it is publishable.
+
+    The one-sided bound survived because verify_profile_covers_plan was
+    dead: nothing exercised it against a graph larger than the plan, and
+    the inline copy inherited the same gap.
+    """
+    planned = 1 << 30
+    with pytest.raises(profiler.ProfilerUnavailable) as raised:
+        profiler.verify_profile_covers_plan(
+            _counters(planned * 10), "read", planned)
+    assert "coverage 10" in str(raised.value)
+    assert "someone else's graph" in str(raised.value)
+
+
+def test_a_graph_far_smaller_than_the_plan_is_still_refused():
+    """The side that always worked, kept as a control."""
+    planned = 1 << 30
+    with pytest.raises(profiler.ProfilerUnavailable) as raised:
+        profiler.verify_profile_covers_plan(_counters(4), "read", planned)
+    assert "only 4 bytes" in str(raised.value)
+
+
+def test_a_graph_matching_the_plan_passes():
+    planned = 1 << 30
+    for moved in (planned, int(planned * 0.9), int(planned * 1.5)):
+        assert profiler.verify_profile_covers_plan(
+            _counters(moved), "read", planned) is None
+
+
+def test_the_bounds_bracket_one():
+    """Or the check would refuse the graph it is meant to accept."""
+    assert profiler.CEILING > 1.0
+    # The default floor is below 1.0 by the same argument.
+    planned = 1 << 30
+    assert profiler.verify_profile_covers_plan(
+        _counters(planned), "read", planned) is None
+
+
+def test_select_by_plan_refuses_an_oversized_best_rather_than_returning_it():
+    """The gate has to be on the way out, not only in the ranking.
+
+    Ranking already preferred |coverage - 1| smallest, so an oversized
+    graph could be `best` while still being the wrong graph -- and the
+    acceptance test never looked at the upper side.
+    """
+    source = sourcecheck.function_code(profiler.select_by_plan)
+    assert "verify_profile_covers_plan" in source
+    assert 'best [ "plan_coverage" ] >= floor' not in source
+
+
+def test_the_ceiling_clears_every_coverage_ever_observed():
+    """Every profiler_plan_coverage on record reads exactly 1.0.
+
+    Checked against the reports on the trn1.2xlarge, 2026-09-10. So the
+    ceiling has a factor of two of headroom against the only values the
+    capture has produced -- which is the evidence for the number, and the
+    reason it is 2.0 rather than something tighter.
+
+    A ceiling that is too tight refuses a real capture and sends the row
+    to the analytic fallback, undoing the core reservation and
+    compile-cache isolation that made the declared profiler source work
+    at all.
+    """
+    observed = 1.0
+    assert profiler.CEILING >= 2 * observed
+    planned = 1 << 30
+    assert profiler.verify_profile_covers_plan(
+        _counters(int(planned * observed)), "read", planned) is None

@@ -49,8 +49,24 @@ one of them is worth filing a case about.
 ## Kernel status
 
 Every workload in the registry now has an implementation: **26 of 26**, and
-**24 of 26 have run on hardware**. The last full pass was 23 PASS, 0 FAIL,
-with 8 Scores from a declared hardware source (trn1.2xlarge, 2026-09-08).
+**24 of 26 have run on hardware** — `data/hardware_runs.json` records which,
+on which part, and cites the log. The two that have not are `all_reduce` and
+`p2p_thrasher`, and neither is untested so much as unreachable: both need a
+part with 2+ devices, and this account's Trn quota is 64 vCPU against the
+128 the smallest such shape needs.
+
+The last full passes were **23 PASS, 0 FAIL** on trn1.2xlarge, 2026-09-08
+and 2026-09-10.
+
+**Scores from a declared hardware source: 7 or 8 of 23**, and which it is
+varies between runs of the same code. That is not a rounding detail — it is
+`graph_replay`, whose declared source is the monitor's completion counter.
+It produced a Score on 2026-09-08 and degraded to the analytic fallback on
+2026-09-10, and the two figures are four times apart because they count
+different things: one what the device finished, the other what the loop
+asked for. Quoting a single number here would hide a live problem, so the
+range is quoted instead. See `neuron_monitor.execution_rate`, which now
+names which of three reasons the rate was absent.
 
 **Figures are single runs unless the Repeats column says otherwise.** The one
 quantity ever measured repeatedly disagreed with itself by 2× until its cause
@@ -58,46 +74,59 @@ was found, and a single pass could never have shown that. `--repeat N` gives
 a row the range and coefficient of variation; `REPEAT=3 bash
 tools/validate_hardware.sh` does it for a whole pass.
 
-So far only two figures have been repeated, and they differ by seventy times
-in stability:
+**Every workload has now been repeated three times**, at `DURATION=30`
+(trn1.2xlarge, 2026-09-10), and none of them flagged. At `DURATION=10` six
+had. The two declared-profiler Scores show what a deterministic NEFF
+replay looks like when it is measured rather than assumed:
 
 | Workload | Repeats | Range | cv |
 |---|--:|---|--:|
-| `memory_read` | 3 | 255.966 – 256.175 GB/s | **0.0004** |
-| `tensor_virus` | 3 | 24.776 – 26.095 TFLOPS | **0.0289** |
+| `memory_read` | 3 | 256.044 – 256.126 GB/s | **0.0002** |
+| `memory_write` | 3 | 226.153 – 226.537 GB/s | **0.0009** |
+| `memory_read` (warm NEFF cache) | 3 | 255.942 – 256.453 GB/s | **0.0011** |
 
 A `neuron-profile` Score is a single deterministic NEFF replay; a
 `neuron-monitor` Score is an average over a sampled counter stream. That
 difference is worth remembering before quoting a monitor figure to three
 decimals.
 
+**`tensor_virus` was a floor, not this part's capability, until
+2026-09-10.** A `torch.matmul` at the same shape reached 2.53× it. The
+coalesced tiling, now the default, closes that: 70.42 TFLOPS against
+`torch.matmul`'s 66.25 in one session, and 71.80 by `neuron-monitor`. The
+`tensor_virus`, `int_virus` and `pulse_virus` rows below are at the new
+default; older reports ran `streaming` and are ~2.7× lower. See
+[the headline TFLOPS figure is the kernel, not the
+part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
+
 | Workload | Status | Measured | Score source |
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
 | `memory_read` | ✅ scored from its declared source | 256.17 GB/s | `neuron-profile` |
-| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.69 GB/s | `neuron-profile` |
-| `memory_read_agg` | ✅ 98% worker overlap confirmed | 543.71 GB/s | workload |
-| `memory_write_agg` | ✅ 98% worker overlap confirmed | 507.06 GB/s | workload |
-| `tensor_virus` | ✅ at the pinned 8192³ | 25.88 TFLOPS | `neuron-monitor` |
-| `int_virus` | ✅ at the pinned 8192³, uint8 | 27.71 TOPS | `neuron-monitor` |
-| `pulse_virus` | ✅ at the pinned 8192³, 50% duty | 13.85 TFLOPS | `neuron-monitor` |
-| `omni_virus` | ✅ at the pinned 8192³ | 48.13 TFLOPS | `neuron-monitor` |
-| `transformer_virus` | ✅ realistic instruction mix | 46.28 TFLOPS | `neuron-monitor` |
-| `graph_replay` | ✅ rate trimmed of compile time | 1,188.9 graph-steps/s | `neuron-monitor` |
-| `allocation_fragmentation` | ✅ | 539.3 events/s | workload |
-| `llm_prefill` | ✅ pre-normalised, no NaN | 3,808.5 prompt-tokens/s | workload |
-| `llm_decode` | ✅ | 20.62 tokens/s | workload |
-| `kv_cache_churn` | ✅ memory-bound at last | 97,167 cache-updates/s | workload |
-| `fused_attention` | ✅ | 6,036.6 attention-tiles/s | workload |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.50 GB/s | `neuron-profile` |
+| `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
+| `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
+| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 71.80 TFLOPS | `neuron-monitor` |
+| `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 37.42 TFLOPS | `neuron-monitor` |
+| `omni_virus` | ✅ at the pinned 8192³ | 54.02 TFLOPS | `neuron-monitor` |
+| `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
+| `graph_replay` | ✅ rate trimmed of compile time | 3,040.2 graph-steps/s | `neuron-monitor` |
+| `allocation_fragmentation` | ✅ | 2,265.7 events/s | workload |
+| `llm_prefill` | ✅ pre-normalised, no NaN | 3,810.1 prompt-tokens/s | workload |
+| `llm_decode` | ✅ | 20.63 tokens/s | workload |
+| `kv_cache_churn` | ✅ memory-bound at last | 97,438 cache-updates/s | workload |
+| `fused_attention` | ✅ | 6,045.9 attention-tiles/s | workload |
 | `quantized_gemm` | ✅ | 18.44 TOPS | workload |
-| `moe_router` | ✅ balanced dispatch | 254,743 routed-tokens/s | workload |
+| `moe_router` | ✅ balanced dispatch | 255,225 routed-tokens/s | workload |
 | `speculative_decode` | ✅ verifies through the target model | 74.0 verified-tokens/s | workload |
-| `rag_embedding` | ✅ 12-layer encoder | 853.7 vectors/s | workload |
-| `vision_encoder` | ✅ 12-layer ViT | 58,131 image-tiles/s | workload |
+| `rag_embedding` | ✅ 12-layer encoder | 853.9 vectors/s | workload |
+| `vision_encoder` | ✅ 12-layer ViT | 58,141.8 image-tiles/s | workload |
 | `transformer_train_step` | ✅ skips on Inferentia | 3.65 train-steps/s | workload |
-| `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 3.89 GB/s | workload |
-| `serving_mix` | ⚠️ completes no decode request at 20 s | 0.0312 requests/s | workload |
-| `all_reduce` / `p2p_thrasher` | ❌ **cannot be run** — quota | — | `nccom-test` |
+| `pcie_bandwidth` | ⚠️ explained: the pin sits past a transfer-size cliff | 4.01 GB/s | workload |
+| `serving_mix` | ⚠️ Score quantised to one request per 32 decode steps | 2.480 requests/s | workload |
+| `all_reduce` | ❌ **cannot be run** — needs 2+ devices, quota | — | `nccom-test` |
+| `p2p_thrasher` | ❌ **cannot be run** — needs 2+ devices, quota | — | `nccom-test` |
 
 Two rows carry a caveat the Score cannot express on its own.
 `pcie_bandwidth`'s 6× d2h/h2d split is now explained, and it is not a link
@@ -227,7 +256,8 @@ flat at ~102 FLOP/byte. At 8192³ that implied 256.4 GB/s of traffic against
 `memory_read`'s measured 256.2 GB/s on the same part — a 0.1% agreement that
 looked exactly like a bandwidth wall.
 
-**It was a coincidence.** A blocked tiling that cuts operand traffic 4.7×
+**It was a coincidence.** A blocked tiling that cuts operand traffic —
+4.7× by the model, 2.55× as measured by `neuron-profile` at 4096³ —
 moved throughput by 1.06×. Had bandwidth been the constraint, the speedup
 would have tracked the traffic. So operand bandwidth is ruled out, and what
 actually binds this kernel is still unknown: both tilings sit at 25–41% of
@@ -489,6 +519,31 @@ It ran for the first time on inf2.xlarge 2026-09-07 and its destination
 check passed exactly, at 4 GiB (255.1 GB/s) and 6 GiB (162.5 GB/s). The
 pinned 8 GiB does not fit; see the bring-up notes above.
 
+## Findings
+
+Each of these started as a number that disagreed with another number. None
+of them could have been found by a workload reporting one rate and passing.
+
+| Document | What it establishes |
+|---|---|
+| [The headline number is the kernel, not the part](docs/the_headline_number_is_the_kernel.md) | `torch.matmul` reached 2.53× `tensor_virus` at a matched shape; the coalesced tiling closed it (70.42 against 66.25), and the load width, not the accumulators, is why |
+| [A dtype the engine refuses](docs/a_dtype_the_engine_refuses.md) | int8 is the slowest arithmetic on this part, fp8 is refused outright, and NKI and XLA do not accept the same operand set |
+| [XLA has no in-place write](docs/xla_has_no_in_place_write.md) | `cache[:, a:b, :] = entry` lowers to dynamic-update-slice and produces a new tensor — three wrong diagnoses before this one |
+| [Cross-platform comparability](docs/cross_platform_comparability.md) | Which workloads share a name with a pantheongpu row and must not be compared to it |
+| [Workload reference](docs/workload_counter_map.md) | Generated from the registry: units, Score sources, pinned problems, counters |
+| [Neuron counters](docs/neuron_counters.md) | The raw `neuron-profile` and `neuron-monitor` output the readers parse |
+| [Checks that pass by accident](docs/checks_that_pass_by_accident.md) | Ten of them, the four shapes they keep taking, and why a green run is evidence about the checks rather than the code |
+
+Two records back them:
+
+- **`data/hardware_runs.json`** — which workloads ran on which part, with
+  the log that proves each. `tests/test_hardware_status.py` holds every
+  kernel's `STATUS:` line against it, so a docstring cannot claim untested
+  after a pass or claim verified without one.
+- **`data/baselines.json`** — what each counter read during the probes.
+  Observations, not benchmark results: the probe load was an untuned matmul
+  at 0.0049% MFU.
+
 ## Requirements
 
 The orchestrator itself needs only Python 3.9+ and `psutil`. For real runs you
@@ -656,6 +711,348 @@ The lesson for the table above: **a short run is not a cheap run.** Ten
 seconds is long enough for every workload to pass and too short for six of
 them to mean anything.
 
+### Four workloads produced outputs that could not depend on their own arithmetic
+
+Found by deriving what each kernel must produce rather than by reading it.
+These all run constant inputs through weights, so every value is
+analytically determined — and three of them were producing numbers that
+no check on the output could ever have judged.
+
+| workload | what its output was | why nothing could see the arithmetic |
+|---|---|---|
+| `vision_encoder` | `588.0`, exactly | unscaled patch projection put it where bf16's ulp is 4.0; a block adds 1.84, so **twelve blocks moved it by 0.0** |
+| `speculative_decode` | `~1.1e15` | unscaled draft chain grew as `1024^draft_len`; a block's 1.84 is **nine orders below the resolution** |
+| `rag_embedding` | `1/sqrt(dim)` | L2 normalisation is scale-invariant, so the vector is `0.03125` whether twelve blocks ran or none |
+| `llm_prefill` | `NaN` | the same defect at the other end — unscaled weights grew the residual out of bf16's range. **This one was loud, which is why it was found first.** |
+
+The first three were silent. The arithmetic ran in all of them — the FLOPs
+were issued and the throughput was real — but the published output did not
+depend on it, so a working kernel and a broken one produced the same
+number.
+
+`vision_encoder` and `speculative_decode` are fixed by scaling their
+weights by `1/fan_in`, the same fix `transformer_ops.weights` already
+carried. `rag_embedding` is not a bug — L2 normalising is what a retrieval
+embedder does — so it keeps the stack's pre-pool output aside and checks
+that instead.
+
+**Confirmed on hardware, 2026-09-10.** The prediction was that scaling
+changes the values and *not* the throughput, since the shapes, the graph
+and the FLOP count are untouched:
+
+| workload | before | after | change |
+|---|--:|--:|--:|
+| `vision_encoder` | 58,118.5 | 57,222.0 image-tiles/s | −1.5% |
+| `rag_embedding` | 853.9 | 854.4 vectors/s | +0.06% |
+| `speculative_decode` | 73.96 | 73.79 verified-tokens/s | −0.2% |
+
+### Seven workloads now check the answer, not just that there is one
+
+Every kernel in the family feeds `torch.ones` through weights scaled by
+`1/fan_in`, and each block then adds exactly `1 + gelu(1) = 1.8413`
+whatever the depth — pre-norm makes the branch contributions independent
+of the residual. So the answer is known before the run:
+
+| workload | must produce | measured |
+|---|--:|---|
+| `fused_attention` | 1.0 | ✅ |
+| `transformer_virus` | 2.8413 | ✅ |
+| `rag_embedding` (stack) | 23.0961 | ✅ |
+| `vision_encoder` | 23.0961 | ✅ |
+| `llm_prefill` | 59.9230 | ✅ |
+| `llm_decode` | 59.9230 | ✅ |
+| `speculative_decode` | 59.9230 | ✅ |
+
+All seven previously checked only that the output was readable and not
+NaN, which admits a saturated softmax, a transposed head reshape, a
+dropped residual, a lost normalisation — and **a stack that ran the wrong
+number of layers**. Nothing else in the suite verifies the layer count:
+`flops_issued` multiplies by `layers` whether or not that many ran, so a
+stack executing half its depth reports the full arithmetic at twice the
+throughput and reads as good news.
+
+Two independent routes agree on 1.8413: the derivation, and `rms_norm`'s
+existing docstring saying the residual grows "about 2 per block".
+
+The 10% tolerance is measured, not guessed — simulating the residual walk
+in bf16 gives −1.96% drift at 32 layers, so it has ~5× headroom. That
+matters because these set `score_invalid`: a wrong derivation turns a
+working run into a FAIL. One was wrong, and was caught before hardware
+saw it — `rag_embedding`'s, above.
+
+### A full pass at a duration long enough to mean something
+
+`DURATION=30 REPEAT=3`, trn1.2xlarge, 2026-09-10. **24 PASS, 0 FAIL**, and
+this time **no Score flagged itself as irreproducible** — the six that did
+at `DURATION=10` were thin monitor sampling and a warm-up, both fixed.
+
+*(That said 26 until the summary was corrected. `validate_hardware.sh`
+globbed every report file on the machine with no date filter, so rows from
+runs a fortnight earlier were counted into this one — including
+`all_reduce` and `p2p_thrasher`, which cannot run on a single-device part
+at all. The summary now filters to reports written after the run started,
+and says how many it ignored. A summary that mixes runs is worse than
+none: every figure in it reads as a statement about the run that just
+finished, and this one had been copied here before anyone noticed.)*
+
+| | `DURATION=10` | `DURATION=30` |
+|---|--:|--:|
+| `memory_read` cv | — | **0.0002** |
+| `memory_write` cv | — | **0.0009** |
+| `tensor_virus` cv | 0.21 | *no flag* |
+| `allocation_fragmentation` cv | 0.98 | *no flag* |
+
+**The NEFF search was exercised for the first time.** The 2026-09-08 run
+scored from `neuron-profile` on the first candidate out of a list of one —
+a fresh instance holds exactly one NEFF, so the ranking had nothing to
+rank and the search, the actual fix, went untested. Against a cache warmed
+by every workload above it, `memory_read` was found at **candidate 6 of
+7** and `memory_write` at **candidate 3 of 7**, both at coverage 1.0. The
+run also says that needing a late candidate means mtime ranking is weak.
+
+**`graph_replay` confirmed a hypothesis written down before the run.** See
+below.
+
+### `--duration` does not bound every workload, and the window can depend on the rate
+
+`graph_replay` is pinned to a replay count, and the count is reached long
+before the clock:
+
+```
+graph_replay  PASS  3040.1886 graph-steps/s  via analytic
+  measured a 3.3s window of a requested 30s, so this run was bounded by
+  its pinned problem rather than by --duration
+```
+
+3.3 seconds against a predicted 3.3. That explains the declared Score's
+apparent intermittence without either counter being wrong: 10,000 replays
+is 13.7 s at the 729 graph-steps/s of 2026-09-08, where neuron-monitor
+could form a delta from its sampled completion counter, and 3.3 s at the
+3040 of 2026-09-10, where it could not.
+
+**The window is inversely proportional to the rate.** A faster device
+measures itself over a shorter window and is *more* likely to lose its
+declared Score. Repinned to 60,000 replays, which holds up at twice the
+observed rate.
+
+`allocation_fragmentation` had the same shape and was repinned from 10,000
+to 40,000 allocations after a sweep: cv 0.083 at 3.98 s, 0.038 at 16.7 s,
+0.025 at 54.4 s. Its rate *falls* as the count rises — a longer run works
+a more fragmented allocator — so two pins are two quantities, declared in
+`registry.SCORE_DEPENDS_ON_PIN`.
+
+### Every Score now says what share of the part it reached
+
+A Score alone invites a comparison it cannot support. 26.1 TFLOPS against
+another accelerator's 40 says nothing about either chip until both are
+read as a fraction of what their silicon can do — so `Percent Of Peak`
+travels with every figure that has a published ceiling.
+
+**Ceilings verified 2026-09-10** against the AWS Neuron architecture
+documentation, which gives Trainium1 and Inferentia2 in identical words:
+two NeuronCore-v2 per chip, 32 GiB HBM at **820 GiB/s**, **190 TFLOPS**
+FP16/BF16/cFP8/TF32. They are the same silicon per chip; they differ in
+how many chips an instance carries.
+
+| workload | Score | cores it had | of its share |
+|---|--:|--:|--:|
+| `memory_read_agg` | 541.5 GB/s | 2 of 2 | **61.5%** |
+| `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
+| `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
+| `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
+| `pulse_virus` | 37.42 TFLOPS | 1 of 2, 50% duty | **78.8%** |
+| `tensor_virus` | 71.80 TFLOPS | 1 of 2 | **75.6%** |
+| `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |
+| `omni_virus` | 54.0 TFLOPS | 1 of 2 | 56.8% |
+| `transformer_virus` | 53.2 TFLOPS | 1 of 2 | 56.0% |
+| `tensor_virus`, `streaming` tiling (before 2026-09-10) | 26.1 TFLOPS | 1 of 2 | 27.5% |
+
+"Cores it had" is what the run exposed, not what the problem says. The
+profiler reservation sets `NEURON_RT_VISIBLE_CORES=0` on every
+single-workload run on a two-core part, so a workload with no `cores:`
+pin sees one core. An earlier version of this table counted two for every
+such workload and **halved every compute percentage**: `transformer_virus`
+read 28% where it reaches 56%.
+
+Pairs that measure the same thing now agree, which is the evidence the
+arithmetic is right: `tensor_virus` and `pulse_virus` run one kernel and
+land 1.7 points apart; `memory_read` and `memory_read_agg` run one memory
+path on one and two cores and land 3.3 points apart.
+
+**The gap that closed.** Under `--test all` the reservation is off, so
+every workload sees both cores. The question was whether a kernel then
+uses both, and neuron-monitor answered it, trn1.2xlarge 2026-09-10:
+
+| visible | workload | core 0 | core 1 |
+|---|---|--:|--:|
+| both | `tensor_virus` | 20.03% | **0.0%** |
+| core 0 | `tensor_virus` | 28.74% | 0.0% |
+| both | `transformer_virus` | 24.35% | **0.0%** |
+| core 0 | `transformer_virus` | 29.85% | 0.0% |
+
+Core 1 did nothing in any case, for the hand-written NKI kernel and the
+torch-lowered one alike: neither is sharded, and one XLA device is one
+NeuronCore. The prediction, written into the probe before it ran, was
+exactly that.
+
+So a visible idle core was being credited, and both kernels read at half
+their share with both cores exposed. For an arithmetic Score the fix is
+exact rather than heuristic: the Score *is* `mean(effective_flops)` over
+the cores that reported it, so those are the cores that count. Memory
+Scores are left alone, because a DMA-bound kernel can saturate HBM with
+the compute engines near idle and counting cores by arithmetic activity
+would call a saturated memory path unused.
+
+It also separates the two kinds of gap. The bandwidth kernels reach
+51–62% of HBM — ordinary for a streaming benchmark, and a figure worth
+comparing across vendors. `tensor_virus` reached 27.5% under the
+`streaming` tiling, which was a statement about the kernel: a plain
+`torch.matmul` on the same core reaches 69.8%. Coalescing its lhs loads
+took it to 75.6% — past the compiler's matmul — and nothing about the
+silicon changed in between.
+
+**A Score above 105% of its ceiling now fails the row.** A planted defect
+in the coalesced kernel posted 186.8 TFLOPS on one 95 TFLOPS core: the
+compiler removed matmuls whose results were never stored, and the rate
+counted them. That figure is not a measurement, and the row says so and
+publishes no Score, while keeping the number in its Detail.
+
+**An earlier version of this table was wrong, in the flattering
+direction.** `kernels/memory_read.py` had long quoted "the part's ~820
+GB/s HBM" in prose; I took that for an Inferentia2 figure misapplied to
+Trainium1 and replaced it with 613 GB/s, derived by dividing the *instance
+page's* "9.8 TB/s" by 16 chips. The suspicion was backwards — 820 is
+correct, for both parts — and the smaller ceiling reported the bandwidth
+kernels at 83–88% of peak when they reach about 60%.
+
+The repo already knew they were the same silicon: both chips report
+NeuronCore-v2, which is what should have made the suspicion suspicious.
+
+What genuinely does not reconcile is the instance pages, and it is why
+the architecture page is the cited source: **both** trn1.32xlarge (16
+chips) and inf2.48xlarge (12) claim "9.8 TB/s of total memory bandwidth",
+which is twelve chips' worth. Compute reconciles on both — 16 × 190 =
+3.04 PFLOPS against "up to 3", 12 × 190 = 2.28 against "up to 2.3".
+
+### The headline TFLOPS figure is the kernel, not the part
+
+**Until 2026-09-10 it was.** trn1.2xlarge, 8192³ bf16, one process:
+`tensor_virus` 26.19 TFLOPS, a plain `torch.matmul` through `neuronx-cc`
+66.32 — **2.53×** this suite's own compute kernel. Quoted against another
+accelerator's peak, 26.1 would have reported a hand-written kernel's
+shortfall as a property of the silicon.
+
+**The coalesced tiling closes it, and is now the default.** It keeps the
+blocked tiling's rhs block in SBUF and loads the lhs four stationary
+tiles wide in one `nl.load`. 8192³, one session, every row-tile of every
+product checked:
+
+| path | TFLOPS | row-tiles wrong |
+|---|--:|--:|
+| `tensor_virus`, streaming (old default) | 26.45 | 0 / 64 |
+| `tensor_virus`, blocked | 28.16 | 0 / 64 |
+| **`tensor_virus`, coalesced** | **70.42** | 0 / 64 |
+| `torch.matmul` | 66.25 | — |
+
+`neuron-monitor`, the declared Score source, reads **71.80** (median of
+three, cv 0.035).
+
+What caused it was measured, not guessed. Coalescing changes the load
+width and gives each lhs load four independent accumulators, so a
+variant with the four accumulators and narrow loads was run too:
+**28.08** — blocked's figure. The accumulators buy nothing; loading the
+lhs in one wide instruction instead of four narrow ones buys all of it.
+Operand bytes barely moved (269.5 MB against blocked's 248.0 at 4096³),
+and coalesced still makes 2.8× as many DMA transfers as `torch.matmul`
+while beating it — so neither traffic nor transfer count was the
+constraint. Two earlier diagnoses, bandwidth and serialisation, were each
+believed because a plausible number agreed with them; this one was an
+experiment that could have come out the other way.
+
+**The check that verified every tiling above could not see what
+coalescing changed.** All-ones operands make every output element K,
+whichever accumulator wrote it. A planted `value=acc[0]` defect ran at
+186.8 TFLOPS — twice one core's peak, because the compiler dropped the
+unstored matmuls — and both of its corners read exactly K. `run()` now
+builds operands under which each 128-row tile must hold a different
+multiple of K and checks every tile; a wrong product fails the row. See
+[the catalogue, #20](docs/checks_that_pass_by_accident.md).
+
+```bash
+python tools/compare_matmul_paths.py
+```
+
+Both sides verify their product before the ratio is computed, because a
+ratio between a correct kernel and a rounded one means nothing.
+
+### "Quantized" is the slowest arithmetic on this part
+
+trn1.2xlarge, 2026-09-10. Five dtypes at 4096³ in one process, so nothing
+differs but the operand type. Every product verified exact against
+all-ones arithmetic.
+
+| path | T-ops/s | vs bf16 |
+|---|--:|--:|
+| `int8 -> int32` | 18.46 | 0.26× |
+| `int8` direct | 18.45 | 0.26× |
+| `uint8 -> int32` | 72.78 | 1.03× |
+| `bf16` | 70.38 | 1.00× |
+| `fp8_e4m3` | refused by `neuronx-cc` | — |
+
+`quantized_gemm` was described as "INT8/FP8 quantized GEMM paths" and
+both halves of that were aspirational. There is no FP8 path —
+`neuronx-cc` refuses the type outright (`NCC_ESPP047`) — and the INT8
+path is **the slowest arithmetic measured on the device**, not an
+acceleration. Its Score is a footprint-and-accuracy figure and the row
+now says so, alongside `ratio_to_bf16`.
+
+`int8 direct` and `int8 -> int32` agreeing to three digits is worth its
+own line: the kernel converted both operands to int32 with a comment
+explaining that int8 accumulators overflow at K far below 4096. True,
+and irrelevant — XLA had already inserted the widening, so the call is a
+no-op. The conversion stays, because it states the accumulator width the
+kernel's correctness rests on; the claim that it prevents anything is
+gone.
+
+**No output check could have caught any of this.** Every row of that
+table computes the correct product, including the two that are 3.8×
+slower than their neighbour. Correctness says the matmul happened; it
+says nothing about which path ran it. What caught it was measuring five
+dtypes side by side — the fifth defect in this repo found by one number
+disagreeing with another.
+
+### Two paths to the engine, two different answers
+
+`nc_matmul` rejects int8 outright (`does not support
+stationary.dtype=int8`, 2026-09-08) and that is why `int_virus` pins
+uint8. `neuronx-cc` accepts int8 and rejects fp8_e4m3. **The two paths do
+not accept the same set**, so "this part supports int8" is not a claim
+that can be checked without saying which path asked.
+
+`kernels/tiling.py` carries `NKI_OPERANDS` and `XLA_OPERANDS` separately
+for that reason, with `OPERAND_REFUSALS` keyed by `(path, dtype)` and
+every refusal carrying the date it was measured.
+
+The first version of that table had one set, transcribed from a prose
+comment rather than run, listing fp8_e4m3 as accepted. A probe falsified
+it the same afternoon — which is the argument for measuring rather than
+transcribing, turned on the person making it.
+
+### `--duration` does not bound every workload
+
+`allocation_fragmentation` pins an allocation count. Ten thousand
+allocations finish in about four seconds on trn1 whatever `--duration`
+says, so `--duration 30` and `--duration 60` measured the same
+four-second window, and every attempt to steady its cv-0.98 scatter by
+raising the duration changed nothing — the flag was not connected to the
+thing it was raised to lengthen.
+
+The orchestrator now compares each kernel's own `elapsed_s` against the
+requested duration and says so when the two diverge. That is one check
+covering all 23 workloads rather than a field each kernel has to
+remember to report, and a new kernel cannot forget a check it does not
+have to write.
+
 ### Repeats
 
 Most Scores in this README are from a single run, and the one quantity that
@@ -710,6 +1107,26 @@ python pantheon_neuron.py --test memory_read --duration 60
 
 The run says which it did — the console names the workloads that are paying,
 and each row's `Score Method` records the method actually used.
+
+**The aggregates themselves run first.** The Neuron runtime in the
+orchestrator's process starts at the first in-process NKI workload and
+holds every visible core until the process exits. With the reservation
+off, that is both cores, so an aggregate running later spawns its
+per-core workers into a device with no cores free. Measured on
+trn1.2xlarge 2026-09-10 with `--test memory --duration 30`, two trees
+differing only in the order:
+
+| order | `memory_read_agg` | `memory_write_agg` |
+|---|---|---|
+| registry (`memory_read` first) | FAIL — both workers aborted (-6) | FAIL — both aborted |
+| aggregates first | **PASS, 541.2 GB/s** | **PASS, 506.4 GB/s** |
+
+Before the fix, those aborted rows were published as **PASS with a
+Score of 0.0 GB/s**. The workers' failures reached the Detail and nothing
+acted on them. A missing worker now invalidates the aggregate. At
+`--duration 10` the two workers' compile times can differ by more than
+their timed loops, and the row fails for no overlap. Use 30 or more for
+a selection that includes them.
 
 ## Running without hardware
 

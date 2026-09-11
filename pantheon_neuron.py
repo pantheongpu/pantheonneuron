@@ -103,6 +103,30 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
 
 # --- Execution --------------------------------------------------------------
 
+def run_order(workloads) -> list:
+    """The selection, with workloads that spawn per-core workers moved ahead
+    of every workload that runs in this process.
+
+    The Neuron runtime in this process starts at the first in-process NKI
+    workload and holds every visible core until the process exits. Under a
+    selection with a ``cores: "all"`` workload the reservation is off, so
+    that is every core on the part -- and an aggregate that runs later
+    spawns one worker per core into a device with none free. On
+    trn1.2xlarge 2026-09-10, ``--test all`` ran tensor_virus first and both
+    workers of memory_read_agg and memory_write_agg aborted (-6); run in
+    a process of their own, the same workers ran.
+
+    Baseline telemetry stays first: it measures the part before any load,
+    and it opens no runtime. Otherwise the order within each group is the
+    registry's.
+    """
+    baseline = [w for w in workloads if w.suite == "baseline"]
+    spawning = [w for w in workloads
+                if w not in baseline and (w.problem or {}).get("cores") == "all"]
+    rest = [w for w in workloads if w not in baseline and w not in spawning]
+    return baseline + spawning + rest
+
+
 def reservation_cost(workloads) -> typing.Tuple[typing.List[str], typing.List[str]]:
     """What a selection costs the profiler: (aggregate names, workloads billed).
 
@@ -190,6 +214,44 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     return plan["profiler"]
 
 
+# A run whose measured window is below this fraction of the requested
+# duration was bounded by something other than the clock. Set at half
+# rather than something tighter because a kernel legitimately spends part
+# of its wall time on a warm-up and a final wait_device_ops, and calling
+# that a short window would cry wolf on every row.
+SHORT_WINDOW_FRACTION = 0.5
+
+
+def short_window(measured: typing.Optional[float],
+                 requested: int) -> typing.Optional[str]:
+    """Say so when ``--duration`` did not bound the run.
+
+    ``allocation_fragmentation`` pins an allocation count, and 10,000
+    allocations finish in about four seconds on trn1 however long a
+    duration is asked for. ``--duration 30`` and ``--duration 60`` both
+    measured a four-second window, three repeats of it scattered from cv
+    0.15 to cv 0.98, and every attempt to steady the number by raising
+    the duration changed nothing -- because the flag it was raised on was
+    not connected to the thing it was trying to lengthen.
+
+    That kernel now reports ``bounded_by`` itself. This is the same check
+    made general, because the defect is not specific to it: any workload
+    bounded by a pinned count publishes a rate over a window the reader
+    believes they chose, and a new kernel cannot forget a check it does
+    not have to write. It reads ``elapsed_s``, which every kernel here
+    already returns.
+    """
+    if measured is None or requested <= 0:
+        return None
+    if measured >= requested * SHORT_WINDOW_FRACTION:
+        return None
+    return (
+        f"measured a {measured:.1f}s window of a requested {requested}s, "
+        "so this run was bounded by its pinned problem rather than by "
+        "--duration; raising the duration will not steady the Score"
+    )
+
+
 def _measure_once(workload, devices, duration: int, monitor_period: float) -> dict:
     """One execution of one workload, scored. See ``run_workload``."""
     skip = workload.skip_reason(devices)
@@ -206,6 +268,10 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             "Devices": [device.index for device in devices],
             "Score": None,
             "Unit": workload.unit,
+            # Declared and empty like Score, so a skipped row keeps the
+            # same shape as a scored one.
+            "Percent Of Peak": None,
+            "Peak": None,
             "Score Method": None,
             # Declared and empty, like Score above: a cross-platform
             # comparison reads an explicit gap, not a missing key.
@@ -224,27 +290,55 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         score = _execute(workload, devices, duration)
     except nki_backend.BackendUnavailable as error:
         status, detail = "SKIPPED", str(error)
-    except Exception as error:  # noqa: BLE001 - a failing workload is a result
+    except Exception as error:  # broad: a failing workload IS a result
         status, detail = "FAIL", f"{type(error).__name__}: {error}"
     elapsed = time.time() - started
 
     run = _LAST_RUN.get(workload.name)
     if run and run.get("warning") and status == "PASS":
         detail = run["warning"]
-        if run.get("score_invalid"):
-            # The kernel says its own output could not be verified, so the
-            # throughput beside it is not a measurement of anything. The
-            # 2026-09-08 full-coverage run reported llm_prefill, llm_decode
-            # and speculative_decode as PASS with published Scores while
-            # every one of them had produced a NaN: the check fired, the
-            # message reached the row's Detail, and nothing acted on it.
-            #
-            # An unverifiable output is indistinguishable from a graph that
-            # never ran, which is the definition of a failed workload.
-            status = "FAIL"
-            score = None
+
+    # Deliberately not nested under the warning above, which is where it
+    # was. A kernel that invalidates its own Score without also setting a
+    # message was silently ignored -- the invalidation depended on the
+    # kernel happening to explain itself, and the two are separate
+    # decisions. Nothing had hit that yet, because every kernel setting
+    # score_invalid also set a warning; memory_agg's zero-overlap case is
+    # the first that computes the two independently.
+    if run and run.get("score_invalid") and status == "PASS":
+        # The kernel says its own output could not be verified, so the
+        # throughput beside it is not a measurement of anything. The
+        # 2026-09-08 full-coverage run reported llm_prefill, llm_decode
+        # and speculative_decode as PASS with published Scores while
+        # every one of them had produced a NaN: the check fired, the
+        # message reached the row's Detail, and nothing acted on it.
+        #
+        # An unverifiable output is indistinguishable from a graph that
+        # never ran, which is the definition of a failed workload.
+        status = "FAIL"
+        score = None
+        detail = detail or (
+            "the kernel reported its Score as invalid and gave no reason"
+        )
+
+    # The wall time above includes compile and warm-up. What the reader
+    # asked to bound is the measured window, which is the kernel's own
+    # elapsed_s -- so the two are compared, not conflated.
+    run_result = _LAST_RUN.get(workload.name) or {}
+    if status == "PASS" and "bounded_by" not in run_result:
+        # A kernel that reports ``bounded_by`` has already said this, in
+        # terms specific to its own pinned problem. The first version of
+        # this check tested the message texts for equality, which is not
+        # the same question -- allocation_fragmentation's row came back
+        # carrying both sentences saying the same thing (trn1.2xlarge,
+        # 2026-09-10). The general check is the floor for kernels that
+        # do not report it, not a second opinion on the ones that do.
+        window = short_window(run_result.get("elapsed_s"), duration)
+        if window:
+            detail = "; ".join(filter(None, [detail, window]))
 
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
+
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
         status = "FAIL"
         detail = f"{metrics['execution_errors']} Neuron execution error(s)"
@@ -256,26 +350,62 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     if status == "PASS":
         declared = monitor_score(workload, metrics)
         if declared is not None:
+            # Before the kernel's own figure is discarded, compare them.
+            counter = ("effective_flops" if _wants_monitor_score(workload)
+                       else "the completion counter")
+            disagreement = override_disagreement(score, declared, counter)
+            if disagreement:
+                detail = "; ".join(filter(None, [detail, disagreement]))
+            # Only for a Score that is a *rate over that span*. The
+            # compute family is scored from mean(effective_flops), and a
+            # mean is not divided by the span at all -- so an inflated
+            # span cannot move it, and saying it does is a caveat about
+            # arithmetic the row never performed.
+            #
+            # It fired on pulse_virus on trn1.2xlarge 2026-09-10 -- "the
+            # declared rate is divided by 4.50x the time the workload
+            # actually ran" -- for a Score with no denominator. Exactly
+            # the defect thin_monitor_sample had two commits earlier, and
+            # gated the same way: a row must describe the counter it
+            # publishes.
+            if _wants_execution_rate(workload):
+                overhang = span_outran_the_kernel(
+                    metrics.get("execution_span_s"),
+                    (_LAST_RUN.get(workload.name) or {}).get("elapsed_s"))
+                if overhang:
+                    detail = "; ".join(filter(None, [detail, overhang]))
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
             )
-            thin = thin_monitor_sample(metrics)
+            thin = thin_monitor_sample(metrics, workload)
             if thin:
                 detail = "; ".join(filter(None, [detail, thin]))
         elif score is None and (_wants_monitor_score(workload)
                                 or _wants_execution_rate(workload)):
             counter = ("effective_flops" if _wants_monitor_score(workload)
                        else "execution rate")
-            detail = detail or (
+            # neuron_monitor.execution_rate says which of the three reasons
+            # it was -- no samples, one sample, or a counter that never
+            # advanced. Those need different responses and the generic
+            # message covered all three: graph_replay degraded on
+            # 2026-09-10 and the row said only that the rate was absent.
+            because = metrics.get("execution_rate_absent")
+            detail = detail or "; ".join(filter(None, [
                 f"neuron-monitor reported no {counter}, so this run has "
-                "no Score from its declared source"
-            )
+                "no Score from its declared source",
+                because,
+            ]))
 
     # "Score" and "Unit" mirror the pantheongpu report schema exactly so a
     # cross-platform comparison can join on (Test Name, Unit). "Problem"
     # records the pinned shape/dtype, because a Score is only comparable if
     # both platforms ran the same problem.
+    _peak_share = peak_share(workload, devices, metrics)
+    beyond = beyond_the_ceiling(score, _peak_share, workload.unit)
+    if beyond and status == "PASS":
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [detail, beyond]))
     return {
         "Test Name": workload.name,
         "Suite": workload.suite,
@@ -285,6 +415,15 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         "Devices": [device.index for device in devices],
         "Score": round(score, 4) if isinstance(score, (int, float)) else None,
         "Unit": workload.unit,
+        # What fraction of the ceiling this workload was actually given.
+        #
+        # A Score without it invites a cross-vendor comparison it cannot
+        # support: 26.1 TFLOPS against another accelerator's 40 says
+        # nothing about the silicon until both are read as a share of
+        # what their part can do. None when there is no published peak
+        # for the unit, which is most of the suite.
+        "Percent Of Peak": percent_of_peak(score, _peak_share),
+        "Peak": _peak_share,
         "Score Method": _score_method(workload, score),
         "Measurement": _provenance(workload),
         # Filled in by run_workload when more than one repeat ran; declared
@@ -342,11 +481,447 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
               if isinstance(r.get("Score"), (int, float))]
     row["Repeats"] = _spread(scores, len(rows))
     if scores and row["Status"] == "PASS":
-        row["Score"] = round(statistics.median(scores), 4)
+        published = statistics.median(scores)
+        row["Score"] = round(published, 4)
+        # The row must describe the run it publishes. `row` started as the
+        # last repeat, so its Measurement -- which NEFF was captured, how
+        # many candidates were searched, what coverage -- belonged to
+        # whichever repeat happened to run last, while the Score belonged
+        # to the median one. Two different runs, one row, and nothing said
+        # so.
+        row["Measurement"] = _median_provenance(rows, scores, published)
+        # The same defect again, in a column added after the fix above.
+        # Percent Of Peak was the last repeat's: on trn1.2xlarge 2026-09-10
+        # tensor_virus published Score 71.7968 (the median) beside 75.73%,
+        # which is 71.943 -- the last repeat -- over 95. The Peak is taken
+        # from the median repeat too, since a duty-scaled ceiling can
+        # differ between repeats.
+        median_row = _median_row(rows, published) or row
+        row["Peak"] = median_row.get("Peak")
+        row["Percent Of Peak"] = percent_of_peak(published, row["Peak"])
         unstable = _unstable(row["Repeats"])
         if unstable:
             row["Detail"] = "; ".join(filter(None, [row.get("Detail"), unstable]))
+        else:
+            # The opposite failure, and the less obvious one: repeats that
+            # agree more closely than the Score can resolve.
+            quantised = quantised_agreement(
+                row["Repeats"],
+                score_resolution(workload, _LAST_RUN.get(workload.name) or {}))
+            if quantised:
+                row["Detail"] = "; ".join(
+                    filter(None, [row.get("Detail"), quantised]))
     return row
+
+
+def _median_row(rows, published):
+    """The repeat whose Score is the published median, or None when the
+    median is an average of two repeats and belongs to neither."""
+    for candidate in rows:
+        if candidate.get("Score") == published:
+            return candidate
+    return None
+
+
+def _median_provenance(rows, scores, published):
+    """The Measurement belonging to the repeat that produced the Score.
+
+    With an even number of repeats the median is an average of two runs and
+    belongs to neither, so the row reports none rather than picking one --
+    provenance that describes a different execution is worse than absent.
+    """
+    if len(scores) % 2 == 0:
+        return None
+    for candidate in rows:
+        if candidate.get("Score") == published:
+            return candidate.get("Measurement")
+    return None
+
+
+# How far a monitor-sourced Score may sit from the kernel's own figure
+# before the row says so. Wide, because the two quantities are genuinely
+# different -- one is what the device's counters saw, the other what the
+# kernel issued -- and small disagreements are expected. It is the factor
+# of four that needs saying.
+OVERRIDE_DISAGREEMENT = 1.5
+
+
+# How far the monitor's execution span may exceed the kernel's own
+# measured window before the row says so. The two brackets different
+# things -- the monitor starts before the workload and stops after it --
+# so a small overhang is expected and is not the counter's fault.
+SPAN_OVERHANG = 1.1
+
+
+def span_outran_the_kernel(span, elapsed) -> typing.Optional[str]:
+    """Say so when a rate's denominator is longer than the run it describes.
+
+    ``execution_rate`` trims a leading flat run (the workload compiling)
+    and a trailing one (the workload finished while the monitor sampled),
+    so its span should sit inside the kernel's own window.
+
+    On trn1.2xlarge 2026-09-10 it did not: graph_replay measured a 20.47s
+    window and the monitor reported a 24.99s span, 22% longer, with
+    ``execution_idle_fraction`` at 0.0 -- meaning nothing was trimmed at
+    either end. Every extra second is time no replay was running, divided
+    into a completion count that stopped growing, so the declared Score
+    came out low by the same 22%.
+
+    That matters here beyond the arithmetic. graph_replay's declared and
+    analytic figures differ by about four, and a denominator inflated by a
+    fifth is exactly the sort of thing that gets offered as the
+    explanation for a discrepancy it is far too small to explain.
+
+    **Where the extra time comes from, as a hypothesis rather than a
+    finding.** The monitor starts before the workload and stops after it,
+    so its window is compile plus run. ``execution_rate`` trims a leading
+    flat run to remove the compile, and that trim only works if the
+    completion counter is perfectly flat while compiling -- any activity
+    at all, from another process or from the warm-up, leaves the leading
+    samples looking like progress and the compile stays in the span.
+
+    That would explain both observations. graph_replay's 24.99s against a
+    20.47s window is a short compile; pulse_virus reported 89.99s against
+    20.00s on trn1.2xlarge 2026-09-10, and its pinned 8192^3 takes about
+    seventy seconds to compile cold. 70 + 20 is 90.
+
+    Not established: it needs a run that records the compile boundary
+    separately, and ``execution_idle_fraction`` reading 0.0 in the
+    graph_replay case says nothing was trimmed, which is consistent with
+    the story and does not prove it.
+    """
+    if not isinstance(span, (int, float)) or span <= 0:
+        return None
+    if not isinstance(elapsed, (int, float)) or elapsed <= 0:
+        return None
+    if span <= elapsed * SPAN_OVERHANG:
+        return None
+    return (
+        # Fixed decimals, not %g: 24.9954 renders as "25" at four
+        # significant figures, which reads as a round number where the
+        # point is that it is 4.5 seconds too long.
+        f"the monitor's execution span is {span:.2f}s against the kernel's "
+        f"{elapsed:.2f}s window, so the declared rate is divided by "
+        f"{span / elapsed:.2f}x the time the workload actually ran"
+    )
+
+
+def override_disagreement(analytic, declared,
+                          counter: str) -> typing.Optional[str]:
+    """Say so when the declared Score replaces a very different number.
+
+    A monitor-sourced Score overrides whatever the kernel computed, and
+    the kernel's figure then vanishes from the row. For the compute family
+    that is unremarkable: ``tensor_virus`` issued 26.19 TFLOPS by its own
+    count against 26.06 from the monitor, and either would do.
+
+    ``graph_replay`` is the reason this exists. Its analytic figure counts
+    replays submitted, its declared Score counts executions the device
+    finished, and they have been seen at 3051.2 and 729.3 graph-steps/s --
+    a factor of 4.2. The dispatch source already says the disagreement is
+    "worth seeing rather than smoothing", and then nothing reported it:
+    the reader got one number and never learned the other existed.
+
+    Which is right is not decided here. A row that publishes one of two
+    numbers differing by 4x should say that it did.
+    """
+    if not isinstance(analytic, (int, float)) or isinstance(analytic, bool):
+        return None
+    if not isinstance(declared, (int, float)) or isinstance(declared, bool):
+        return None
+
+    # The two zero cases, which are not "a large ratio" but a different
+    # statement entirely. These came from tensor_virus.verify_against_
+    # monitor, a function that had been written to make exactly these
+    # checks and was never called from anywhere -- a check that exists and
+    # does not run, which is the purest form of the defect catalogued in
+    # docs/checks_that_pass_by_accident.md.
+    if analytic <= 0:
+        return "the kernel issued no arithmetic, so it measured nothing"
+    if declared <= 0:
+        return (
+            f"{counter} reported no activity while the kernel counted "
+            f"{analytic:.4g} -- the work was probably eliminated"
+        )
+
+    ratio = max(analytic, declared) / min(analytic, declared)
+    if ratio < OVERRIDE_DISAGREEMENT:
+        return None
+    return (
+        f"{counter} reports {declared:.4g} where the kernel counted "
+        f"{analytic:.4g}, a factor of {ratio:.2g} -- the Score is the "
+        "former and the two are not measuring the same thing"
+    )
+
+
+def visible_core_count(value: typing.Optional[str]) -> typing.Optional[int]:
+    """How many cores a NEURON_RT_VISIBLE_CORES value exposes.
+
+    Accepts the forms the runtime does and ``cores.split`` writes: a
+    single index ("0"), a range ("0-6"), or a comma list ("0,2,3"). None
+    when the variable is unset or unreadable -- which means "no limit was
+    imposed", not "zero cores".
+    """
+    if not value or not value.strip():
+        return None
+    count = 0
+    try:
+        for part in value.split(","):
+            part = part.strip()
+            if "-" in part:
+                low, high = (int(x) for x in part.split("-", 1))
+                if high < low:
+                    return None
+                count += high - low + 1
+            else:
+                int(part)
+                count += 1
+    except ValueError:
+        return None
+    return count or None
+
+
+def peak_share(workload, devices, telemetry=None) -> typing.Optional[dict]:
+    """The peak this workload's Score should be measured against.
+
+    Not the device's peak. A workload declaring ``cores: 1`` gets one
+    NeuronCore of a two-core part, so its ceiling is half the chip's --
+    and comparing a single-core figure against a whole accelerator is the
+    error that makes 256 GB/s look like 31% of the part when it is closer
+    to 62% of what it was actually given.
+
+    That distinction is the point of this function. ``memory_read`` and
+    ``memory_read_agg`` measure the same thing on the same silicon and
+    differ only in how much of it they are allowed; a percentage that
+    ignores the difference makes the aggregate look better than the
+    single-core run for a reason that has nothing to do with memory.
+
+    Returns None when there is no peak to divide by -- an unrecognised
+    architecture, or a unit that is not a rate against a published
+    ceiling. graph-steps/s and requests/s have no datasheet figure, and
+    inventing one would be worse than leaving the column empty.
+    """
+    if not devices:
+        return None
+    arch = getattr(devices[0], "arch", None)
+    peak = registry.PART_PEAKS.get(arch)
+    if peak is None:
+        return None
+
+    field = registry.PEAK_FOR_UNIT.get(workload.unit)
+    if field is None or peak.get(field) is None:
+        return None
+
+    per_device = float(peak[field])
+    cores_declared = (workload.problem or {}).get("cores")
+    total_cores = sum(getattr(d, "neuroncores", 0) for d in devices)
+
+    if cores_declared == "all" or cores_declared is None:
+        # "all" spans the selection; an unset value means the workload
+        # takes whatever the run gave it.
+        cores_used = total_cores
+    else:
+        cores_used = int(cores_declared)
+
+    # What the run actually gave it, which is not what the problem says.
+    #
+    # The profiler reservation sets NEURON_RT_VISIBLE_CORES before the
+    # workload initialises -- "cores 0 to the workload, 1 reserved for
+    # neuron-profile", on every single-workload run on a two-core part --
+    # so a workload with no `cores:` pin sees one core, not two. The first
+    # version of this counted two, and so measured tensor_virus,
+    # transformer_virus, omni_virus and pulse_virus against a ceiling
+    # twice what they were allowed to reach: every compute percentage in
+    # the README was half what it should have been.
+    #
+    # Capped rather than replaced, so an explicit `cores: 1` stays 1
+    # whether or not a reservation is active.
+    #
+    # Not for `cores: "all"`. An aggregate spawns one worker per core and
+    # gives each its own visibility, and reservation_cost turns the
+    # reservation *off* for any selection containing one -- so the parent
+    # never runs under a single-core mask. Applying the cap anyway, which
+    # a simulation did, reported memory_read_agg at 123% of peak: an
+    # impossible figure from a configuration the orchestrator refuses to
+    # create. Over 100% being reported rather than clamped is what made
+    # that visible.
+    if cores_declared != "all":
+        visible = visible_core_count(os.environ.get(cores.VISIBLE_CORES))
+        if visible is not None:
+            cores_used = min(cores_used, visible)
+
+    # What the kernel actually *used*, which the visible mask cannot say.
+    #
+    # Measured on trn1.2xlarge 2026-09-10 with both cores exposed
+    # (NEURON_RT_VISIBLE_CORES=0-1): tensor_virus left core 1 at 0.0%
+    # utilisation and no effective_flops, and so did transformer_virus.
+    # Neither kernel is sharded, one XLA device is one NeuronCore, and a
+    # visible second core simply sits there. The column credited it, and
+    # reported both kernels at half their share -- 11.88% and 25.17%
+    # where the same kernels under the reservation read 26.51% and 53.29%.
+    #
+    # For an arithmetic Score the fix is exact rather than heuristic: the
+    # Score *is* mean(effective_flops) over the cores that reported it, so
+    # the cores that count are precisely those. Only for TFLOPS -- a
+    # memory kernel is DMA-bound and can move bytes at full rate with the
+    # compute engines near idle, so counting cores by arithmetic activity
+    # there would call a saturated HBM path unused.
+    if field == "bf16_tflops" and telemetry:
+        flops = telemetry.get("effective_flops") or {}
+        active = sum(1 for core in flops.values()
+                     if isinstance(core, dict) and core.get("mean"))
+        if active:
+            cores_used = min(cores_used, active)
+
+    if not total_cores or not cores_used:
+        return None
+
+    devices_span = len(devices)
+    ceiling = per_device * devices_span * (
+        cores_used / float(total_cores))
+
+    # A duty-cycled workload idles for part of its run by design, and its
+    # Score is averaged over the whole run -- idle halves included. So the
+    # most it could ever report is the peak times the duty.
+    #
+    # Without this, pulse_virus read 7.29% of peak against tensor_virus's
+    # 13.74%: exactly half, because it idles half the time, while running
+    # the same kernel at the same rate during its loaded halves. The
+    # column would have told a reader the pulsed kernel is half as
+    # efficient, which is the opposite of what the two numbers show.
+    duty = (workload.problem or {}).get("duty_cycle")
+    if isinstance(duty, (int, float)) and 0 < duty < 1:
+        ceiling *= duty
+
+    if ceiling <= 0:
+        return None
+
+    return {
+        "peak": round(ceiling, 4),
+        "peak_field": field,
+        "peak_source": peak["source"],
+        "peak_verified": bool(peak.get("verified")),
+        "cores_used": cores_used,
+        "cores_available": total_cores,
+        # Recorded so a reader can see why this ceiling is lower than the
+        # part's, rather than having to find it in the problem.
+        "duty_cycle": duty if isinstance(duty, (int, float)) else None,
+    }
+
+
+def percent_of_peak(score, share) -> typing.Optional[float]:
+    """``score`` as a percentage of the ceiling ``peak_share`` derived.
+
+    The column that turns two numbers into a finding. 26.1 TFLOPS and
+    66.3 TFLOPS are two numbers; 27% and 70% say which of them is a
+    statement about the silicon.
+    """
+    if share is None or not isinstance(score, (int, float)):
+        return None
+    if score <= 0 or share.get("peak", 0) <= 0:
+        return None
+    return round(100.0 * score / share["peak"], 2)
+
+
+# Headroom over the published peak before a Score is called impossible.
+# The peaks are the vendor's own round numbers and a monitor average can
+# land a little high on a short window; a real kernel does not reach 100%
+# on this part (the best measured is 76%), so 5% over is not a close call.
+CEILING_TOLERANCE = 1.05
+
+
+def beyond_the_ceiling(score, share, unit) -> typing.Optional[str]:
+    """Why a Score above the physical peak of what ran it is not a result.
+
+    A planted defect in tensor_virus's coalesced tiling, run through
+    ``run()`` on trn1.2xlarge 2026-09-10, posted **186.8 TFLOPS on one
+    NeuronCore whose bf16 peak is 95**: the compiler deleted three matmul
+    chains whose outputs were never stored, and the analytic rate counted
+    their FLOPs anyway. The product check caught that one. This catches
+    the class -- any Score twice what the silicon can do is a count of
+    work that did not happen, or a ceiling computed for the wrong cores,
+    and either way the number is not a measurement.
+
+    None when there is no ceiling to hold it against, which is most of the
+    suite.
+    """
+    if share is None or not isinstance(score, (int, float)):
+        return None
+    peak = share.get("peak") or 0
+    if peak <= 0 or score <= peak * CEILING_TOLERANCE:
+        return None
+    return (
+        f"Score {score:.4g} {unit} is {score / peak:.2f}x the {peak:g} {unit} "
+        "this configuration can physically reach -- it counts work that did "
+        "not happen, or the ceiling was computed for the wrong cores; not "
+        "published"
+    )
+
+
+def score_resolution(workload, result) -> typing.Optional[float]:
+    """The fraction of the Score that one more counted unit would move it.
+
+    Derived from the declared formula rather than reported per kernel.
+    Most Scores here are ``<counter> / elapsed_s`` where the counter is an
+    integer count of things finished, and such a Score cannot resolve
+    anything finer than one of them -- so the resolution is ``1 / count``,
+    for every one of them, without each kernel remembering to say so.
+
+    A kernel may still declare ``score_resolution`` itself, and that wins:
+    ``serving_mix``'s Score counts *completed requests*, which advance once
+    per 32 decode steps, and the formula alone cannot know that.
+
+    Returns None when the Score is not a count over time -- a bandwidth or
+    a FLOPS figure is continuous and this question does not apply to it.
+    """
+    declared = result.get("score_resolution")
+    if declared is not None:
+        return declared
+
+    source = getattr(workload, "score_source", None)
+    formula = getattr(source, "formula", None) if source else None
+    if not formula or "/" not in formula:
+        return None
+    numerator, _, denominator = formula.partition("/")
+    if denominator.split("#")[0].strip() != "elapsed_s":
+        return None
+
+    count = result.get(numerator.strip())
+    # bool is an int and would give a resolution of 1.0 for a flag.
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        return None
+    return 1.0 / count
+
+
+def quantised_agreement(spread, resolution) -> typing.Optional[str]:
+    """Say so when repeats agree more closely than the Score can resolve.
+
+    ``serving_mix`` reported cv 0.0001 over three repeats at DURATION=60 --
+    by a wide margin the most reproducible Score in the suite, and read as
+    evidence the workload was exceptionally steady.
+
+    It is nothing of the sort. Its Score is an integer division:
+    ``decode_tokens // decode``, so the request count advances once per 32
+    decode steps and not at all in between. The three runs landed on the
+    same integer, and the only thing varying was the wall clock in the
+    denominator. Variation in the work done was below the resolution of the
+    number reporting it.
+
+    ``UNSTABLE_CV`` catches a Score that disagrees with itself. This catches
+    the opposite and less obvious failure: one that cannot disagree with
+    itself, which is not the same as one that does not.
+    """
+    if not spread or resolution is None or resolution <= 0:
+        return None
+    cv = spread.get("cv")
+    if cv is None or cv >= resolution:
+        return None
+    return (
+        f"repeats agree to cv {cv:.4g} on a Score that one more completed "
+        f"unit would move by {resolution:.4g} -- the repeats landed on the "
+        "same integer, so this is the counter's resolution rather than the "
+        "workload's stability"
+    )
 
 
 # Above this, repeats of the same pinned problem disagree enough that the
@@ -379,11 +954,17 @@ def _spread(scores, attempted: int) -> dict:
 def _trend(scores) -> typing.Optional[str]:
     """Monotonic repeats are drift, not scatter.
 
-    Repeats run in one process, so a workload that leaves device memory
-    allocated makes every later repeat measure a fuller device. Measured on
-    trn1.2xlarge 2026-09-10: allocation_fragmentation's three repeats spanned
-    0.91 to 2,511.80 allocation-events/s -- a factor of 2,700, and ordered.
-    Noise does not do that.
+    Repeats run in one process, so whatever state one leaves behind reaches
+    the next. Measured on trn1.2xlarge 2026-09-10:
+    allocation_fragmentation's repeats read 549, 2,646 and 2,750
+    allocation-events/s -- ordered, and rising. Noise does not do that.
+
+    *Rising* is the informative part, and it corrected a wrong guess. A
+    workload accumulating device memory would get slower; this got faster,
+    which is warm-up -- the first repeat was compiling a graph for each of
+    thirteen distinct allocation sizes and the later ones hit the cache.
+    The direction is what distinguishes the two, which is why it is
+    reported rather than just the spread.
 
     Weak evidence on its own at three repeats, where a third of orderings
     are monotonic by chance. It is reported beside the coefficient of
@@ -415,7 +996,8 @@ def _unstable(spread: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
         message += (
             f"; and they are monotonically {trend}, which is drift rather "
             "than scatter -- repeats share a process, so state one leaves "
-            "behind reaches the next"
+            "behind reaches the next. Rising usually means the first repeat "
+            "paid a compile the others did not"
         )
     return message
 
@@ -506,23 +1088,60 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     return sum(means) / len(means) / 1e12
 
 
-# Below this many samples, a mean over effective_flops is not stable. The
-# monitor samples across the whole run and drops the ones taken while the
-# workload is compiling, so a short run averages a handful -- and one caught
-# mid-ramp moves it a long way. Measured on trn1.2xlarge 2026-09-10 at
-# DURATION=10: tensor_virus repeated 17.74, 26.14 and 26.13 TFLOPS, and the
-# low figure is a mean over fewer good samples rather than a slow run.
+# Below this many samples a monitor-sourced mean is not a measurement.
+#
+# What that costs in wall time is not what the --monitor-period flag
+# suggests. Measured on trn1.2xlarge 2026-09-10, samples actually
+# delivered over a 20-second window:
+#
+#     requested 0.2s -> 11 samples, one every 1.82s   (9.1x slower)
+#     requested 1.0s ->  5 samples, one every 4.00s   (4.0x slower)
+#     requested 5.0s ->  5 samples, one every 4.00s
+#
+# **neuron-monitor has a floor around two seconds and does not deliver
+# the requested rate at or below one.** At the default period, five
+# samples takes roughly twenty seconds of *executing* -- not of
+# --duration, since samples taken while the workload compiles are
+# dropped.
+#
+# So the advice this suite gives -- "run longer or with a shorter
+# --monitor-period" -- is only half right, and the half that works is
+# running longer.
 MIN_FLOPS_SAMPLES = 5
 
 
-def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any]
-                        ) -> typing.Optional[str]:
-    """Say so when a monitor Score averages too few samples to be stable.
+def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
+                        workload=None) -> typing.Optional[str]:
+    """Say so when a monitor Score rests on too few samples to be stable.
 
     A rate cannot show this about itself, and the spread across repeats
     only shows it if somebody runs repeats. The sample count is the
     quantity that makes a single run self-describing.
+
+    **It has to describe the counter that produced the Score.** This read
+    ``effective_flops`` for every monitor-scored workload, and graph_replay
+    is scored from the completion counter instead -- so on trn1.2xlarge
+    2026-09-10 its row carried "effective_flops averaged over 3 sample(s)"
+    about a number it does not publish, while the thinness of the counter
+    it does publish went unreported. A warning naming the wrong quantity
+    is worse than none: it invites a reader to discount the Score for a
+    reason that has nothing to do with it.
+
+    ``workload`` is optional so the existing callers and tests keep
+    working; without it the effective_flops path is assumed, which is what
+    every workload but graph_replay uses.
     """
+    if workload is not None and _wants_execution_rate(workload):
+        samples = metrics.get("execution_samples")
+        if not isinstance(samples, int) or samples >= MIN_FLOPS_SAMPLES:
+            return None
+        return (
+            f"the completion counter moved across {samples} sample(s); a "
+            f"rate over fewer than {MIN_FLOPS_SAMPLES} moves with any one "
+            "of them, so run longer before quoting this -- neuron-monitor "
+            "floors around 2s per sample whatever --monitor-period asks for"
+        )
+
     flops = metrics.get("effective_flops") or {}
     counts = [core["samples"] for core in flops.values()
               if isinstance(core, dict) and isinstance(core.get("samples"), int)]
@@ -531,7 +1150,8 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any]
     return (
         f"effective_flops averaged over {min(counts)} sample(s); a mean over "
         f"fewer than {MIN_FLOPS_SAMPLES} moves with any one of them, so run "
-        "longer or with a shorter --monitor-period before quoting this"
+        "longer before quoting this -- neuron-monitor floors around 2s per "
+        "sample whatever --monitor-period asks for"
     )
 
 
@@ -580,11 +1200,17 @@ _PROVENANCE_KEYS = (
     "profiler_candidates_available",
     # The counters the declared formula divides, so a Score can be
     # recomputed from the report rather than trusted.
+    "allocation_events",
     "hbm_read_bytes",
     "hbm_write_bytes",
     "profiler_total_time_s",
     # The cross-check the profiler figure is meant to be compared against.
     "analytic_gbps",
+    # memory_read: which side set the rate -- the loads or the reduction
+    # that consumes them. A heavier consumer halved the bandwidth on
+    # trn1.2xlarge 2026-09-10 with every byte still read; only these said so.
+    "consumer_engine_active",
+    "dma_active",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,
@@ -593,6 +1219,10 @@ _PROVENANCE_KEYS = (
     # MoE dispatch: slots per expert, which is what the arithmetic scales
     # with once routing is balanced.
     "capacity",
+    # allocation_fragmentation: which limit stopped the run, and how long
+    # it actually measured. --duration does not bound this one.
+    "bounded_by",
+    "measured_window_s",
     # omni_virus: the shape it actually ran, which may be smaller than the
     # Problem the row advertises.
     "tile",
@@ -602,11 +1232,71 @@ _PROVENANCE_KEYS = (
     # one after another.
     "concurrent_window_s",
     "worker_span_s",
+    # fused_attention, moe_router, rag_embedding and vision_encoder report
+    # a tile, token or vector rate, which nothing can check. implied_tflops
+    # can be held against the ~26 this kernel family reaches on a dense
+    # matmul -- itself a floor rather than the part's capability, see
+    # docs/the_headline_number_is_the_kernel.md.
+    "flops_issued",
+    "implied_tflops",
     # serving_mix: a request is many scheduler steps, so both rates are
     # wanted, and implied_tflops is what a request count cannot contradict.
+    # It listed implied_tflops a second time here, which is harmless and
+    # was still worth noticing -- a whitelist nobody checks is a whitelist
+    # that drifts, and there is now a test for duplicates.
     "scheduler_steps_per_s",
     "blocks_executed",
-    "implied_tflops",
+    # How coarse the Score is. serving_mix's cv of 0.0001 was the counter's
+    # resolution rather than the workload's stability, and a reader cannot
+    # tell those apart without this beside it.
+    "steps_per_request",
+    "score_resolution",
+    # quantized_gemm: int8 runs at 0.254x bf16 on this part, so the Score
+    # is a footprint figure and reads as an acceleration without this.
+    "ratio_to_bf16",
+    "reference_bf16_tops",
+    # rag_embedding: the value its L2 normalisation erased. The published
+    # vector is 1/sqrt(dim) whether twelve blocks ran or none did, so this
+    # is the only figure in the row that can see the encoder.
+    "embedding_element",
+    "expected_embedding_element",
+    # transformer_train_step: whether the model moved. "train-steps/s"
+    # measures the cost of a step and says nothing about whether the
+    # optimiser changed anything, and at bf16 with these weights it does
+    # not -- an SGD step is a small fraction of one ulp.
+    "parameter_before",
+    "parameter_after",
+    "parameter_moved",
+    # kv_cache_churn: the cache and entry fills, and what was read back.
+    # Both were ones, so the readback was 1.0 whether the write landed or
+    # not -- in the workload whose entire finding is that the write reaches
+    # the cache.
+    "cache_fill",
+    "entry_fill",
+    "cache_element",
+    # Values the pinned problem determines exactly, published beside what
+    # was observed so a reader can check the Score's arithmetic rather
+    # than take the PASS on faith.
+    "expected_output",
+    "expected_loss",
+    # The denominator behind "Percent Of Peak", so a reader can recompute
+    # it and see which part's figure was used and whether it was checked.
+    "peak",
+    "peak_field",
+    "peak_source",
+    "peak_verified",
+    "cores_used",
+    "cores_available",
+    "duty_cycle",
+    # pulse_virus: what fraction of the run was actually loaded. The row
+    # carried loaded_s, elapsed_s and the requested duty and never
+    # compared them, so a run that stopped idling was indistinguishable
+    # from one that did not.
+    "observed_duty",
+    # pcie_bandwidth: what arrived, not just how fast. The Score counts
+    # bytes requested, which is a constant, so a leg that moved nothing
+    # reported full bandwidth.
+    "landing_value",
     "read_verified_ratio",
     "write_verified_ratio",
     "product_verified_ratio",
@@ -931,6 +1621,7 @@ def main(argv=None) -> int:
     )
 
     reserve_profiler_core(devices, workloads)
+    workloads = run_order(workloads)
 
     snapshot = get_system_snapshot(devices)
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -943,6 +1634,18 @@ def main(argv=None) -> int:
         results.append(row)
         detail = f" ({row['Detail']})" if row.get("Detail") else ""
         print(f"[PANTHEON-NEURON]    {row['Status']}{detail}")
+        # The share of peak, on the console rather than only in the
+        # report. It is the number that decides whether a Score can be
+        # quoted against another vendor's, and a reader who never opens
+        # the JSON is exactly the reader who would quote it.
+        pct, share = row.get("Percent Of Peak"), row.get("Peak") or {}
+        if pct is not None:
+            caveat = "" if share.get("peak_verified") else ", peak unverified"
+            print(f"[PANTHEON-NEURON]    {pct}% of "
+                  f"{share.get('peak')} {row['Unit']} across "
+                  f"{share.get('cores_used')} of "
+                  f"{share.get('cores_available')} core(s){caveat}")
+
         spread = row.get("Repeats") or {}
         if spread.get("scored", 0) > 1:
             print(f"[PANTHEON-NEURON]    {spread['scored']} repeats: "

@@ -8,6 +8,7 @@ different from the constant-load one.
 import pytest
 
 import pantheon_neuron
+import sourcecheck
 from kernels import pulse_virus, registry
 
 
@@ -74,3 +75,57 @@ def test_mock_mode_invents_no_score(monkeypatch):
         duration=1, monitor_period=0.1,
     )
     assert row["Score"] is None
+
+
+# -- a duty cycle that never idled -------------------------------------------
+
+def test_a_run_that_never_idled_is_reported():
+    """This workload's premise is that half the run is idle.
+
+    A run whose idle half vanished is tensor_virus under another name at
+    roughly twice the analytic figure, and every number in the row would
+    look healthy. 13.85 TFLOPS against tensor_virus's 26.12 on
+    trn1.2xlarge 2026-09-10 is the evidence it is pulsing today; nothing
+    was reading for the ratio that would show it had stopped.
+    """
+    message = pulse_virus.verify_duty_cycle_was_observed(2.0, 2.0, 0.5)
+    assert message is not None
+    assert "idle half did not happen" in message
+
+
+def test_a_run_that_barely_loaded_is_reported():
+    message = pulse_virus.verify_duty_cycle_was_observed(0.1, 2.0, 0.5)
+    assert message is not None
+    assert "not filling its window" in message
+
+
+def test_the_expected_duty_is_accepted():
+    """Including the upward bias from the barrier: loaded_s carries the
+    tail of the last submission, so the observed ratio runs slightly
+    above the request."""
+    for loaded in (1.0, 1.02, 1.1):
+        assert pulse_virus.verify_duty_cycle_was_observed(
+            loaded, 2.0, 0.5) is None
+
+
+def test_a_zero_length_run_has_no_duty_to_observe():
+    assert "no wall time" in pulse_virus.verify_duty_cycle_was_observed(
+        0.0, 0.0, 0.5)
+
+
+def test_the_tolerance_admits_the_barrier_bias_and_nothing_larger():
+    """0.15 leaves room for a slower part -- where one pass is a larger
+    share of the loaded half -- without admitting a run that never idled.
+    """
+    assert pulse_virus.DUTY_TOLERANCE < 0.5, (
+        "a tolerance of half the duty would accept a run with no idle at all")
+    assert pulse_virus.verify_duty_cycle_was_observed(
+        (0.5 + pulse_virus.DUTY_TOLERANCE - 0.01) * 2.0, 2.0, 0.5) is None
+    assert pulse_virus.verify_duty_cycle_was_observed(
+        (0.5 + pulse_virus.DUTY_TOLERANCE + 0.01) * 2.0, 2.0, 0.5) is not None
+
+
+def test_the_kernel_reports_and_checks_the_observed_duty():
+    code = sourcecheck.flat_function_code(pulse_virus.run)
+    assert '"observed_duty"' in code
+    assert "verify_duty_cycle_was_observed" in code

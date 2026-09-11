@@ -7,7 +7,11 @@ bandwidth as the whole part's.
 """
 
 import pantheon_neuron
+import sourcecheck
 from kernels import cores, memory_agg, registry
+from neuron_device import NeuronDevice
+
+_TRN1 = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
 
 
 def _workload(name):
@@ -69,6 +73,52 @@ def test_a_missing_core_is_flagged():
 def test_worker_failures_are_reported():
     summary = memory_agg.summarise([], ["core 1 exited 1: boom"], 2.0, 2, "read")
     assert "core 1 exited 1" in summary["warning"]
+
+
+def test_every_worker_dying_invalidates_the_score():
+    """trn1.2xlarge 2026-09-10: both workers exited -6 and both agg rows
+    published PASS with 0.0 GB/s. The test above checked the failure
+    reached the warning -- it did -- and nothing checked anything acted on
+    it. The zero-overlap check needs two results, so it could not fire."""
+    failures = ["core 0 exited -6: @ 0x5c0d041867d2 (unknown)",
+                "core 1 exited -6: @ 0x5d4d2f0357d2 (unknown)"]
+    summary = memory_agg.summarise([], failures, 12.0, 2, "read")
+    assert summary["analytic_gbps"] == 0.0
+    assert summary["score_invalid"] is True
+
+
+def test_one_survivor_of_two_is_not_an_aggregate():
+    workers = [_worker(0, 270.0, "bytes_requested", 2_700_000_000, 10.0)]
+    summary = memory_agg.summarise(workers, ["core 1 exited -6: x"], 11.0, 2, "read")
+    assert summary["score_invalid"] is True
+
+
+def test_a_missing_core_without_a_failure_message_still_invalidates():
+    """Invalidation must not depend on a worker explaining itself."""
+    workers = [_worker(i, 1.0, "bytes_requested", 1_000_000_000, 1.0)
+               for i in range(3)]
+    assert memory_agg.summarise(workers, [], 2.0, 4, "read")["score_invalid"] is True
+
+
+def test_every_worker_reporting_and_overlapping_is_valid():
+    """The control, so the three above cannot pass by invalidating all."""
+    workers = [dict(_worker(i, 270.0, "bytes_requested", 2_700_000_000, 10.0),
+                    finished_at=100.0) for i in range(2)]
+    assert memory_agg.summarise(workers, [], 11.0, 2, "read")["score_invalid"] is False
+
+
+def test_a_dead_aggregate_fails_its_row(monkeypatch):
+    """End to end: the summary's invalidation reaches the row."""
+    workload = _workload("memory_read_agg")
+    summary = memory_agg.summarise(
+        [], ["core 0 exited -6: x", "core 1 exited -6: y"], 12.0, 2, "read")
+    monkeypatch.setattr(pantheon_neuron, "_execute",
+                        lambda *a, **k: summary["analytic_gbps"])
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name, summary)
+    row = pantheon_neuron._measure_once(workload, _TRN1, 1, 0.5)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "exited -6" in row["Detail"]
 
 
 def test_uneven_cores_are_flagged():
@@ -199,3 +249,107 @@ def test_the_worker_records_when_it_finished():
     assert 'result [ "finished_at" ] = time . time ( )' in code
     # Wall clock, not monotonic: these are compared across processes.
     assert "time . monotonic" not in code
+
+
+# -- an aggregate whose workers never ran together ---------------------------
+
+def _timed(started, finished):
+    """Not _worker: this file already has one with a different signature.
+
+    Second time in one session that appending to a test file shadowed a
+    helper already in it. Grep before you append.
+    """
+    return {"started_at": started, "finished_at": finished,
+            "bytes_moved": 1 << 30, "elapsed_s": finished - started}
+
+
+def test_workers_that_never_overlapped_invalidate_the_score():
+    """Not a weak aggregate: not an aggregate.
+
+    The message already said "this is not an aggregate -- the cores may
+    have run one after another", and the Score was published anyway. That
+    is the shape that let llm_prefill, llm_decode and speculative_decode
+    publish Scores for runs that produced NaN.
+    """
+    sequential = [_timed(0.0, 5.0), _timed(6.0, 11.0)]
+    assert memory_agg._no_overlap_at_all(sequential, 11.0) is True
+
+
+def test_a_short_overlap_is_a_warning_not_an_invalidation():
+    """19% still measures something; it is just not what the name says."""
+    overlapping = [_timed(0.0, 10.0), _timed(8.1, 18.0)]
+    assert memory_agg._no_overlap_at_all(overlapping, 18.0) is False
+    assert memory_agg.verify_workers_overlapped(overlapping, 18.0) is not None
+
+
+def test_a_full_overlap_is_neither():
+    together = [_timed(0.0, 10.0), _timed(0.1, 10.1)]
+    assert memory_agg._no_overlap_at_all(together, 10.1) is False
+    assert memory_agg.verify_workers_overlapped(together, 10.1) is None
+
+
+def test_unknown_timing_is_not_zero_overlap():
+    """A worker that did not report when it ran says nothing either way,
+    and inventing a zero would fail a run for missing telemetry."""
+    silent = [{"bytes_moved": 1 << 30}, {"bytes_moved": 1 << 30}]
+    assert memory_agg._no_overlap_at_all(silent, 10.0) is False
+
+
+def test_one_worker_cannot_fail_to_overlap_with_itself():
+    assert memory_agg._no_overlap_at_all([_timed(0.0, 5.0)], 5.0) is False
+    assert memory_agg._no_overlap_at_all([], 5.0) is False
+
+
+# -- a worker that did not move its planned bytes ----------------------------
+
+def test_a_short_worker_is_reported():
+    """The aggregate sums bytes *requested*, not bytes confirmed.
+
+    So a worker covering half its plan contributes its whole plan to the
+    numerator: the aggregate is overstated by exactly the shortfall, the
+    per-core rates stay even so verify_cores_scaled says nothing, and the
+    evidence sits in per_core["verified_ratio"] where nothing read it.
+    """
+    per_core = [{"core": 0, "verified_ratio": 1.0},
+                {"core": 1, "verified_ratio": 0.5}]
+    message = memory_agg.verify_cores_read_what_they_planned(per_core)
+    assert message is not None
+    assert "core 1 covered 0.5" in message
+    assert "bytes requested rather than bytes confirmed" in message
+
+
+def test_full_coverage_says_nothing():
+    per_core = [{"core": 0, "verified_ratio": 1.0},
+                {"core": 1, "verified_ratio": 1.0}]
+    assert memory_agg.verify_cores_read_what_they_planned(per_core) is None
+
+
+def test_a_worker_that_reported_no_ratio_is_not_accused():
+    """Absent is not short, and inventing a verdict from a missing field
+    would fail a run for incomplete telemetry."""
+    assert memory_agg.verify_cores_read_what_they_planned(
+        [{"core": 0, "verified_ratio": None}]) is None
+    assert memory_agg.verify_cores_read_what_they_planned([{"core": 0}]) is None
+
+
+def test_coverage_is_checked_before_overlap_and_evenness():
+    """A worker that did not move its bytes makes the aggregate wrong in
+    a way the other two findings would only distract from."""
+    code = sourcecheck.flat_function_code(memory_agg.summarise)
+    assert code.index("verify_cores_read_what_they_planned") < code.index(
+        "verify_workers_overlapped")
+    assert code.index("verify_cores_read_what_they_planned") < code.index(
+        "verify_cores_scaled")
+
+
+def test_verify_cores_scaled_cannot_see_a_uniform_shortfall():
+    """Which is why the coverage check is separate rather than folded in.
+
+    Two cores both covering half their plan are perfectly even, so the
+    rate comparison is silent and the aggregate is half of what it
+    claims.
+    """
+    even_but_short = [{"core": 0, "gbps": 250.0, "verified_ratio": 0.5},
+                      {"core": 1, "gbps": 250.0, "verified_ratio": 0.5}]
+    assert memory_agg.verify_cores_scaled(even_but_short) is None
+    assert memory_agg.verify_cores_read_what_they_planned(even_but_short)

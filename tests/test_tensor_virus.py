@@ -6,6 +6,9 @@ behind the analytic cross-check, and the correctness guard that separates a
 real GEMM from one the compiler reshaped.
 """
 
+import importlib.util
+import os
+
 import pytest
 
 import pantheon_neuron
@@ -90,33 +93,34 @@ def test_guard_flags_an_unreadable_product():
 
 
 # -- monitor cross-check -----------------------------------------------------
-
-def test_cross_check_accepts_agreement():
-    assert tensor_virus.verify_against_monitor(90.0, 100.0) is None
-
-
-def test_cross_check_flags_an_idle_engine():
-    """The signal that the matmuls were folded away."""
-    message = tensor_virus.verify_against_monitor(0.0, 100.0)
-    assert message is not None
-    assert "eliminated" in message
-
-
-def test_cross_check_flags_order_of_magnitude_disagreement():
-    message = tensor_virus.verify_against_monitor(5.0, 100.0)
-    assert message is not None
-    assert "differ by more than" in message
-
-
-def test_cross_check_is_quiet_when_the_monitor_said_nothing():
-    """Absent telemetry is handled by monitor_score, not reported as divergence."""
-    assert tensor_virus.verify_against_monitor(None, 100.0) is None
+#
+# Five tests lived here, all green, all exercising
+# tensor_virus.verify_against_monitor -- which was never called from
+# anywhere in the suite. A function written, tested, documented, and wired
+# to nothing.
+#
+# That is the part worth pausing on: the tests passing said the function
+# was correct, and it was. They said nothing whatever about whether it ran,
+# and nothing else did either. Coverage of a function is not evidence that
+# the function is reachable.
+#
+# Its job moved to pantheon_neuron.override_disagreement, which is called,
+# covers every monitor-scored workload rather than this family alone, and
+# carries both zero cases. The five cases moved with it, to
+# tests/test_monitor_score.py, plus one asserting nothing calls the old
+# name any more.
 
 
-def test_cross_check_flags_zero_analytic_throughput():
-    message = tensor_virus.verify_against_monitor(10.0, 0.0)
-    assert message is not None
-    assert "no arithmetic was issued" in message
+def test_nothing_calls_the_removed_cross_check():
+    """So it cannot come back as a second, unreachable copy."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    callers = []
+    for path in list(root.glob("*.py")) + list(root.glob("kernels/*.py")):
+        code = sourcecheck.code_only(path.read_text(encoding="utf-8"))
+        if "verify_against_monitor" in code:
+            callers.append(path.name)
+    assert not callers, callers
 
 
 # -- orchestrator integration ------------------------------------------------
@@ -289,8 +293,12 @@ def test_the_accumulation_loop_is_not_unrolled():
     """
     source = sourcecheck.function_code(tensor_virus._build_kernel)
 
-    # Every loop that accumulates into `acc` is rolled...
-    assert source.count("for depth in nl . sequential_range (") == 2, (
+    # Every loop that accumulates into `acc` is rolled -- one per kernel.
+    # Counted against the number of tilings rather than a literal 2, which
+    # it was: adding the coalesced kernel made it 3, and the literal failed
+    # the new kernel for correctly having the property the test demands.
+    assert source.count("for depth in nl . sequential_range (") == len(
+        tensor_virus.STRATEGIES), (
         "each kernel needs exactly one rolled accumulation loop"
     )
     # ...and none of them is the unrolling kind.
@@ -421,8 +429,436 @@ def test_cutting_operand_traffic_did_not_buy_the_speedup_it_implied():
     assert speedup < 1.10, "if bandwidth bound, this would track the cut"
 
 
-def test_streaming_is_the_default_tiling():
-    """The proven path stays default: blocked's justification did not hold."""
+def test_coalesced_is_the_default_tiling(monkeypatch):
+    """Default since 2026-09-10, on a trn1.2xlarge run at the pinned shape:
+    70.42 TFLOPS analytic, 71.80 by neuron-monitor, every row-tile exact.
+    Blocked never was: its justification did not hold."""
     import importlib
+    monkeypatch.delenv("PANTHEON_NEURON_GEMM_TILING", raising=False)
     reloaded = importlib.reload(tensor_virus)
-    assert reloaded.TILING == "streaming"
+    assert reloaded.TILING == "coalesced"
+
+
+# -- the headline figure is a floor, and has to say so -----------------------
+
+def test_the_headline_figure_is_declared_a_property_of_the_kernel():
+    """26.19 TFLOPS against torch.matmul's 66.32 at a matched shape, then
+    70.42 against 66.25 once coalesced.
+
+    trn1.2xlarge 2026-09-10, 8192^3 bf16, one process, both products
+    verified exact. A plain matmul lowered by neuronx-cc was 2.53x the
+    streaming kernel, so the headline compute number was a property of
+    the kernel rather than of the part. Coalescing overturned the ratio,
+    not the lesson: 71.80 is 75.6% of one core, not its peak.
+    """
+    doc = tensor_virus.__doc__
+    assert "PROPERTY OF THIS KERNEL, NOT OF THE PART" in doc
+    assert "66.32" in doc and "26.19" in doc
+    assert "70.42" in doc and "71.80" in doc and "28.08" in doc
+    assert "compare_matmul_paths" in doc
+
+
+def test_the_comparison_tool_exists_and_verifies_before_it_divides():
+    """A ratio between a correct kernel and a rounded one means nothing."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "tools", "compare_matmul_paths.py")
+    assert os.path.exists(path), "the claim above has to stay re-runnable"
+    with open(path, encoding="utf-8") as handle:
+        raw = handle.read()
+
+    # Through the comment-and-docstring filter, not the raw text. The
+    # first version of this read the file directly, and an ordering
+    # assertion over raw source is satisfied by the first *mention* of a
+    # string -- a line of prose above the code would have made it pass
+    # while saying nothing about the code. Three checks in this repo have
+    # already passed by accident; this one was written knowing that and
+    # still had to be fixed.
+    # main()'s own code, not the whole file. Matching "ratio =" across the
+    # module found nki_kernel's local `ratio = result.get(...)` first --
+    # an ordering assertion is only as good as the two things it orders,
+    # and one of mine was the wrong statement in a different function.
+    spec = importlib.util.spec_from_file_location("compare_matmul_paths",
+                                                  path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    code = sourcecheck.function_code(module.main)
+
+    assert "INCORRECT PRODUCT" in code
+    # The refusal has to come before the division, not beside it: a ratio
+    # between a correct kernel and a rounded one is not a slow kernel.
+    assert code.index("INCORRECT PRODUCT") < code.index(
+        'ratio = xla [ "tflops" ] / nki [ "tflops" ]')
+    assert "return 1" in code[:code.index("ratio =")]
+    del raw
+
+
+def _finding_doc():
+    """The headline document, with line wrapping normalised away.
+
+    Two checks here matched "cause unknown" and broke when an edit moved
+    the phrase across a line break -- a check coupled to the formatting
+    rather than to the content, which is the shape in
+    docs/checks_that_pass_by_accident.md that matches a phrasing rather
+    than a claim. Collapsing whitespace is what makes them about the
+    prose.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs",
+                           "the_headline_number_is_the_kernel.md"),
+              encoding="utf-8") as handle:
+        return " ".join(handle.read().split())
+
+
+def test_the_bandwidth_explanation_is_recorded_as_falsified():
+    """Two confident diagnoses were wrong; the third is "unknown".
+
+    102 FLOP/byte times memory_read's 256.2 GB/s is 26.1 TFLOPS, which
+    matches the observed figure almost exactly and is a coincidence --
+    blocked tiling cuts operand traffic 4.7x and buys 1.06x. A doc that
+    dropped the falsification would leave the next reader to believe the
+    arithmetic all over again.
+    """
+    doc = _finding_doc()
+    assert "coincidence" in doc
+    assert "4.7" in doc and "1.06" in doc
+    assert "cause unknown" in doc.lower()
+
+
+def test_the_tiling_tool_does_not_state_the_falsified_ceiling_as_fact():
+    """It was the tool that falsified it, and said otherwise for days.
+
+    "operand traffic 256.4 GB/s against memory_read's 256.2" is a real
+    measurement and a coincidence: blocked tiling cuts traffic 4.7x and
+    buys 1.06x. A tool whose own output refutes its docstring is worse
+    than one that says nothing.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "tools", "compare_tiling.py"),
+              encoding="utf-8") as handle:
+        doc = handle.read()
+    assert "That reading is wrong" in doc
+    assert "coincidence" in doc
+    # And points at the larger open question rather than leaving the
+    # tiling comparison looking like the whole of it.
+    assert "compare_matmul_paths" in doc
+
+
+def test_three_falsified_explanations_are_all_recorded():
+    """A repo that keeps only its confirmed guesses keeps a biased sample.
+
+    Bandwidth, tiling volume and k-loop serialisation were each a
+    plausible mechanism for the 2.53x gap, and each was measured and
+    found wrong. The document keeps all three, because the next person to
+    have one of those ideas should find the measurement rather than
+    repeat it.
+    """
+    doc = _finding_doc()
+    assert "coincidence" in doc                 # bandwidth
+    assert "4.7" in doc and "1.06" in doc       # tiling volume
+    assert "0.99" in doc                        # k-loop serialisation
+    assert "cause unknown" in doc.lower()
+
+
+def test_the_psum_constraint_is_recorded():
+    """Two PSUM tensors cannot be added directly, which is what stopped
+    the split-accumulator variant compiling. A hardware fact worth
+    keeping for anyone writing NKI here.
+    """
+    doc = _finding_doc()
+    assert "NCC_IBVF027" in doc
+    assert "copied to SBUF" in doc
+
+
+def test_the_tiling_traffic_cut_is_stated_as_modelled_and_measured():
+    """The 4.7x was the model at 8192^3, and it was quoted as measured.
+
+    neuron-profile's full trace counted the transfers at 4096^3 on
+    trn1.2xlarge 2026-09-10: streaming moved 631.3 MB and blocked 248.0,
+    a 2.55x cut, where the model predicts 1,342 and 302, a 4.44x cut. A
+    doc presenting the model's figure as a measurement is the defect; the
+    fix is to say which is which wherever the number appears.
+    """
+    doc = _finding_doc()
+    assert "2.55" in doc
+    assert "631.3" in doc and "248.0" in doc
+    assert "never a measurement" in doc
+
+
+def test_the_transfer_count_finding_is_recorded_with_its_limits():
+    """Blocked matches XLA on bytes and makes 5.1x the transfers, and the
+    doc says that is a correlation rather than proof."""
+    doc = _finding_doc()
+    assert "34,031" in doc and "174,942" in doc
+    # \u00d7, the multiplication sign the doc uses; ruff (RUF001)
+    # flags a literal one in source as ambiguous with the letter x.
+    assert "5.1\u00d7 as many transfers" in doc
+    assert "not proof" in doc
+
+
+# -- the coalesced tiling: larger lhs transfers ------------------------------
+
+def test_coalesced_is_an_accepted_strategy():
+    assert "coalesced" in tensor_virus.STRATEGIES
+    assert tensor_virus.TILING in tensor_virus.STRATEGIES
+
+
+def test_the_default_is_the_fastest_tiling_measured_correct():
+    """A new tiling is an option until it is measured faster and correct.
+
+    Blocked was justified by a modelled traffic cut that measured smaller,
+    and bought 6%. Coalesced became the default on a measurement: the
+    recorded 8192^3 rates, all three checked row-tile by row-tile in one
+    session on trn1.2xlarge 2026-09-10.
+    """
+    measured = {"streaming": 26.45, "blocked": 28.16, "coalesced": 70.42}
+    assert set(measured) == set(tensor_virus.STRATEGIES)
+    assert max(measured, key=measured.get) == "coalesced"
+    assert tensor_virus.TILING == "coalesced" or (
+        "PANTHEON_NEURON_GEMM_TILING" in os.environ)
+
+
+def test_the_lhs_load_width_grows_by_the_coalesce_factor():
+    """Transfer size is set by the tile's free-dimension width.
+
+    A stationary lhs tile reads STATIONARY bf16 per partition row -- 256
+    contiguous bytes. Loading COALESCE_ROWS tiles side by side makes each
+    row COALESCE_ROWS times that.
+    """
+    element = tiling.DTYPE_BYTES["bf16"]
+    single = tensor_virus.STATIONARY * element
+    coalesced = tensor_virus.STATIONARY * tensor_virus.COALESCE_ROWS * element
+    assert single == 256
+    assert coalesced == 256 * tensor_virus.COALESCE_ROWS
+
+
+def test_the_accumulator_fits_in_half_of_psum():
+    """COALESCE_ROWS fp32 tiles of MOVING columns, against NeuronCore-v2's
+    16 KiB of PSUM per partition. Half leaves the compiler room to
+    double-buffer; a full PSUM would not."""
+    per_partition = tensor_virus.COALESCE_ROWS * tensor_virus.MOVING * 4
+    assert per_partition <= 16 * 1024 // 2, per_partition
+
+
+@pytest.mark.parametrize("m", [4096, 8192, 512])
+def test_shapes_that_divide_are_accepted(m):
+    plan = tensor_virus.gemm_plan([m, 4096, 4096], "bf16")
+    tensor_virus.validate_tiling(plan, "coalesced")
+
+
+def test_a_shape_that_would_leave_rows_uncomputed_is_refused():
+    """640 is a multiple of STATIONARY but not of STATIONARY * 4.
+
+    `m // width` would floor and the last 128 rows would never be
+    computed, while the FLOP count still claimed the whole matrix. The
+    product check samples corners and could miss it.
+    """
+    plan = tensor_virus.gemm_plan([640, 4096, 4096], "bf16")
+    with pytest.raises(ValueError, match="rows uncomputed"):
+        tensor_virus.validate_tiling(plan, "coalesced")
+    # The other tilings step one stationary tile at a time and are fine.
+    tensor_virus.validate_tiling(plan, "streaming")
+    tensor_virus.validate_tiling(plan, "blocked")
+
+
+def test_an_unknown_strategy_is_refused_before_anything_compiles():
+    plan = tensor_virus.gemm_plan([4096, 4096, 4096], "bf16")
+    with pytest.raises(ValueError, match="unknown tiling"):
+        tensor_virus.validate_tiling(plan, "tiled_harder")
+
+
+def test_run_validates_before_building_the_kernel():
+    """The check has to come before the compile, or a bad shape costs a
+    two-minute compile to discover."""
+    code = sourcecheck.flat_function_code(tensor_virus.run)
+    assert code.index("validate_tiling") < code.index("_build_kernel")
+
+
+# -- a check that can see rows in the wrong place ----------------------------
+
+def _output(tiles, k, tile=4, cols=3, store=None):
+    """A synthetic kernel output: `store(t)` names which tile's value tile
+    t actually received. Identity is a correct kernel."""
+    store = store or (lambda t: t)
+    rows = []
+    for t in range(tiles):
+        value = float(k * tensor_virus.row_tile_scale(store(t)))
+        rows.extend([[value] * cols for _ in range(tile)])
+    return rows
+
+
+def test_a_correct_output_has_nothing_in_the_wrong_place():
+    out = _output(8, k=4096)
+    assert tensor_virus.rows_in_wrong_place(out, 4096, tile=4) == []
+
+
+def test_the_planted_first_accumulator_defect_is_caught():
+    """The mutation run on hardware, reproduced in arithmetic.
+
+    Every row-tile in a coalesced block storing acc[0]: tiles 1..3 of
+    each block hold tile 0's value. On trn1.2xlarge this left 24 of 32
+    tiles wrong at 4096^3.
+    """
+    rows = tensor_virus.COALESCE_ROWS
+    out = _output(32, k=4096, store=lambda t: t - (t % rows))
+    wrong = tensor_virus.rows_in_wrong_place(out, 4096, tile=4)
+    assert len(wrong) == 32 - 32 // rows == 24
+
+
+def test_the_all_ones_check_cannot_see_the_same_defect():
+    """The reason this check exists. With all-ones inputs every element
+    is K regardless of which accumulator wrote it, so the corner ratio the
+    old check reads is exactly 1.0 for the broken kernel too."""
+    k = 4096
+    all_ones_output = [[float(k)] * 3 for _ in range(32 * 4)]
+    corner = all_ones_output[0][0] / k
+    far = all_ones_output[-1][-1] / k
+    assert tensor_virus.verify_product_is_correct((corner + far) / 2) is None
+
+
+def test_a_permutation_is_caught_too():
+    out = _output(8, k=4096, store=lambda t: (t + 1) % 8)
+    assert tensor_virus.rows_in_wrong_place(out, 4096, tile=4)
+
+
+def test_adjacent_tiles_never_share_a_scale():
+    """Or a swap between neighbours would go unseen."""
+    for t in range(64):
+        assert tensor_virus.row_tile_scale(t) != tensor_virus.row_tile_scale(t + 1)
+
+
+def test_the_largest_expected_value_is_exact_in_fp32():
+    """K * 7 must survive the fp32 accumulator and output unrounded."""
+    for k in (4096, 8192):
+        biggest = k * tensor_virus.ROW_CHECK_PERIOD
+        assert biggest < 2 ** 24, biggest
+        assert float(biggest) == biggest
+
+
+class _FakeTensor:
+    """Just the torch surface _tile_ranges uses: len, reshape, float, amin,
+    amax, tolist. CI has no torch, and an importorskip test would skip
+    there every time -- a check that never runs. The real torch path runs
+    on hardware in every tensor_virus.run()."""
+
+    def __init__(self, rows):
+        self.rows = [list(map(float, r)) for r in rows]
+
+    def __len__(self):
+        return len(self.rows)
+
+    def reshape(self, slabs, width):
+        assert width == -1
+        flat = [v for r in self.rows for v in r]
+        size = len(flat) // slabs
+        return _FakeTensor([flat[i * size:(i + 1) * size] for i in range(slabs)])
+
+    def float(self):
+        return self
+
+    def amin(self, dim):
+        assert dim == 1
+        return _FakeList([min(r) for r in self.rows])
+
+    def amax(self, dim):
+        assert dim == 1
+        return _FakeList([max(r) for r in self.rows])
+
+
+class _FakeList(list):
+    def tolist(self):
+        return list(self)
+
+
+def test_a_tensor_output_is_checked_by_reduction_and_agrees_with_lists():
+    out = _output(8, k=4096, store=lambda t: t - (t % 4))
+    as_lists = tensor_virus.rows_in_wrong_place(out, 4096, tile=4)
+    as_tensor = tensor_virus.rows_in_wrong_place(_FakeTensor(out), 4096, tile=4)
+    assert as_lists == as_tensor and len(as_tensor) == 6
+
+
+def test_the_run_operands_are_the_ones_the_check_reads():
+    """lhs_t[k, m] = row_scales(M)[m] and rhs = 1 give out[m, n] = K * scale[m];
+    that product passes, and the same product with two row-tiles swapped
+    does not."""
+    tile, k, m, n = 4, 64, 32, 3
+    scales = tensor_virus.row_scales(m, tile=tile)
+    product = [[float(k * scales[row])] * n for row in range(m)]
+    assert tensor_virus.rows_in_wrong_place(product, k, tile=tile) == []
+    swapped = product[tile:2 * tile] + product[:tile] + product[2 * tile:]
+    assert [w[0] for w in tensor_virus.rows_in_wrong_place(swapped, k, tile=tile)] == [0, 1]
+
+
+def test_row_scales_follow_the_stationary_tile():
+    scales = tensor_virus.row_scales(3 * tensor_virus.STATIONARY)
+    stat = tensor_virus.STATIONARY
+    assert set(scales[:stat]) == {1} and set(scales[stat:2 * stat]) == {2}
+    assert set(scales[2 * stat:]) == {3}
+
+
+def test_run_checks_the_whole_product_after_the_clock_stops():
+    code = sourcecheck.flat_function_code(tensor_virus.run)
+    assert "row_check_operands" in code and "torch.ones" not in code
+    assert code.index("elapsed = time . perf_counter ( )") < code.index("read_product")
+    assert "product_warning" in code
+
+
+def test_a_wrong_product_invalidates_the_score_not_just_warns():
+    """A warning alone left a verified-wrong product reporting PASS."""
+    code = sourcecheck.flat_function_code(tensor_virus.run)
+    assert 'result [ "score_invalid" ] = result [ "warning" ] is not None' in code
+
+
+def test_pulse_virus_uses_the_same_row_check():
+    """pulse_virus builds the default tiling. If that is coalesced, an
+    all-ones check there is blind to the one thing coalescing changed."""
+    from kernels import pulse_virus
+    code = sourcecheck.flat_function_code(pulse_virus.run)
+    for needed in ("row_check_operands", "read_product", "product_warning",
+                   "validate_tiling", "score_invalid"):
+        assert needed in code, needed
+    assert "torch.ones" not in code
+
+
+class _FakeSink:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def to(self, where):
+        assert where == "cpu"
+        return self.rows
+
+
+def test_read_product_reads_corners_against_their_own_scale():
+    """The far corner's expected value is K * its tile's scale, not K."""
+    plan = {"m": 3 * tensor_virus.STATIONARY, "n": 2, "k": 64}
+    scales = tensor_virus.row_scales(plan["m"])
+    rows = [[float(plan["k"] * scales[r])] * plan["n"] for r in range(plan["m"])]
+    ratio, misplaced = tensor_virus.read_product(_FakeSink(rows), plan)
+    assert ratio == 1.0 and misplaced == []
+
+
+def test_read_product_is_none_when_nothing_can_be_read():
+    class Broken:
+        def to(self, where):
+            raise RuntimeError("materialisation failed")
+    plan = {"m": 128, "n": 2, "k": 64}
+    assert tensor_virus.read_product(None, plan) == (None, None)
+    assert tensor_virus.read_product(Broken(), plan) == (None, None)
+    # And that is reported, not silently passed.
+    assert "unverified" in tensor_virus.product_warning(None, None)
+
+
+def test_product_warning_reports_both_when_both_fire():
+    both = tensor_virus.product_warning(0.625, [(1, 128.0, (64.0, 64.0))])
+    assert "0.625x" in both and "1 row-tile" in both
+    assert tensor_virus.product_warning(1.0, []) is None
+
+
+def test_verify_rows_is_quiet_when_nothing_is_wrong_or_nothing_was_read():
+    assert tensor_virus.verify_rows([]) is None
+    assert tensor_virus.verify_rows(None) is None
+
+
+def test_verify_rows_names_the_first_wrong_tile():
+    warning = tensor_virus.verify_rows([(3, 16384.0, (4096.0, 4096.0))])
+    assert "1 row-tile" in warning and "tile 3" in warning and "16384" in warning

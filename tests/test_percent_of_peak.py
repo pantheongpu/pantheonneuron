@@ -1,0 +1,554 @@
+"""A Score against the ceiling its part publishes.
+
+26.1 TFLOPS and 66.3 TFLOPS are two numbers. 12% and 31% of peak are a
+finding: the first pair invites a cross-vendor comparison, and the second
+says whether that comparison would be about silicon or about kernel
+quality.
+
+The denominator is the hard part, and this file is mostly about getting
+it right rather than about the division.
+"""
+
+import pytest
+
+import pantheon_neuron
+import sourcecheck
+from kernels import registry
+from neuron_device import NeuronDevice
+
+TRN1 = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
+INF2 = [NeuronDevice(0, "inf2", "v2", 2, 32 * 1024**3, False)]
+
+
+def _named(name):
+    return next(w for w in registry.WORKLOADS if w.name == name)
+
+
+# -- the published figures ---------------------------------------------------
+
+def test_every_peak_cites_a_source():
+    """A number in a table without provenance is a number with a table's
+    authority and a comment's evidence. That is what this replaced."""
+    assert registry.PART_PEAKS, "no peaks declared -- the sweep is vacuous"
+    for arch, peak in registry.PART_PEAKS.items():
+        assert peak.get("source"), arch
+        assert len(peak["source"]) > 30, f"{arch}: source is not a citation"
+        for field in ("hbm_gbps", "bf16_tflops", "neuroncores"):
+            assert isinstance(peak.get(field), (int, float)), (arch, field)
+            assert peak[field] > 0, (arch, field)
+
+
+def test_every_peak_is_verified_against_the_architecture_docs():
+    """Checked 2026-09-10 against the AWS Neuron architecture pages.
+
+    An earlier version of this test asserted the opposite -- that nothing
+    was verified -- and was the signal to go and read the documents. It
+    now asserts the citation is present and names the source it was read
+    from, so a figure edited without a new citation fails.
+    """
+    for arch, peak in registry.PART_PEAKS.items():
+        assert peak["verified"] is True, arch
+        assert "AWS Neuron architecture docs" in peak["source"], arch
+        assert "2026-09-10" in peak["source"], arch
+
+
+def test_the_two_parts_are_the_same_silicon_per_chip():
+    """They are, and the suspicion that prompted this table was backwards.
+
+    kernels/memory_read.py carried "the part's ~820 GB/s HBM" in prose. I
+    took that for an Inferentia2 figure wrongly applied to Trainium1 and
+    replaced it with 613, derived by dividing the instance page's 9.8
+    TB/s by 16 chips.
+
+    The architecture docs give both parts, in identical words: two
+    NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32
+    TFLOPS. The prose was right; the correction was wrong; and dividing
+    by the smaller ceiling reported the bandwidth kernels at 83-88% of
+    peak when they reach about 60%.
+
+    The repo already knew this from the other direction -- both chips
+    report NeuronCore-v2 -- which is what should have made the suspicion
+    suspicious.
+    """
+    trn1, inf2 = registry.PART_PEAKS["trn1"], registry.PART_PEAKS["inf2"]
+    for field in ("neuroncores", "hbm_gibps", "hbm_gbps", "bf16_tflops"):
+        assert trn1[field] == inf2[field], field
+
+
+def test_the_bandwidth_ceiling_is_converted_out_of_gibibytes():
+    """The doc says 820 GiB/sec; every Score here is bytes / 1e9.
+
+    Treating the two as interchangeable is a 7% error in every bandwidth
+    percentage, applied silently and in the flattering direction.
+    """
+    for arch, peak in registry.PART_PEAKS.items():
+        assert peak["hbm_gibps"] == 820.0, arch
+        expected = 820.0 * (1 << 30) / 1e9
+        assert peak["hbm_gbps"] == pytest.approx(expected, abs=0.1), arch
+        assert peak["hbm_gbps"] > peak["hbm_gibps"], (
+            f"{arch}: the decimal figure must exceed the binary one")
+
+
+def test_the_ceiling_reconciles_with_the_instance_pages_for_compute():
+    """16 chips x 190 TFLOPS is 3.04 PFLOPS against trn1.32xlarge's
+    "up to 3 petaflops"; 12 x 190 is 2.28 against inf2.48xlarge's 2.3.
+
+    Bandwidth does not reconcile, and that is why the architecture page
+    is the source rather than the instance page: both instance pages
+    claim "9.8 TB/s of total memory bandwidth", which is 12 chips'
+    worth. See the note in registry.PART_PEAKS.
+    """
+    per_chip = registry.PART_PEAKS["trn1"]["bf16_tflops"]
+    assert 16 * per_chip / 1000 == pytest.approx(3.04, abs=0.05)
+    assert 12 * per_chip / 1000 == pytest.approx(2.28, abs=0.05)
+
+
+# -- the share, which is the part that is easy to get wrong ------------------
+
+def test_a_single_core_workload_is_measured_against_one_core():
+    """memory_read declares cores: 1 on a two-core part.
+
+    Comparing it against the whole chip is the error that makes 256 GB/s
+    look like 42% of the part when it is 84% of what it was given.
+    """
+    share = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    assert share["cores_used"] == 1
+    assert share["cores_available"] == 2
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["hbm_gbps"] / 2)
+
+
+def test_an_all_core_workload_is_measured_against_the_chip():
+    share = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    assert share["cores_used"] == 2
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["hbm_gbps"])
+
+
+def test_the_two_memory_workloads_are_not_flattered_by_their_core_count():
+    """memory_read and memory_read_agg measure the same thing on the same
+    silicon and differ only in how much of it they are allowed.
+
+    A percentage ignoring that makes the aggregate look better for a
+    reason that has nothing to do with memory. Measured on trn1.2xlarge
+    2026-09-10: 256.1 and 541.5 GB/s, which land within six points of
+    each other once each is read against its own share.
+    """
+    single = pantheon_neuron.percent_of_peak(
+        256.1, pantheon_neuron.peak_share(_named("memory_read"), TRN1))
+    aggregate = pantheon_neuron.percent_of_peak(
+        541.5, pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1))
+    assert abs(single - aggregate) < 10, (single, aggregate)
+
+
+def test_the_peak_is_looked_up_by_architecture():
+    """This asserted the two parts get *different* denominators, which
+    was my wrong premise rather than a property of the code.
+
+    They publish identical per-chip figures, so the same workload gets
+    the same ceiling on both -- and what is worth testing is that the
+    lookup happens at all, which an unknown architecture proves by
+    getting nothing.
+    """
+    trn1 = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    inf2 = pantheon_neuron.peak_share(_named("memory_read"), INF2)
+    assert trn1["peak"] == inf2["peak"], "same silicon, same ceiling"
+    assert trn1["peak_source"] != inf2["peak_source"], (
+        "each part must cite its own document even when the figures agree")
+
+
+def test_multiple_devices_scale_the_ceiling():
+    two = [NeuronDevice(i, "trn1", "v2", 2, 32 * 1024**3, True)
+           for i in range(2)]
+    one = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    both = pantheon_neuron.peak_share(_named("memory_read_agg"), two)
+    assert both["peak"] == pytest.approx(one["peak"] * 2)
+
+
+# -- where there is no ceiling to divide by ----------------------------------
+
+def test_a_unit_with_no_published_peak_gets_no_percentage():
+    """graph-steps/s and requests/s have no datasheet figure, and
+    inventing one would be worse than an empty column."""
+    for name in ("graph_replay", "serving_mix", "allocation_fragmentation"):
+        assert pantheon_neuron.peak_share(_named(name), TRN1) is None
+
+
+def test_an_unknown_architecture_gets_no_percentage():
+    alien = [NeuronDevice(0, "trn9", "v9", 4, 32 * 1024**3, True)]
+    assert pantheon_neuron.peak_share(_named("memory_read"), alien) is None
+
+
+def test_no_devices_means_no_share():
+    assert pantheon_neuron.peak_share(_named("memory_read"), []) is None
+
+
+# -- the division ------------------------------------------------------------
+
+def test_the_percentage_is_the_score_over_the_share():
+    share = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    assert pantheon_neuron.percent_of_peak(share["peak"], share) == 100.0
+    assert pantheon_neuron.percent_of_peak(
+        share["peak"] / 2, share) == pytest.approx(50.0)
+
+
+def test_an_absent_or_impossible_score_gets_no_percentage():
+    share = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    for bad in (None, 0, -1.0, "n/a"):
+        assert pantheon_neuron.percent_of_peak(bad, share) is None
+    assert pantheon_neuron.percent_of_peak(100.0, None) is None
+
+
+def test_a_score_above_peak_is_reported_rather_than_clamped():
+    """Over 100% means the Score, the peak, or the core split is wrong,
+    and clamping it to 100 would hide exactly that.
+
+    memory_read once reported 14,513 GB/s from an elided DMA. A column
+    reading 2367% is the loudest possible way to say so.
+    """
+    share = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    assert pantheon_neuron.percent_of_peak(
+        share["peak"] * 5, share) == pytest.approx(500.0)
+
+
+# -- the row -----------------------------------------------------------------
+
+def test_the_row_carries_the_percentage_and_its_provenance(mock_env=None):
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    assert '"Percent Of Peak"' in code
+    assert '"Peak"' in code
+    # Both on the skipped row too, or the shapes diverge.
+    assert code.count('"Percent Of Peak"') == 2
+
+
+def test_the_console_prints_the_share_and_flags_an_unverified_peak(capsys):
+    """A reader who never opens the JSON is exactly the reader who would
+    quote a Score against another vendor's, so the share belongs on the
+    console -- and so does the fact that the denominator is unchecked.
+    """
+    import io
+    import contextlib
+
+    row = {
+        "Status": "PASS", "Detail": "", "Unit": "GB/s",
+        "Percent Of Peak": 88.3,
+        "Peak": {"peak": 613.0, "cores_used": 2, "cores_available": 2,
+                 "peak_verified": False},
+        "Repeats": None,
+    }
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        pct, share = row["Percent Of Peak"], row["Peak"]
+        caveat = "" if share.get("peak_verified") else ", peak unverified"
+        print(f"[PANTHEON-NEURON]    {pct}% of {share['peak']} {row['Unit']} "
+              f"across {share['cores_used']} of "
+              f"{share['cores_available']} core(s){caveat}")
+    printed = buffer.getvalue()
+    assert "88.3% of 613.0 GB/s" in printed
+    assert "2 of 2 core(s)" in printed
+    assert "peak unverified" in printed
+
+
+def test_the_console_block_exists_in_the_run_loop():
+    """The test above exercises the arithmetic; this asserts the loop
+    actually does it, which is the half a copy of the code cannot show."""
+    source = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert '"Percent Of Peak"' in source
+    assert "peak unverified" in source
+
+
+def test_a_verified_peak_would_drop_the_caveat():
+    """So the caveat disappears on its own when someone checks the
+    datasheet, rather than needing a second edit to remove."""
+    source = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert 'if share . get ( "peak_verified" )' in source
+
+
+# -- a workload that idles by design -----------------------------------------
+
+def test_a_duty_cycled_workload_is_measured_against_its_duty():
+    """pulse_virus idles half its run by design and its Score is averaged
+    over the whole run, idle halves included.
+
+    Against the full ceiling it read 7.29% of peak where tensor_virus
+    read 13.74% -- exactly half, while running the same kernel at the
+    same rate during its loaded halves. The column would have told a
+    reader the pulsed kernel is half as efficient, which is the opposite
+    of what the two numbers show.
+    """
+    share = pantheon_neuron.peak_share(_named("pulse_virus"), TRN1)
+    full = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    duty = _named("pulse_virus").problem["duty_cycle"]
+    assert share["peak"] == pytest.approx(full["peak"] * duty)
+    assert share["duty_cycle"] == duty
+
+
+def test_the_pulsed_and_sustained_kernels_now_agree():
+    """The check that the correction is right rather than merely applied.
+
+    Same kernel, same rate while loaded, so once each is read against
+    what it could reach they should land together. Measured on
+    trn1.2xlarge 2026-09-10: pulse_virus 13.85 TFLOPS, tensor_virus
+    26.1.
+    """
+    pulsed = pantheon_neuron.percent_of_peak(
+        13.85, pantheon_neuron.peak_share(_named("pulse_virus"), TRN1))
+    sustained = pantheon_neuron.percent_of_peak(
+        26.1, pantheon_neuron.peak_share(_named("tensor_virus"), TRN1))
+    assert abs(pulsed - sustained) < 2.0, (pulsed, sustained)
+
+
+def test_a_workload_with_no_duty_cycle_gets_the_full_ceiling():
+    share = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    assert share["duty_cycle"] is None
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["bf16_tflops"])
+
+
+# -- units the docs do not give a ceiling for --------------------------------
+
+def test_an_integer_workload_gets_no_percentage_and_that_is_deliberate():
+    """int_virus reports TOPS for uint8, and the architecture docs quote
+    FP16/BF16/cFP8/TF32 and FP32 only.
+
+    Borrowing the bf16 figure for uint8 would divide by a number the
+    vendor never claimed for that dtype. An empty column is the honest
+    answer until a uint8 figure is published, and this test is what
+    stops someone filling it in by analogy.
+    """
+    assert "TOPS" not in registry.PEAK_FOR_UNIT
+    assert pantheon_neuron.peak_share(_named("int_virus"), TRN1) is None
+
+
+# -- the cores a run actually exposed ----------------------------------------
+
+@pytest.mark.parametrize("value,count", [
+    ("0", 1), ("0-1", 2), ("0-6", 7), ("0,2,3", 3), ("1", 1),
+    ("", None), (None, None), ("  ", None), ("x", None), ("3-1", None),
+])
+def test_visible_cores_are_parsed_as_the_runtime_reads_them(value, count):
+    """Single index, range, or comma list -- the forms cores.split writes
+    and the runtime accepts. Unset means no limit, not zero cores."""
+    assert pantheon_neuron.visible_core_count(value) == count
+
+
+def test_a_reservation_leaves_an_unpinned_workload_one_core(monkeypatch):
+    """"cores 0 to the workload, 1 reserved for neuron-profile" is printed
+    on every single-workload run on a two-core part.
+
+    So tensor_virus sees one core. The first version of this counted two
+    and measured it against a ceiling twice what it was allowed to reach
+    -- every compute percentage in the README was half what it should
+    have been.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    share = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    assert share["cores_used"] == 1
+    assert share["peak"] == pytest.approx(
+        registry.PART_PEAKS["trn1"]["bf16_tflops"] / 2)
+
+
+def test_an_aggregate_is_never_capped_by_the_reservation(monkeypatch):
+    """The reservation is off for any selection containing a cores: "all"
+    workload, and aggregates give each worker its own visibility.
+
+    Applying the cap anyway reported memory_read_agg at 123% of peak --
+    an impossible figure from a configuration the orchestrator refuses to
+    create.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    share = pantheon_neuron.peak_share(_named("memory_read_agg"), TRN1)
+    assert share["cores_used"] == 2
+    pct = pantheon_neuron.percent_of_peak(541.5, share)
+    assert pct < 100, pct
+
+
+def test_an_explicit_single_core_pin_is_unaffected_by_the_reservation(
+        monkeypatch):
+    """Capped rather than replaced, so cores: 1 stays 1 either way."""
+    from kernels import cores
+    without = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    with_it = pantheon_neuron.peak_share(_named("memory_read"), TRN1)
+    assert without["cores_used"] == with_it["cores_used"] == 1
+
+
+def test_no_reservation_imposes_no_cap(monkeypatch):
+    from kernels import cores
+    monkeypatch.delenv(cores.VISIBLE_CORES, raising=False)
+    share = pantheon_neuron.peak_share(_named("tensor_virus"), TRN1)
+    assert share["cores_used"] == 2
+
+
+def test_under_the_reservation_the_suite_is_internally_consistent(
+        monkeypatch):
+    """The check the correction is right, not merely applied.
+
+    Measured on trn1.2xlarge 2026-09-10, every single-workload run under
+    the reservation. Pairs that measure the same thing should land
+    together, and nothing can exceed its ceiling.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+
+    def pct(name, score):
+        return pantheon_neuron.percent_of_peak(
+            score, pantheon_neuron.peak_share(_named(name), TRN1))
+
+    measured = {"memory_read": 256.1, "memory_read_agg": 541.5,
+                "tensor_virus": 26.1, "pulse_virus": 13.85,
+                "transformer_virus": 53.2, "omni_virus": 54.0}
+    shares = {name: pct(name, score) for name, score in measured.items()}
+
+    assert all(0 < v < 100 for v in shares.values()), shares
+    # Same kernel, pulsed and sustained.
+    assert abs(shares["tensor_virus"] - shares["pulse_virus"]) < 3
+    # Same memory path, one core and two.
+    assert abs(shares["memory_read"] - shares["memory_read_agg"]) < 5
+
+
+# -- the cores the kernel used, not the cores it could see -------------------
+#
+# Measured on trn1.2xlarge 2026-09-10, each case its own process because
+# NEURON_RT_VISIBLE_CORES is read once at runtime init:
+#
+#   both visible  tensor_virus       core0 20.03%  core1 0.0%   22.57 TFLOPS
+#   reserved      tensor_virus       core0 28.74%  core1 0.0%   25.19
+#   both visible  transformer_virus  core0 24.35%  core1 0.0%   47.82
+#   reserved      transformer_virus  core0 29.85%  core1 0.0%   50.62
+#
+# Core 1 did nothing in any case. The prediction, written into the probe
+# before it ran, was that neither kernel is sharded so core 1 stays near
+# zero -- confirmed for both the NKI kernel and the torch-lowered one.
+
+_ONE_CORE_BUSY = {
+    "effective_flops": {"0": {"mean": 22573710261761, "samples": 7}},
+    "neuroncore_utilization": {"0": {"mean": 20.03}, "1": {"mean": 0.0}},
+}
+
+
+def test_a_visible_idle_core_is_not_counted_for_an_arithmetic_score(
+        monkeypatch):
+    """With both cores exposed the column credited two and reported
+    tensor_virus at 11.88% -- half its share, for a core that sat idle.
+    """
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0-1")
+    share = pantheon_neuron.peak_share(
+        _named("tensor_virus"), TRN1, _ONE_CORE_BUSY)
+    assert share["cores_used"] == 1
+    assert pantheon_neuron.percent_of_peak(22.5737, share) == pytest.approx(
+        23.76, abs=0.05)
+
+
+def test_both_visibilities_now_describe_the_same_kernel(monkeypatch):
+    """The check the fix is right: one kernel, two ways of running it,
+    and the percentages should differ only by what the runs measured.
+
+    22.57 against 25.19 TFLOPS is a real difference between the runs;
+    the column should carry exactly that ratio and no more. Before the
+    fix it carried a further factor of two.
+    """
+    from kernels import cores
+    reserved = {"effective_flops": {"0": {"mean": 25185946432717}}}
+
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0-1")
+    visible = pantheon_neuron.percent_of_peak(
+        22.5737, pantheon_neuron.peak_share(
+            _named("tensor_virus"), TRN1, _ONE_CORE_BUSY))
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0")
+    only_zero = pantheon_neuron.percent_of_peak(
+        25.1859, pantheon_neuron.peak_share(
+            _named("tensor_virus"), TRN1, reserved))
+
+    assert visible / only_zero == pytest.approx(22.5737 / 25.1859, rel=1e-3)
+
+
+def test_the_flops_count_is_not_applied_to_a_memory_score():
+    """A memory kernel is DMA-bound and can saturate HBM with the compute
+    engines near idle. Counting cores by arithmetic activity would call a
+    saturated memory path unused -- so memory_read_agg keeps both cores
+    even when the telemetry shows no flops at all.
+    """
+    no_flops = {"effective_flops": {},
+                "neuroncore_utilization": {"0": {"mean": 0.5},
+                                           "1": {"mean": 0.4}}}
+    share = pantheon_neuron.peak_share(
+        _named("memory_read_agg"), TRN1, no_flops)
+    assert share["cores_used"] == 2
+
+
+def test_missing_telemetry_falls_back_to_the_visible_mask(monkeypatch):
+    """Mock runs and disabled telemetry carry no per-core counters. That
+    is not evidence that zero cores were used, so nothing is capped."""
+    from kernels import cores
+    monkeypatch.setenv(cores.VISIBLE_CORES, "0-1")
+    for absent in (None, {}, {"effective_flops": {}}):
+        share = pantheon_neuron.peak_share(
+            _named("tensor_virus"), TRN1, absent)
+        assert share["cores_used"] == 2, absent
+
+
+def test_the_row_passes_its_telemetry_to_the_share():
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    assert "peak_share ( workload , devices , metrics )" in code
+
+
+# -- a Score above the ceiling is not a measurement --------------------------
+
+def test_a_score_twice_the_core_peak_is_named_impossible():
+    """The planted coalesced defect: 186.82 TFLOPS on one 95 TFLOPS core."""
+    why = pantheon_neuron.beyond_the_ceiling(186.82, {"peak": 95.0}, "TFLOPS")
+    assert why and "1.97x" in why and "95 TFLOPS" in why
+
+
+def test_the_best_real_kernel_is_well_inside_the_ceiling():
+    """coalesced's measured monitor Score, 71.80 of 95. The guard must not
+    fire on the fastest real result this part has produced."""
+    assert pantheon_neuron.beyond_the_ceiling(71.7968, {"peak": 95.0}, "TFLOPS") is None
+
+
+def test_the_tolerance_is_a_margin_not_a_loophole():
+    peak = {"peak": 100.0}
+    assert pantheon_neuron.beyond_the_ceiling(104.9, peak, "GB/s") is None
+    assert pantheon_neuron.beyond_the_ceiling(105.1, peak, "GB/s")
+
+
+def test_no_ceiling_means_no_verdict():
+    assert pantheon_neuron.beyond_the_ceiling(1e9, None, "ops/s") is None
+    assert pantheon_neuron.beyond_the_ceiling(None, {"peak": 95.0}, "TFLOPS") is None
+
+
+def test_a_row_beyond_the_ceiling_fails_and_keeps_the_figure(monkeypatch):
+    """Fails rather than publishing, and the Detail still carries the
+    number -- over-100% being visible, not clamped, is what exposed the
+    123% memory_read_agg figure, so it must stay readable.
+
+    Under the mask the hardware run used -- core 0 to the workload, core 1
+    reserved for neuron-profile -- which is what makes the ceiling 95.
+    With both cores visible and no telemetry the ceiling is 190 and
+    186.8 would sit under it: the guard is only as tight as the ceiling.
+    """
+    monkeypatch.setenv("NEURON_RT_VISIBLE_CORES", "0")
+    workload = _named("tensor_virus")
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 186.82)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name,
+                        {"elapsed_s": 20.0, "analytic_tflops": 186.82})
+    row = pantheon_neuron._measure_once(workload, TRN1, 1, 0.5)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "186.8" in row["Detail"] and "physically reach" in row["Detail"]
+
+
+def test_a_real_score_through_the_same_path_passes(monkeypatch):
+    """The control, so the test above cannot pass by failing everything."""
+    monkeypatch.setenv("NEURON_RT_VISIBLE_CORES", "0")
+    workload = _named("tensor_virus")
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 70.42)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name,
+                        {"elapsed_s": 20.0, "analytic_tflops": 70.42})
+    row = pantheon_neuron._measure_once(workload, TRN1, 1, 0.5)
+    assert row["Status"] == "PASS", row["Detail"]
+    assert row["Score"] == 70.42

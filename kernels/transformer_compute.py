@@ -17,9 +17,17 @@ Two workloads that run the same block for different reasons:
                           capability at all -- which is why it is gated on
                           it and skips on Inferentia.
 
-STATUS: UNTESTED ON HARDWARE as workloads, though the training path itself
-was verified on trn1.2xlarge 2026-08-27 at 23.25 train-steps/s with a real
-backward pass and optimiser step.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-10:
+``transformer_virus`` 53.1 TFLOPS via neuron-monitor,
+``transformer_train_step`` 3.64 train-steps/s.
+
+``transformer_train_step`` failed on 2026-09-08 -- the pinned problem did
+not fit device memory -- and the registry repinned it to batch 1 /
+layers 4, near 6.5 GB, which leaves room for the optimiser state rather
+than only just fitting. That was the fourth pinned problem in this repo
+found unreachable on the part it targets. The 23.25 train-steps/s
+measured on 2026-08-27 was a different, smaller problem and is not
+comparable to the 3.64 above.
 """
 
 import time
@@ -72,7 +80,11 @@ def run_virus(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "block FLOPs issued / wall time",
-        **transformer_ops.output_check(observed, "block output"),
+        # One block over all-ones input, so the answer is 1 + gelu(1) =
+        # 2.8413 exactly. Checking it verifies the residuals and the
+        # normalisation actually ran, which a finiteness check cannot:
+        # every way of getting this wrong produces a finite number.
+        **transformer_ops.stack_check(observed, 1),
     }
 
 
@@ -125,6 +137,13 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     inputs = torch.ones((batch, seq, hidden), dtype=dtype, device=device)
     xm.mark_step()
 
+    # One parameter element, sampled before any step runs. Nothing else in
+    # this workload can tell a working optimiser from a decorative one:
+    # the forward, the backward and the step all execute either way, and
+    # the loss is a function of parameters that may never have moved.
+    sampled = params[0]["w2"]
+    before = transformer_ops.read_back(sampled)
+
     def one_step():
         optimiser.zero_grad()
         state = inputs
@@ -155,6 +174,7 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     elapsed = time.perf_counter() - started
 
     observed = transformer_ops.read_back(sink)
+    after = transformer_ops.read_back(sampled)
     # Backward costs roughly twice the forward: one pass for input
     # gradients and one for weight gradients.
     forward = steps * layers * transformer_ops.block_flops(hidden, seq, batch)
@@ -165,7 +185,49 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
         "train_steps_per_s": steps / elapsed if elapsed else 0.0,
         "flops_issued": forward * 3,
         "implied_tflops": (forward * 3) / elapsed / 1e12 if elapsed else 0.0,
+        # Whether the model moved, which "train-steps/s" does not say.
+        "parameter_before": before,
+        "parameter_after": after,
+        "parameter_moved": (before is not None and after is not None
+                            and before != after),
         "score_method": "workload",
         "analytic_basis": "optimiser steps / wall time",
-        **transformer_ops.output_check(observed, "loss"),
+        # Two things, and only one of them invalidates a Score.
+        #
+        # A NaN loss means nothing ran usefully, so output_check's verdict
+        # stands. A model that never moved is a different statement: the
+        # forward, the backward and the step all executed and the Score
+        # correctly measures what they cost. It is the *name* that
+        # misleads, so it warns.
+        "expected_loss": transformer_ops.stacked_block_output(layers),
+        **_train_step_check(observed, before, after, layers),
     }
+
+
+def _train_step_check(observed, before, after, layers):
+    """Pair the loss verdict with the did-it-train verdict.
+
+    The loss is derivable, and the two verdicts constrain each other.
+    Inputs are ones and parameters are 1/fan_in, so a forward pass through
+    ``layers`` blocks produces ``stacked_block_output(layers)`` and the
+    loss is its mean over identical elements -- 8.3654 at the pinned four
+    layers.
+
+    That is the value on the *first* step. On later steps it holds only if
+    the parameters have not moved, which is exactly what the other verdict
+    reports. So a run where the loss stays at 8.3654 and the parameter is
+    unchanged is internally consistent, and a run where one moves without
+    the other is not: **either both or neither**, and a row showing one
+    alone means one of the two checks is measuring the wrong thing.
+
+    Order matters. A NaN or wrong loss invalidates the Score and is
+    reported first; an unmoved model does not invalidate anything and is
+    appended, so a run with both says the more serious thing first.
+    """
+    expected = transformer_ops.stacked_block_output(layers)
+    result = transformer_ops.equals_check(observed, expected, "loss")
+    moved = transformer_ops.verify_optimiser_moved_the_model(before, after)
+    if moved:
+        result["warning"] = "; ".join(
+            part for part in (result.get("warning"), moved) if part)
+    return result

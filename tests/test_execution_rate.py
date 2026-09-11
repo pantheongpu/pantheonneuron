@@ -100,12 +100,19 @@ def test_a_counter_that_never_moved_reports_no_rate():
     assert rate["executions_delta"] == 0
 
 
-def test_a_single_sample_reports_nothing():
-    assert execution_rate([(0, 100)], [0.0]) == {}
+def test_a_single_sample_reports_no_rate():
+    """These two asserted `== {}` and now check the thing that matters.
+
+    An empty dict was the old way of saying "nothing to measure", and it
+    said nothing about *which* nothing -- see the three tests at the end
+    of this file. What both cases have always meant is that no rate comes
+    out, so that is what they assert.
+    """
+    assert "executions_per_s" not in execution_rate([(0, 100)], [0.0])
 
 
-def test_no_samples_report_nothing():
-    assert execution_rate([], []) == {}
+def test_no_samples_report_no_rate():
+    assert "executions_per_s" not in execution_rate([], [])
 
 
 def test_a_counter_that_went_backwards_reports_no_rate():
@@ -129,3 +136,57 @@ def test_the_idle_fraction_says_how_much_was_compile():
 
     series, times = _flat_then_moving(1, 20)
     assert execution_rate(series, times)["execution_idle_fraction"] < 0.1
+
+
+# -- "no rate" covered three different problems ------------------------------
+
+def test_no_samples_says_so():
+    absent = execution_rate([], [])
+    assert absent["execution_samples"] == 0
+    assert "no sample carried" in absent["execution_rate_absent"]
+    assert "executions_per_s" not in absent
+
+
+def test_one_sample_names_the_fix():
+    """A single sample has no delta. Raise the duration or the rate."""
+    absent = execution_rate([(0, 100)], [0.0])
+    assert absent["execution_samples"] == 1
+    message = absent["execution_rate_absent"]
+    assert "no delta" in message
+    assert "--duration" in message
+    assert "executions_per_s" not in absent
+
+
+def test_a_counter_that_never_moved_is_a_failing_workload():
+    """Not a slow one, and the message must not read like one."""
+    series = [(0, 100), (1, 100), (2, 100)]
+    absent = execution_rate(series, [0.0, 1.0, 2.0])
+    assert absent["executions_delta"] == 0
+    assert absent["execution_samples"] == 3
+    assert "did not advance" in absent["execution_rate_absent"]
+    assert "executions_per_s" not in absent
+
+
+def test_the_three_reasons_are_distinguishable():
+    """Which was the whole point: one message for three causes is
+    actionable in none of them.
+
+    graph_replay produced a Score from this counter on 2026-09-08 and
+    degraded to the analytic fallback on 2026-09-10, and the row said
+    only "neuron-monitor reported no execution rate".
+    """
+    messages = {
+        execution_rate([], [])["execution_rate_absent"],
+        execution_rate([(0, 1)], [0.0])["execution_rate_absent"],
+        execution_rate(
+            [(0, 1), (1, 1)], [0.0, 1.0])["execution_rate_absent"],
+    }
+    assert len(messages) == 3, messages
+
+
+def test_a_working_rate_carries_no_absence_message():
+    """The control: a measurement must not explain why it is missing."""
+    series = [(0, 0), (1, 10), (2, 20)]
+    rate = execution_rate(series, [0.0, 1.0, 2.0])
+    assert rate["executions_per_s"] > 0
+    assert "execution_rate_absent" not in rate

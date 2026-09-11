@@ -23,10 +23,18 @@ each one costing a round trip to find. The first four came out of the
    analytic figure -- which, until 2026-09-07, it always had. See
    kernels/cores.py.
 
-STATUS: capture verified on inf2.xlarge 2026-09-07 -- it produced a session
-against a real NEFF once no workload held the device. The counter-reading
-path above it is still exercised only by hand-taken captures. See
-docs/neuron_counters.md for the raw output it parses.
+STATUS: VERIFIED END TO END, trn1.2xlarge 2026-09-10. The counter-reading
+path is no longer exercised only by hand-taken captures: memory_read
+(256.0888 GB/s) and memory_write (226.6205 GB/s) both scored through it in
+a full pass, which is the first time the declared profiler source produced
+Scores in a scored run rather than a standalone probe session.
+
+Capture alone was verified earlier, on inf2.xlarge 2026-09-07. The gap
+between the two dates is NEFF identification: a capture that runs against
+the wrong graph produces a plausible bandwidth from four bytes, and
+verify_profile_covers_plan refusing it is what made the difference visible
+rather than silent. See docs/neuron_counters.md for the raw output this
+parses.
 """
 
 import json
@@ -298,35 +306,68 @@ def plan_coverage(counters: typing.Mapping[str, typing.Any],
     return measured / expected_bytes
 
 
+# A profile may move this many times the planned bytes and still be
+# accepted as the kernel's own graph. Symmetric with ``floor`` in spirit:
+# a graph that moved ten times the plan is as certainly the wrong graph as
+# one that moved a twentieth of it, and until 2026-09-10 only the low side
+# was checked. The bytes then divided by a real total_time and produced a
+# real-looking GB/s -- ten times too fast, and publishable.
+#
+# 2.0 rather than something tighter, on evidence: every
+# ``profiler_plan_coverage`` in every report on the trn1.2xlarge as of
+# 2026-09-10 reads exactly 1.0, so this leaves a factor of two of headroom
+# against the only values the capture has ever produced.
+#
+# The direction of caution matters here. A ceiling that is too tight
+# refuses a real capture and sends the row to the analytic fallback --
+# undoing the core reservation and compile-cache isolation that took two
+# days to make the declared profiler source work at all. A ceiling that is
+# too loose lets through a graph that is obviously wrong. Between those,
+# the second failure is louder, because the row still says which NEFF was
+# profiled and what fraction of the plan it covered.
+CEILING = 2.0
+
+
 def verify_profile_covers_plan(
     counters: typing.Mapping[str, typing.Any],
     direction: str,
     expected_bytes: int,
     floor: float = 0.5,
+    ceiling: float = CEILING,
 ) -> None:
     """Reject a profile that did not come from the kernel we measured.
 
     The counters are checked against the work the plan describes, and a
-    profile carrying less than ``floor`` of the planned bytes is refused.
-    Nothing downstream would otherwise notice: the bytes divide by a real
-    ``total_time`` and produce a real-looking GB/s, which is worse than an
-    error because it is publishable.
+    profile carrying less than ``floor`` or more than ``ceiling`` of the
+    planned bytes is refused. Nothing downstream would otherwise notice:
+    the bytes divide by a real ``total_time`` and produce a real-looking
+    GB/s, which is worse than an error because it is publishable.
 
-    This is the judgement ``select_by_plan`` searches with. Kept as its own
-    function because the two failures are different: this one says the
-    profile in hand is the wrong graph, while the search says none of the
-    graphs on the machine were the right one.
+    **This function was dead for some time.** ``select_by_plan`` grew its
+    own inline floor test and stopped calling it, while three docstrings,
+    the generated reference and five tests went on crediting it with the
+    2026-09-08 refusal. It is now the single gate ``select_by_plan``
+    returns through, so the message the documents quote is the message the
+    code produces.
+
+    Being dead is also how it kept a one-sided bound: nothing exercised it
+    against a graph larger than the plan, and the inline copy inherited
+    the same gap.
     """
     coverage = plan_coverage(counters, direction, expected_bytes)
     if coverage is None:
         return
-    if coverage < floor:
-        key = {"read": "hbm_read_bytes", "write": "hbm_write_bytes"}[direction]
-        raise ProfilerUnavailable(
-            f"profiled graph moved {int(counters[key])} bytes against a plan "
-            f"of {expected_bytes} -- this is not the kernel that was "
-            "measured, so its counters describe someone else's graph"
-        )
+    if floor <= coverage <= ceiling:
+        return
+    key = {"read": "hbm_read_bytes", "write": "hbm_write_bytes"}[direction]
+    moved = int(counters[key])
+    side = "only " if coverage < floor else ""
+    raise ProfilerUnavailable(
+        f"profiled graph moved {side}{moved} bytes against a plan "
+        f"of {expected_bytes} (coverage {coverage:.4g}) -- this is not the "
+        "kernel that was measured, so its counters describe someone "
+        "else's graph"
+    )
 
 
 def select_by_plan(candidates: typing.Sequence[str],
@@ -411,12 +452,23 @@ def select_by_plan(candidates: typing.Sequence[str],
             f"{os.path.basename(neff)}: covered {coverage:.4g} of the plan"
         )
 
-    if best is not None and best["plan_coverage"] >= floor:
-        # Nothing matched exactly, but something cleared the floor. It is
-        # the closest to the plan of everything on the machine, and the
-        # row's plan_coverage says how close, so a reader can see that this
-        # was a near miss rather than a clean identification.
-        return best
+    if best is not None:
+        # Nothing matched exactly, but something may still be within the
+        # bounds. It is the closest to the plan of everything on the
+        # machine, and the row's plan_coverage says how close, so a reader
+        # can see that this was a near miss rather than a clean
+        # identification.
+        #
+        # Checked through verify_profile_covers_plan rather than against
+        # `floor` inline. The inline test compared one side only, so a
+        # graph that moved ten times the planned bytes was accepted and
+        # published as a bandwidth ten times too fast.
+        try:
+            verify_profile_covers_plan(
+                best["counters"], direction, expected_bytes, floor)
+            return best
+        except ProfilerUnavailable as error:
+            attempts.append(str(error))
 
     raise ProfilerUnavailable(
         f"none of {len(candidates)} candidate NEFF(s) moved the planned "

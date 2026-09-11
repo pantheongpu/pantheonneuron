@@ -15,14 +15,18 @@ asymmetry is deliberate: it keeps ``hbm_write_bytes`` clean, and it gives a
 cheap sanity check -- if ``hbm_read_bytes`` comes back anywhere near
 ``hbm_write_bytes``, the kernel is not doing what it looks like.
 
-STATUS: verified on inf2.xlarge 2026-09-07, but **not at the pinned size**.
-The kernel ran and its destination check passed exactly (ratio 1.0) at 4 GiB
-(255.1 GB/s) and 6 GiB (162.5 GB/s). The registry pins 8 GiB, and that does
-not fit: a NeuronCore on this part has 16 GB, the destination is the whole
-plan, and the runtime still holds the previous destination when the next is
+STATUS: VERIFIED ON HARDWARE at the pinned size, trn1.2xlarge 2026-09-08
+and 2026-09-10: 226.6 GB/s **from its declared neuron-profile source**, not
+the analytic fallback.
+
+The registry pinned 8 GiB when this note was first written and that did not
+fit: a NeuronCore on this part has 16 GB, the destination is the whole plan,
+and the runtime still holds the previous destination when the next is
 allocated -- 8.59 GB requested against 8.099 GB resident, failing by about
 the size of the model code. Releasing the reference, forcing collection and
-syncing did not reclaim it in time.
+syncing did not reclaim it in time. The pin is now 4 GiB, which fits with
+room for the previous destination rather than only just, and the
+destination check returns exactly 1.0.
 
 So the pinned problem is unreachable on a 2-core, 32 GB part, which is both
 parts this suite currently targets. Whether to lower the pin or to split the
@@ -132,7 +136,11 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # on inf2.xlarge 2026-09-07, where the next request for 8.59 GB met
     # 8.099 GB still resident on a 16 GB core. See the module docstring for
     # what that means for the pinned problem.
-    warm = None
+    # -- not a dead store. This drops the only reference to the
+    # warm-up destination so the runtime can free it, which is the whole
+    # point of the paragraph above: deleting the line as "unused" would
+    # keep 8 GB resident and reintroduce the failure it documents.
+    warm = None  # noqa: F841
     gc.collect()
     xm.mark_step()
     xm.wait_device_ops()
@@ -159,7 +167,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     while time.perf_counter() < deadline:
         written = kernel(source)
         xm.mark_step()
-        written = None
+        # Released each pass for the same reason, so the destination does
+        # not accumulate across the loop. Not a dead store.
+        written = None  # noqa: F841
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started

@@ -22,6 +22,13 @@ from neuron_device import NeuronDevice
 MOCK = [NeuronDevice(i, "mock", "v2", 2, 32 * 1024**3, True) for i in range(2)]
 
 
+# Mock mode sleeps the requested duration, so every `1` below was a real
+# second per repeat -- six tests at three repeats came to seventeen of the
+# suite's fifty-nine seconds. None of them is testing the duration; they
+# test how repeats are summarised, which holds at any duration.
+DURATION = 0.02
+
+
 def _workload(name="memory_read"):
     return next(w for w in registry.WORKLOADS if w.name == name)
 
@@ -93,7 +100,7 @@ def test_the_threshold_is_where_it_is_documented(cv_target, flagged):
 
 def test_a_single_run_carries_no_repeat_summary(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01)
     assert row["Repeats"] is None
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
 
@@ -108,7 +115,7 @@ def test_repeats_run_the_workload_that_many_times(monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(pantheon_neuron, "_measure_once", counted)
-    pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
     assert len(calls) == 3
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
 
@@ -118,10 +125,10 @@ def test_every_row_has_the_same_shape(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
     inf2 = [NeuronDevice(i, "inf2", "v2", 2, 32 * 1024**3, False) for i in range(2)]
 
-    single = pantheon_neuron.run_workload(_workload(), inf2, 1, 0.01)
-    repeated = pantheon_neuron.run_workload(_workload(), inf2, 1, 0.01, repeat=2)
+    single = pantheon_neuron.run_workload(_workload(), inf2, DURATION, 0.01)
+    repeated = pantheon_neuron.run_workload(_workload(), inf2, DURATION, 0.01, repeat=2)
     skipped = pantheon_neuron.run_workload(
-        _workload("transformer_train_step"), inf2, 1, 0.01, repeat=2)
+        _workload("transformer_train_step"), inf2, DURATION, 0.01, repeat=2)
 
     assert sorted(single) == sorted(repeated) == sorted(skipped)
     assert "Repeats" in single
@@ -133,7 +140,7 @@ def test_a_skip_is_not_repeated(monkeypatch):
     monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
     inf2 = [NeuronDevice(0, "inf2", "v2", 2, 32 * 1024**3, False)]
     row = pantheon_neuron.run_workload(
-        _workload("transformer_train_step"), inf2, 1, 0.01, repeat=3)
+        _workload("transformer_train_step"), inf2, DURATION, 0.01, repeat=3)
     assert row["Status"] == "SKIPPED"
     assert row["Repeats"] is None
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
@@ -151,7 +158,7 @@ def test_the_median_is_the_published_score(monkeypatch):
         return row
 
     monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
 
     assert row["Score"] == 20.0
     assert row["Repeats"]["min"] == 10.0 and row["Repeats"]["max"] == 100.0
@@ -173,7 +180,7 @@ def test_one_failed_repeat_fails_the_row(monkeypatch):
         return row
 
     monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
-    row = pantheon_neuron.run_workload(_workload(), MOCK, 1, 0.01, repeat=3)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
 
     assert row["Status"] == "FAIL"
     assert "1 of 3 repeats failed" in row["Detail"]
@@ -247,3 +254,278 @@ def test_no_flops_reported_is_not_a_thin_sample():
     """Absent is a different thing from thin, and monitor_score handles it."""
     assert pantheon_neuron.thin_monitor_sample({}) is None
     assert pantheon_neuron.thin_monitor_sample({"effective_flops": {}}) is None
+
+
+# -- the row must describe the run it publishes ------------------------------
+
+def _scripted(monkeypatch, scores, provenances):
+    values, provs = iter(scores), iter(provenances)
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"] = next(values)
+        row["Measurement"] = next(provs)
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+
+
+def test_measurement_belongs_to_the_repeat_that_set_the_score(monkeypatch):
+    """The Score is the median; the Measurement used to be the last run.
+
+    Two different executions in one row, with nothing saying so -- a reader
+    checking which NEFF was captured, or at what coverage, would be reading
+    provenance for a run whose number was discarded.
+    """
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, [10.0, 20.0, 30.0],
+              [{"from": 1}, {"from": 2}, {"from": 3}])
+
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+    assert row["Score"] == 20.0
+    assert row["Measurement"] == {"from": 2}, "not the last repeat"
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_an_even_median_belongs_to_no_repeat(monkeypatch):
+    """It is an average of two runs, so no single Measurement describes it.
+
+    Reporting one anyway would attach provenance to an execution that did
+    not produce the number, which is worse than none.
+    """
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, [10.0, 20.0], [{"from": 1}, {"from": 2}])
+
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=2)
+    assert row["Score"] == 15.0
+    assert row["Measurement"] is None
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_a_single_run_keeps_its_own_measurement(monkeypatch):
+    """No repeats, no ambiguity -- the row is that one run."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, [42.0], [{"from": 1}])
+
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01)
+    assert row["Measurement"] == {"from": 1}
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+# -- agreeing more closely than the Score can resolve ------------------------
+
+def test_a_cv_above_the_resolution_is_real_agreement():
+    """The control. Most Scores are continuous and this never fires."""
+    assert pantheon_neuron.quantised_agreement({"cv": 0.02}, 0.007) is None
+    assert pantheon_neuron.quantised_agreement({"cv": 0.007}, 0.007) is None
+
+
+def test_a_cv_far_below_the_resolution_is_quantisation():
+    """serving_mix: cv 0.0001 on a Score that steps by 1 in 149.
+
+    Its Score is decode_tokens // decode, so the request count advances
+    once per 32 decode steps and not at all in between. Three repeats at
+    DURATION=60 landed on the same integer, and the only thing varying was
+    the wall clock in the denominator -- read at the time as the most
+    reproducible Score in the suite.
+    """
+    message = pantheon_neuron.quantised_agreement({"cv": 0.0001}, 1 / 149)
+    assert message is not None
+    assert "resolution" in message
+    assert "same integer" in message
+
+
+def test_a_continuous_score_is_never_accused():
+    """No resolution declared means the counter is not an integer count."""
+    assert pantheon_neuron.quantised_agreement({"cv": 0.0001}, None) is None
+    assert pantheon_neuron.quantised_agreement({"cv": 0.0001}, 0) is None
+
+
+def test_a_single_repeat_has_no_cv_to_compare():
+    assert pantheon_neuron.quantised_agreement(None, 0.5) is None
+    assert pantheon_neuron.quantised_agreement({}, 0.5) is None
+    assert pantheon_neuron.quantised_agreement({"cv": None}, 0.5) is None
+
+
+def test_this_is_the_opposite_check_to_unstable_and_they_cannot_both_fire():
+    """UNSTABLE_CV catches a Score disagreeing with itself; this catches
+    one that cannot disagree with itself. A Score is not both.
+    """
+    resolution = 1 / 149
+    unstable_cv = pantheon_neuron.UNSTABLE_CV
+    assert resolution < unstable_cv, (
+        "if a Score's resolution exceeded the instability threshold, both "
+        "checks could fire on the same row and each would be right")
+    assert pantheon_neuron.quantised_agreement(
+        {"cv": unstable_cv + 0.01}, resolution) is None
+
+
+# -- the resolution comes from the declared formula --------------------------
+
+def _named(name):
+    """Not _workload: this file already has one, with a different signature.
+
+    Shadowing it made eight unrelated tests fail with a TypeError -- a
+    reminder that appending to a test file is editing it.
+    """
+    return next(w for w in registry.WORKLOADS if w.name == name)
+
+
+def test_a_counted_score_resolves_to_one_of_the_things_it_counts():
+    """No kernel has to remember to say so; the formula already does.
+
+    transformer_train_step declares `steps_completed / elapsed_s`, so a
+    run of 109 steps cannot resolve anything finer than 1 in 109.
+    """
+    resolution = pantheon_neuron.score_resolution(
+        _named("transformer_train_step"), {"steps_completed": 109})
+    assert resolution == pytest.approx(1 / 109)
+
+
+def test_a_kernel_declaration_wins_over_the_formula():
+    """serving_mix counts completed requests, which advance once per 32
+    decode steps. The formula cannot know that; the kernel does.
+    """
+    resolution = pantheon_neuron.score_resolution(
+        _named("serving_mix"),
+        {"requests_completed": 149, "score_resolution": 0.25})
+    assert resolution == 0.25
+
+
+def test_a_continuous_score_has_no_resolution():
+    """A bandwidth is not a count of anything, so the question does not
+    apply -- and answering it anyway would flag every steady one."""
+    assert pantheon_neuron.score_resolution(
+        _named("memory_read"), {"bytes_moved": 8 << 30}) is None
+    assert pantheon_neuron.score_resolution(
+        _named("tensor_virus"), {"passes": 598}) is None
+
+
+def test_a_missing_or_nonsense_count_resolves_to_nothing():
+    workload = _named("transformer_train_step")
+    assert pantheon_neuron.score_resolution(workload, {}) is None
+    assert pantheon_neuron.score_resolution(
+        workload, {"steps_completed": 0}) is None
+    assert pantheon_neuron.score_resolution(
+        workload, {"steps_completed": 2.5}) is None
+    # bool is an int in Python, and a flag would resolve to 1.0.
+    assert pantheon_neuron.score_resolution(
+        workload, {"steps_completed": True}) is None
+
+
+def test_every_internal_workload_either_resolves_or_says_why():
+    """A sweep, so a new counted Score cannot quietly skip the check.
+
+    Each INTERNAL workload's declared numerator either names a counter the
+    kernel returns -- in which case the resolution is derivable -- or the
+    formula is not a count over wall time, which this asserts explicitly
+    rather than leaving as a silent None.
+    """
+    counted, continuous = [], []
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if not source or source.source != registry.INTERNAL:
+            continue
+        formula = source.formula or ""
+        numerator, _, denominator = formula.partition("/")
+        if denominator.split("#")[0].strip() == "elapsed_s":
+            counted.append((workload.name, numerator.strip()))
+        else:
+            continuous.append(workload.name)
+
+    assert counted, "no counted Scores found -- the parse is broken"
+    for name, numerator in counted:
+        resolution = pantheon_neuron.score_resolution(
+            _named(name), {numerator: 100})
+        assert resolution == pytest.approx(0.01), (name, numerator)
+
+
+def test_every_declared_numerator_is_a_key_some_kernel_returns():
+    """The parse being right is not the same as the counter existing.
+
+    test_every_internal_workload_either_resolves_or_says_why feeds a
+    synthetic {numerator: 100} and checks the arithmetic. It would pass
+    just as well for a numerator no kernel has ever returned, and
+    score_resolution would then quietly return None for that workload
+    forever -- a check present, running, and answering nothing, which is
+    the twelfth shape in docs/checks_that_pass_by_accident.md.
+
+    Read through the comment filter, so a counter named only in the
+    registry's own formula string does not vouch for itself.
+    """
+    import os
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ""
+    for name in sorted(os.listdir(os.path.join(root, "kernels"))):
+        if name.endswith(".py") and name != "registry.py":
+            with open(os.path.join(root, "kernels", name),
+                      encoding="utf-8") as handle:
+                code += sourcecheck.code_only(handle.read())
+    with open(os.path.join(root, "pantheon_neuron.py"),
+              encoding="utf-8") as handle:
+        code += sourcecheck.code_only(handle.read())
+
+    assert code, "no kernel source read -- the sweep is broken"
+
+    missing = []
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if not source or source.source != registry.INTERNAL:
+            continue
+        numerator, _, denominator = (source.formula or "").partition("/")
+        if denominator.split("#")[0].strip() != "elapsed_s":
+            continue
+        numerator = numerator.strip()
+        if f'"{numerator}"' not in code:
+            missing.append(f"{workload.name}: {numerator}")
+
+    assert not missing, (
+        f"declared numerators no kernel returns: {missing} -- "
+        "score_resolution answers None for these forever")
+
+
+def test_percent_of_peak_describes_the_published_score_not_the_last_repeat(monkeypatch):
+    """trn1.2xlarge 2026-09-10: Score 71.7968 (median) published beside
+    75.73%, which was the last repeat's 71.943 over 95. The column held
+    against the Score beside it, and it disagreed."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    scores = iter([65.0546, 71.7968, 71.943])
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"] = next(scores)
+        row["Peak"] = {"peak": 95.0}
+        row["Percent Of Peak"] = pantheon_neuron.percent_of_peak(row["Score"], row["Peak"])
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+
+    assert row["Score"] == 71.7968
+    assert row["Percent Of Peak"] == 75.58, row["Percent Of Peak"]
+    assert row["Percent Of Peak"] != 75.73, "the last repeat's figure"
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_the_peak_comes_from_the_median_repeat(monkeypatch):
+    """A duty-scaled ceiling can differ between repeats; the percentage must
+    use the ceiling of the run whose Score it divides."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    runs = iter([(10.0, 40.0), (20.0, 50.0), (100.0, 400.0)])
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"], peak = next(runs)
+        row["Peak"] = {"peak": peak}
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+    assert row["Peak"] == {"peak": 50.0}
+    assert row["Percent Of Peak"] == 40.0
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)

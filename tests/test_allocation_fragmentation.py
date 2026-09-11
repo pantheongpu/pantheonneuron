@@ -19,8 +19,16 @@ def _workload():
 
 
 def test_sequence_length_matches_the_pinned_count():
-    sizes = fragmentation.size_sequence(_workload().problem)
-    assert len(sizes) == 10000
+    """Derived from the pin, not typed out.
+
+    This asserted `== 10000` and failed the moment the registry repinned
+    to 40,000 -- which is the check working, but for the wrong reason:
+    it was testing that nobody had changed the pin, when what it means to
+    test is that the sequence length follows it.
+    """
+    problem = _workload().problem
+    sizes = fragmentation.size_sequence(problem)
+    assert len(sizes) == problem["allocations"]
 
 
 def test_sizes_stay_within_the_pinned_bounds():
@@ -124,4 +132,155 @@ def test_the_drift_the_old_accounting_produced():
     held_new, tracked_new = replay(correct=True)
 
     assert tracked_new == held_new, "the fixed tally matches what is held"
-    assert abs(held_old - tracked_old) > 10 * 1024**2, "the old one drifts"
+
+    # Relative to the budget, not an absolute byte count. The threshold was
+    # 10 MiB and it stopped holding when the registry repinned from 10,000
+    # allocations to 40,000 -- the drift is real at both counts, but how
+    # many bytes it reaches depends on where the sequence happens to stop.
+    # A regression test whose threshold is a function of the pinned problem
+    # cannot be made to pass or fail by changing the pin.
+    drift = abs(held_old - tracked_old)
+    assert drift > LIVE_BUDGET_BYTES * 0.001, (
+        f"the old accounting drifts by {drift} bytes against a "
+        f"{LIVE_BUDGET_BYTES} budget")
+
+
+def test_every_distinct_size_is_warmed_before_the_clock():
+    """Each size is its own graph shape, and there are thirteen of them.
+
+    Without a warm-up the first pass compiles all thirteen inside the
+    measurement. Measured on trn1.2xlarge 2026-09-10: three repeats read
+    549, 2,646 and 2,750 allocation-events/s -- monotonically rising, which
+    is warm-up rather than noise.
+    """
+    import sourcecheck
+    from kernels import allocation_fragmentation as af
+
+    code = sourcecheck.function_code(af.run)
+    warmup = code[:code.index("started = time . perf_counter ( )")]
+    assert "for size in sorted ( set ( sizes ) )" in warmup
+    assert "xm . wait_device_ops ( )" in warmup
+
+
+def test_the_warm_up_covers_every_shape_the_loop_will_use():
+    """sorted(set(sizes)) is exactly the distinct shapes, no more."""
+    from kernels import registry
+    from kernels.allocation_fragmentation import size_sequence
+
+    sizes = size_sequence({w.name: w.problem for w in registry.WORKLOADS}[
+        "allocation_fragmentation"])
+    assert len(set(sizes)) == 13
+
+    # This asserted `set(sorted(set(sizes))) == set(sizes)`, which is a
+    # tautology: set() discards the ordering the assertion was about, so
+    # the two sides are the same expression written twice and it could
+    # never fail. Found by ruff (C414) the first time a linter ran here.
+    #
+    # What it meant to check is that the kernel's warm-up loop --
+    # `for size in sorted(set(sizes))` -- visits every distinct size
+    # exactly once, in an order that does not depend on where each size
+    # first appeared in the sequence.
+    warmed = sorted(set(sizes))
+    assert len(warmed) == len(set(sizes)), "a size is warmed twice"
+    assert set(warmed) == set(sizes), "a size is never warmed"
+    assert warmed == sorted(warmed), "the warm-up order is not deterministic"
+
+
+def test_the_row_says_which_limit_stopped_the_run():
+    """--duration does not bound this workload, and the row must not imply it did.
+
+    10,000 allocations take under four seconds on trn1, so --duration 30
+    and --duration 60 measure the same four seconds. Measured 2026-09-10:
+    3.69s for a requested 10s, 3.92s for a requested 30s.
+    """
+    from kernels import allocation_fragmentation as af
+
+    short = af.verify_window_is_long_enough(3.8, 30, "allocations")
+    assert short is not None
+    assert "does not lengthen it" in short
+    assert "--repeat" in short
+
+    assert af.verify_window_is_long_enough(30.0, 30, "duration") is None
+
+
+def test_a_duration_bound_run_is_not_flagged_for_being_short():
+    """If the clock stopped it, the clock is what the caller asked for."""
+    from kernels import allocation_fragmentation as af
+    assert af.verify_window_is_long_enough(2.0, 2, "duration") is None
+
+
+def test_the_short_window_explains_the_residual_scatter():
+    """Recorded as arithmetic, because the drift and the scatter are
+    different problems with different fixes.
+
+    The warm-up removed the drift: repeats went from 549-2,750 ordered
+    (cv 0.63) to 2,012-2,708 unordered (cv 0.15). What is left is a rate
+    measured over 3.8 seconds, and --duration cannot lengthen it.
+    """
+    measured_window = 3.8
+    from kernels.allocation_fragmentation import MIN_WINDOW_SECONDS
+
+    assert measured_window < MIN_WINDOW_SECONDS
+    # Before the warm-up the spread was four times worse and ordered.
+    assert 0.63 / 0.15 > 4
+
+
+# -- the pin is the measurement window ---------------------------------------
+
+def test_the_pinned_count_gives_a_window_worth_measuring():
+    """10,000 allocations finished in 3.98s, and that was the whole run.
+
+    This workload is bounded by its allocation count, not by --duration,
+    so the pin *is* the window. A sweep on trn1.2xlarge 2026-09-10, three
+    repeats each: 10,000 -> 3.98s cv 0.083; 40,000 -> 16.66s cv 0.038;
+    120,000 -> 54.37s cv 0.025.
+
+    Pinned at 40,000 because it halves the scatter for a window that is a
+    measurement rather than a moment, without one workload taking a
+    minute of a 23-workload pass.
+    """
+    pinned = {w.name: w for w in registry.WORKLOADS}
+    count = pinned["allocation_fragmentation"].problem["allocations"]
+    assert count >= 40000, (
+        f"pinned at {count}: below 40,000 the measured window is under "
+        "ten seconds and three repeats scatter at cv 0.08 or worse"
+    )
+
+
+def test_the_score_is_declared_incomparable_across_pins():
+    """The rate falls as the count rises, so two pins are two quantities.
+
+    2512.9, 2400.7 and 2295.3 events/s across the sweep above. That is
+    not drift -- a longer run works a more fragmented allocator, which is
+    what the workload measures -- but it does mean a figure quoted
+    against a different count is not this figure.
+    """
+    # Declared in the registry rather than asserted against a comment.
+    # Two textual checks in this repo have passed on their own comments,
+    # and the first draft of this one ended in `or True`, which is a test
+    # that cannot fail -- the same defect wearing a third hat.
+    assert "allocation_fragmentation" in registry.SCORE_DEPENDS_ON_PIN
+    reason = registry.SCORE_DEPENDS_ON_PIN["allocation_fragmentation"]
+    assert "allocations" in reason
+
+    # And the pin travels with the Score, which is what makes the
+    # incomparability visible to a reader rather than a footnote.
+    pinned = {w.name: w for w in registry.WORKLOADS}
+    assert "allocations" in pinned["allocation_fragmentation"].problem
+
+
+def test_the_repin_prediction_is_recorded_as_falsified():
+    """A sweep said cv 0.038 at 40,000 allocations; the orchestrated run
+    said 0.14 and monotonically rising.
+
+    The docstring keeps the falsification rather than the prediction,
+    including why the sweep disagreed: it ran 10,000 before 40,000 in the
+    same process, so it measured a warm allocator three times where the
+    orchestrator measures a cold one once and a warm one twice. A control
+    that runs its conditions in order is not measuring them
+    independently.
+    """
+    doc = fragmentation.__doc__
+    assert "falsified" in doc
+    assert "0.14" in doc and "monotonically rising" in doc
+    assert "warm allocator three times" in doc

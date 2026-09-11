@@ -13,13 +13,81 @@ than by the arithmetic inside it.
 
 The graph is deliberately trivial and deliberately *not* eliminable: a
 single small matmul whose result feeds the next iteration's input, so the
-runtime cannot batch the replays into one execution or prove them dead. The
-chain is what makes each replay a separate completion for the counter to
-see.
+runtime cannot prove the replays dead.
 
-STATUS: UNTESTED ON HARDWARE. Uses only torch on the XLA device -- no NKI --
-so what is untested here is the replay pattern and whether the execution
-counter moves the way the formula assumes, not any kernel API.
+**It does batch them, and this docstring said otherwise for a fortnight.**
+Measured on trn1.2xlarge 2026-09-10, both counters from one run:
+
+    replays submitted        60,000
+    executions completed     14,737   (neuron-monitor)
+    ratio                      4.07
+
+So roughly four replays reach the device as one NEFF execution. The chain
+prevents elimination; it does not prevent coalescing, and the claim that
+"the chain is what makes each replay a separate completion" was wrong.
+
+That the two figures differed by about four was visible from 2026-09-08
+(729.3 graph-steps/s from the counter) and 2026-09-10 (3051.2 from the
+kernel) -- but those were different runs, and two numbers from two runs
+can differ for any reason. Taking both from one run is what turned it
+from a suspicion into a measurement.
+
+**Neither figure is "graph steps" in the sense the unit implies.** The
+kernel counts what the loop asked for; the counter counts what the device
+finished; and a reader wanting dispatch cost needs to know which, because
+they differ by four. ``pantheon_neuron.override_disagreement`` puts the
+gap in the row rather than letting whichever figure wins be read as the
+answer.
+
+**CONFIRMED**, trn1.2xlarge 2026-09-10 at --duration 30 --repeat 3. The
+prediction below was written before the run and is reproduced unchanged.
+The row came back:
+
+    graph_replay  PASS  3040.1886 graph-steps/s  via analytic
+      measured a 3.3s window of a requested 30s, so this run was bounded
+      by its pinned problem rather than by --duration
+
+3.3 seconds against a predicted 3.3, the declared monitor Score absent,
+the analytic fallback published in its place. All three parts held.
+
+So the "variance" in this workload's declared Score was never variance in
+the device: it is a window whose length is inversely proportional to the
+rate being measured, crossing the monitor's sampling threshold in one
+direction on 2026-09-08 and the other on 2026-09-10.
+
+This workload is bounded by ``replays`` (pinned at 10,000) as well as by
+``duration``, and the count is reached first. **The measured window is
+therefore a function of the rate being measured**: at the 3051.2
+graph-steps/s seen on 2026-09-10 the window is 3.3 seconds, and at the
+729.3 seen on 2026-09-08 it is 13.7.
+
+That would explain the declared Score's variance without either counter
+being wrong. neuron-monitor samples on a period, drops samples taken
+while the workload compiles, and needs two carrying the counter to form a
+delta. A 13.7-second window supplies them; a 3.3-second one may not, and
+the row degrades to the analytic fallback -- which is exactly what
+happened on those two dates, in that order.
+
+It would also explain the cv 0.63 across repeats, for the same reason
+allocation_fragmentation scattered: a window of a few seconds is not a
+measurement, and here the window shortens precisely when the device is
+fast.
+
+**Prediction (before the run):** at ``--duration 30 --repeat 3``, this
+run will report a window near 3 seconds rather than 30, ``short_window``
+will fire, and the declared monitor Score will be absent or unstable. If
+the window comes back near 30 seconds the hypothesis is wrong and the
+replay count is not what bounds this.
+
+STATUS: VERIFIED ON HARDWARE as a workload, trn1.2xlarge 2026-09-08
+and 2026-09-10. What is **not** settled is its declared Score source: the
+monitor's execution counter produced a Score on 2026-09-08 (729.3
+graph-steps/s) and not on 2026-09-10, where the row degraded to the
+analytic fallback (3051.2 graph-steps/s via replays submitted / wall
+time). Those two numbers are four times apart and are not measurements of
+the same thing -- one counts what the device finished, the other what the
+loop asked for -- so neither should be quoted without its Score Method.
+The 2026-09-10 pass also flagged it irreproducible at cv 0.63.
 """
 
 import time

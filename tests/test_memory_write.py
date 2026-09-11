@@ -59,7 +59,7 @@ def test_the_write_pin_fits_on_the_parts_this_suite_targets():
 
     assert pinned * 2 < per_core_bytes, "the pin must leave room for a rebuild"
     # The read side has no such constraint and is deliberately larger.
-    read = [w for w in registry.WORKLOADS if w.name == "memory_read"][0]
+    read = next(w for w in registry.WORKLOADS if w.name == "memory_read")
     assert read.problem["bytes"] > pinned
 
 

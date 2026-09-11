@@ -21,7 +21,11 @@ workloads because they stress three different things:
 
 Reporting one number for these three would be the mistake pantheongpu made.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
+
+``kv_cache_churn`` is the workload that taught this repo XLA has no
+in-place write: 0.85 cache-updates/s on 2026-09-08 against 97,497.4 after
+the static-slice ring rewrite. See docs/xla_has_no_in_place_write.md.
 """
 
 import time
@@ -87,8 +91,15 @@ def run_prefill(problem: typing.Mapping[str, typing.Any], duration: int) -> dict
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "prompt tokens / wall time",
-        **transformer_ops.output_check(
-            observed, "prefill output"),
+        # Not output_check. The input is all ones and the weights are
+        # scaled by 1/fan_in, so a 32-layer stack must produce 59.92 --
+        # derived, and independently agreeing with rms_norm's "about 2 per
+        # block". This is also the only check in the suite that verifies
+        # the layer count: flops_issued multiplies by `layers` whether or
+        # not that many ran, so a stack executing half its depth reports
+        # the full arithmetic at twice the throughput and reads as good
+        # news.
+        **transformer_ops.stack_check(observed, layers),
     }
 
 
@@ -170,8 +181,20 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "implied_tflops": flops / elapsed / 1e12 if elapsed else 0.0,
         "score_method": "workload",
         "analytic_basis": "tokens generated / wall time",
-        **transformer_ops.output_check(
-            observed, "decode output"),
+        # Same recursion as prefill, and so the same expected value.
+        # state starts at ones; rms_norm makes every branch input unit
+        # scale; attention over a constant cache is uniform whatever the
+        # context length, so the attended value is the cache's own; and
+        # both residuals add 1 and gelu(1). 32 layers -> 59.92.
+        #
+        # One thing this cannot check, and it is worth naming rather than
+        # leaving implied: the scores here are **not** divided by
+        # sqrt(head_dim), where transformer_ops.attention divides. With
+        # all-ones inputs every score is identical and softmax is uniform
+        # either way, so the omission is invisible to any check built on
+        # constant inputs -- including this one. It is a real structural
+        # difference from prefill that no test in this suite can see.
+        **transformer_ops.stack_check(observed, layers),
     }
 
 
@@ -284,9 +307,30 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
     device = xm.xla_device()
     # Per layer, as a real cache is. Writing one layer's worth per step was
     # what first made this workload measure the runtime instead of memory.
-    cache_k = torch.ones((layers, context, hidden), dtype=dtype, device=device)
-    cache_v = torch.ones((layers, context, hidden), dtype=dtype, device=device)
-    entry = torch.ones((layers, tokens, hidden), dtype=dtype, device=device)
+    # The entry is deliberately NOT the same value as the cache.
+    #
+    # Both were ones, so every write copied ones into ones and the cache
+    # was bit-identical whether the write landed or not. The only check on
+    # this kernel reads an element back, and that element read 1.0 for a
+    # working ring, a ring that never wrote, and a graph the compiler had
+    # elided entirely.
+    #
+    # Which matters more here than anywhere else in this suite: this is
+    # the workload that established XLA has no in-place write, after the
+    # index_copy_ version cost 455 ms to move 32 MiB on trn1.2xlarge
+    # 2026-09-08. The whole finding is about whether the write reaches the
+    # cache, and nothing verified that it does.
+    #
+    # 2.0 rather than ones costs nothing: same shapes, same graph, same
+    # bytes moved. What changes is that a cache still reading 1.0 at the
+    # end is now a run whose writes did not land.
+    CACHE_FILL, ENTRY_FILL = 1.0, 2.0
+    cache_k = torch.full((layers, context, hidden), CACHE_FILL,
+                         dtype=dtype, device=device)
+    cache_v = torch.full((layers, context, hidden), CACHE_FILL,
+                         dtype=dtype, device=device)
+    entry = torch.full((layers, tokens, hidden), ENTRY_FILL,
+                       dtype=dtype, device=device)
     xm.mark_step()
     xm.wait_device_ops()
 
@@ -348,8 +392,27 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
         "score_method": "workload",
         "analytic_basis": "cache entries written / wall time",
         "plan": plan,
+        "cache_fill": CACHE_FILL,
+        "entry_fill": ENTRY_FILL,
+        "cache_element": observed,
         **transformer_ops.output_check(observed, "cache"),
     }
+
+    # Slot 0 is written on the first step and on every `slots`-th step
+    # after, and read_back samples element zero, so a completed run must
+    # find the entry's value there. Finding the cache's own fill means the
+    # writes never reached it.
+    if observed is not None and observed == CACHE_FILL:
+        # Joined, not assigned. output_check may already have said the
+        # cache was NaN, and replacing that message would trade the more
+        # serious finding for the more specific one.
+        result["warning"] = "; ".join(part for part in (
+            result.get("warning"),
+            f"the cache still reads {CACHE_FILL:g} after {steps} steps, "
+            f"where a landed write leaves {ENTRY_FILL:g} -- the ring "
+            "wrote nothing the device kept",
+        ) if part)
+        result["score_invalid"] = True
 
     # An unreadable or NaN cache still fails the row; a dispatch-bound run
     # is a warning, because the number is real, it just is not the number

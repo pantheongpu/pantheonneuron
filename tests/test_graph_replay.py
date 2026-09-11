@@ -119,10 +119,38 @@ def test_start_clears_the_timestamps_with_the_samples():
 # -- the kernel --------------------------------------------------------------
 
 def test_pinned_problem_is_a_small_graph_replayed_often():
-    """Small on purpose: a big graph would measure the engines instead."""
+    """Small on purpose: a big graph would measure the engines instead.
+
+    The replay count asserted a literal 10000 and failed when the
+    registry repinned to 60000 -- testing that nobody had changed the
+    pin, rather than that the pin means what it should. What it should
+    mean is a measurement window long enough for the declared Score
+    source to form a delta, so that is what is asserted.
+    """
     plan = graph_replay.replay_plan(_workload().problem)
     assert plan["hidden"] == 2048
-    assert plan["replays"] == 10000
+    # Measured 3040 graph-steps/s on trn1.2xlarge 2026-09-10. The replay
+    # count bounds the run before --duration does, so the pin *is* the
+    # window: 10,000 replays gave 3.3 seconds, which is below what
+    # neuron-monitor needs and is why the declared Score degraded to the
+    # analytic fallback.
+    assert plan["replays"] / 3040.0 >= 15.0, (
+        f"{plan['replays']} replays is "
+        f"{plan['replays'] / 3040.0:.1f}s at the measured rate -- too "
+        "short for the monitor's completion counter to form a delta")
+
+
+def test_the_window_is_inversely_proportional_to_the_rate():
+    """The uncomfortable part, asserted so it stays visible.
+
+    A count-bounded workload measures itself over a window that shortens
+    as the device gets faster, so a faster part is *more* likely to lose
+    its declared Score. The pin has to hold up at rates well above the
+    one it was chosen against.
+    """
+    replays = graph_replay.replay_plan(_workload().problem)["replays"]
+    for rate, floor in ((3040.0, 15.0), (6080.0, 8.0)):
+        assert replays / rate >= floor, (rate, replays / rate)
 
 
 def test_invalid_graph_sizes_are_rejected():
@@ -167,3 +195,36 @@ def test_mock_mode_invents_no_score(monkeypatch):
     )
     assert row["Score"] is None
     assert row["Unit"] == "graph-steps/s"
+
+
+# -- the chain does not prevent coalescing -----------------------------------
+
+def test_the_docstring_no_longer_claims_replays_cannot_be_batched():
+    """Measured trn1.2xlarge 2026-09-10, both counters from one run:
+    60,000 replays submitted, 14,737 executions completed, ratio 4.07.
+
+    The chain prevents the replays being proved dead. It does not prevent
+    them being batched, and the docstring said it did.
+    """
+    doc = graph_replay.__doc__
+    assert "cannot batch the replays into one execution" not in doc
+    assert "It does batch them" in doc
+    assert "4.07" in doc
+
+
+def test_the_measured_ratio_is_reported_as_a_disagreement():
+    """A factor of four between the two figures has to reach the row.
+
+    Which of them is right is not settled here and cannot be from off
+    hardware. What a row can do is say it published one of two numbers
+    that differ by four.
+    """
+    message = pantheon_neuron.override_disagreement(
+        2931.7326, 589.5893, "the completion counter")
+    assert message is not None
+    assert "factor of 5" in message
+
+    # And from the counts rather than the rates, which is the cleaner
+    # comparison because the monitor's span outruns the kernel's window.
+    assert pantheon_neuron.override_disagreement(
+        60000, 14737, "the completion counter") is not None

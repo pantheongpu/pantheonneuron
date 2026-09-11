@@ -118,3 +118,53 @@ def test_missing_binary_raises_rather_than_returning_zero():
         collectives._run(["--version"]) if not collectives.available() else (
             pytest.skip("nccom-test is installed here")
         )
+
+
+# -- a parse that drops rows silently biases the average ---------------------
+
+_MIXED = """\
+#      size    count   type   time   algbw   busbw
+       1024      256   fp32   12.1    1.23    2.46
+       2048      512   fp32   13.4       3       6
+       4096     1024   fp32   15.9    4.56    9.12
+"""
+
+
+def test_a_row_whose_bandwidth_is_an_integer_is_not_parsed():
+    """Documenting the gap rather than guessing at a format.
+
+    _ROW requires the trailing field to be `\\d+.\\d+`. This module cannot
+    be run on any part this account's quota can reach, so loosening the
+    pattern would be guessing -- but the mismatch itself is detectable
+    without guessing.
+    """
+    rows = collectives.parse_busbw(_MIXED)
+    assert [size for size, _ in rows] == [1024, 4096]
+
+
+def test_the_dropped_row_is_counted():
+    assert collectives.unparsed_rows(_MIXED) == 1
+
+
+def test_a_partial_parse_is_reported():
+    message = collectives.verify_sweep_was_fully_parsed(_MIXED)
+    assert message is not None
+    assert "parsed 2 of 3" in message
+
+
+def test_a_complete_parse_says_nothing():
+    """The control: the common case must stay quiet."""
+    clean = """\
+#      size    count   type   time   algbw   busbw
+       1024      256   fp32   12.1    1.23    2.46
+       2048      512   fp32   13.4    2.34    4.68
+"""
+    assert collectives.unparsed_rows(clean) == 0
+    assert collectives.verify_sweep_was_fully_parsed(clean) is None
+
+
+def test_a_header_only_output_is_not_a_dropped_row():
+    """Or every run would warn about its own column headings."""
+    header = "#      size    count   type   time   algbw   busbw\n"
+    assert collectives.unparsed_rows(header) == 0
+    assert collectives.verify_sweep_was_fully_parsed(header) is None

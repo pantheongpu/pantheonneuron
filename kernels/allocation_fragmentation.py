@@ -15,7 +15,45 @@ result is an allocation that fails while the accounting says there is room.
 No NKI here. This is the runtime's allocator, reached through ordinary
 device tensors, so nothing in this file depends on a compiled kernel.
 
-STATUS: UNTESTED ON HARDWARE.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
+
+**A prediction about this workload was falsified on 2026-09-10 and the
+result is recorded here rather than quietly dropped.**
+
+A sweep suggested the repeats would settle once the window was long
+enough: three repeats at 40,000 allocations gave cv 0.038 against 0.083 at
+10,000. Repinned to 40,000 on that basis. The orchestrated run at
+``--repeat 3`` then reported:
+
+    1694.09 to 2236.99 events/s, cv 0.14, monotonically rising
+
+The window did lengthen -- about 17 seconds against 4 -- and the scatter
+did not go with it. The rise is the tell: repeats share a process, and
+whatever the first one leaves behind makes the next one faster. The
+allocator caching freed device buffers would do that, and so would a
+compile the first repeat paid, and this run does not distinguish them.
+
+Why the sweep disagreed is itself informative. It ran 10,000 allocations
+before it ran 40,000, in the same process, so by the time the 40,000 case
+was measured whatever warms up had already warmed. **The sweep measured a
+warm allocator three times; the orchestrator measures a cold one once and
+a warm one twice.** A control that runs its conditions in order is not
+measuring them independently.
+
+So: the pin is better and the drift is unexplained. ``--repeat`` assumes
+repeats are independent samples and for this workload they are not, which
+the row says out loud rather than averaging away.
+
+The pinned 10,000 allocations bound the run at about four seconds
+whatever ``--duration`` says, and the kernel reports ``bounded_by`` so a
+reader is not left believing they chose the window. A sweep on
+2026-09-10 showed what that costs: cv over three repeats runs 0.083 at
+10,000 allocations (3.98s), 0.038 at 40,000 (16.7s), 0.025 at 120,000
+(54.4s). The rate itself falls across that sweep -- 2512.9, 2400.7,
+2295.3 events/s -- because a longer run works a more fragmented
+allocator, which is the thing being measured. **The Score is therefore
+not comparable across different allocation counts**, and the count
+travels with it in ``problem`` for that reason.
 """
 
 import time
@@ -83,6 +121,29 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     events = 0
     failure = None
 
+    # Warm every distinct size before the clock starts. Each is its own
+    # graph shape, so the first pass over the sequence compiles all of
+    # them, and without this the compile lands inside the measurement.
+    #
+    # Measured on trn1.2xlarge 2026-09-10: three repeats read 549, then
+    # 2,646, then 2,750 allocation-events/s -- monotonically rising, which
+    # is warm-up, not noise. The first repeat was paying for thirteen
+    # compiles and the later ones were hitting the cache.
+    #
+    # The same defect serving_mix had, and memory_read documents: a
+    # measurement that includes its own compile is measuring the compiler.
+    for size in sorted(set(sizes)):
+        try:
+            warm = torch.ones(max(size // 2, 1), dtype=torch.bfloat16,
+                              device=device)
+            xm.mark_step()
+            del warm
+        except RuntimeError:
+            # A size that cannot be allocated at all is the run's own
+            # business to discover and report; warming is best effort.
+            break
+    xm.wait_device_ops()
+
     started = time.perf_counter()
     deadline = started + duration
 
@@ -127,14 +188,58 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
+    # Which limit stopped the run. The pinned allocation count usually
+    # does, long before the clock: 10,000 allocations take under four
+    # seconds on trn1, so --duration 30 and --duration 60 both measure the
+    # same four seconds. That is the documented design -- a fast part
+    # should finish early rather than pad the clock -- but a row that
+    # reports a Score without saying the window was four seconds invites
+    # the reader to assume it was thirty.
+    bounded_by = "allocations" if events >= len(sizes) else "duration"
+
     return {
-        "events": events,
+        # Named to match the registry's declared formula,
+        # `allocation_events / elapsed_s`. It was "events", so the counter
+        # the formula divides did not exist in the result and the Score
+        # could not be recomputed from the report -- which is the whole
+        # point of publishing the counters beside it.
+        "allocation_events": events,
         "elapsed_s": elapsed,
         "allocation_events_per_s": events / elapsed if elapsed else 0.0,
         "retained_blocks": len(retained),
         "live_bytes": live_bytes,
         "score_method": "workload",
         "analytic_basis": "allocation events / wall time",
-        "warning": failure,
+        "warning": failure or verify_window_is_long_enough(
+            elapsed, duration, bounded_by),
         "requested": len(sizes),
+        "bounded_by": bounded_by,
+        "measured_window_s": round(elapsed, 3),
     }
+
+
+# Below this, a rate over the window is dominated by whatever happened to
+# happen in it. Measured on trn1.2xlarge 2026-09-10: the pinned problem
+# runs for about 3.8 seconds however long a duration is asked for, and its
+# repeats sit at a coefficient of variation around 0.15 -- the drift is
+# gone since the warm-up, and this is what is left.
+MIN_WINDOW_SECONDS = 5.0
+
+
+def verify_window_is_long_enough(elapsed: float, duration: int,
+                                 bounded_by: str) -> typing.Optional[str]:
+    """Say so when the run measured far less time than was asked for.
+
+    The allocation count bounds this workload, not the clock, so
+    ``--duration`` mostly does not do what a reader expects. Raising it
+    changes nothing; the way to a steadier number here is ``--repeat``, or
+    a larger pinned count.
+    """
+    if bounded_by != "allocations" or elapsed >= MIN_WINDOW_SECONDS:
+        return None
+    return (
+        f"measured {elapsed:.1f}s of a requested {duration}s: the pinned "
+        "allocation count bounds this run, not the clock, so --duration "
+        "does not lengthen it. A window this short is why the repeats "
+        "scatter; use --repeat, or pin more allocations"
+    )

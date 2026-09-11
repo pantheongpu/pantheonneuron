@@ -125,16 +125,62 @@ def test_aggregated_telemetry_is_clean(mock_env):
         assert key not in blob, f"aggregated telemetry leaked '{key}'"
 
 
+def _named(name):
+    from kernels import registry
+    return next(w for w in registry.WORKLOADS if w.name == name)
+
+
+def _report_is_clean(report, label):
+    tokens = {token.lower() for token in _flatten(report)}
+    for key in FORBIDDEN_KEYS:
+        assert key not in tokens, f"{label} leaked '{key}'"
+
+
+def test_a_freshly_written_report_is_clean(mock_env, tmp_path, monkeypatch):
+    """The check that actually runs in CI.
+
+    Its predecessor parametrised over ``database/*.json`` -- and
+    ``database/`` is in .gitignore, so a fresh checkout has none and
+    pytest reported "got empty parameter set" and skipped. **The privacy
+    guard has been vacuous in CI since it was written**, in the one job
+    that was deliberately split out of the matrix so a single green check
+    could not hide it.
+
+    It was found by deleting some local reports and noticing the skip
+    count go up by one.
+
+    So this generates a report instead of hoping to find one. A run whose
+    reports are written by the code under test is the only version of
+    this check that can fail on a machine that has never run a workload.
+    """
+    monkeypatch.setattr(pantheon_neuron, "DATABASE_DIR", str(tmp_path))
+    devices = [neuron_device.NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
+    rows = [pantheon_neuron.run_workload(
+        _named("memory_read"), devices, 0.02, 0.01)]
+    snapshot = pantheon_neuron.get_system_snapshot(devices)
+    path = pantheon_neuron.write_report(snapshot, rows, "privacy-check")
+
+    written = sorted(tmp_path.glob("*.json"))
+    assert written, "the run wrote no report, so nothing was checked"
+
+    with open(path, encoding="utf-8") as handle:
+        _report_is_clean(json.load(handle), os.path.basename(path))
+
+
 @pytest.mark.parametrize(
     "path", sorted(glob.glob(os.path.join(REPO_ROOT, "database", "*.json")))
 )
-def test_committed_reports_are_clean(path):
-    """Any report present in the tree must already be publishable."""
+def test_any_local_report_is_also_clean(path):
+    """Kept for the developer case: reports from real runs sit in
+    database/ on a machine that has run the suite, and those are the ones
+    most likely to carry a host identifier.
+
+    This one legitimately has nothing to do on a fresh checkout. The test
+    above is what covers CI, so an empty parameter set here is no longer
+    a silent gap.
+    """
     with open(path, encoding="utf-8") as handle:
-        report = json.load(handle)
-    tokens = {token.lower() for token in _flatten(report)}
-    for key in FORBIDDEN_KEYS:
-        assert key not in tokens, f"{os.path.basename(path)} leaked '{key}'"
+        _report_is_clean(json.load(handle), os.path.basename(path))
 
 
 # --- committed probe data ---------------------------------------------------
@@ -231,3 +277,45 @@ def test_provenance_is_absent_rather_than_empty():
                     if w.name == "baseline_metrics")
     pantheon_neuron._LAST_RUN.pop(workload.name, None)
     assert pantheon_neuron._provenance(workload) is None
+
+
+def test_the_provenance_whitelist_has_no_duplicates():
+    """It listed implied_tflops twice.
+
+    Harmless -- it is used as a membership test -- and still worth a
+    check: a whitelist nobody reads is a whitelist that drifts, and the
+    duplicate was the visible symptom of nobody reading it.
+    """
+    keys = pantheon_neuron._PROVENANCE_KEYS
+    duplicates = sorted({k for k in keys if list(keys).count(k) > 1})
+    assert not duplicates, duplicates
+
+
+def test_every_whitelisted_key_is_something_a_kernel_reports():
+    """A key no kernel produces is dead whitelist entry, and the list is
+    the only thing standing between a report and a leaked path.
+
+    Read through the comment filter so a key mentioned only in prose does
+    not count -- the same way two dead verify_ functions hid behind
+    docstrings that credited them.
+    """
+    import sourcecheck
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ""
+    for name in sorted(os.listdir(os.path.join(root, "kernels"))):
+        if name.endswith(".py"):
+            with open(os.path.join(root, "kernels", name),
+                      encoding="utf-8") as handle:
+                code += sourcecheck.code_only(handle.read())
+    with open(os.path.join(root, "pantheon_neuron.py"),
+              encoding="utf-8") as handle:
+        orchestrator = sourcecheck.code_only(handle.read())
+
+    assert code, "no kernel source read -- the sweep is broken"
+
+    orphans = [key for key in pantheon_neuron._PROVENANCE_KEYS
+               if f'"{key}"' not in code
+               and f'"{key}"' not in orchestrator.replace(
+                   "_PROVENANCE_KEYS", "")]
+    assert not orphans, orphans

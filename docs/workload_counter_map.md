@@ -119,8 +119,8 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `speculative_decode` | draft_len=4, hidden=4096, layers=32, dtype=bf16 |
 | `moe_router` | experts=8, top_k=2, hidden=4096, tokens=4096 |
 | `transformer_train_step` | hidden=4096, layers=4, batch=1, seq=2048, dtype=bf16 |
-| `allocation_fragmentation` | allocations=10000, size_min=4096, size_max=16777216 |
-| `graph_replay` | hidden=2048, replays=10000, dtype=bf16 |
+| `allocation_fragmentation` | allocations=40000, size_min=4096, size_max=16777216 |
+| `graph_replay` | hidden=2048, replays=60000, dtype=bf16 |
 | `rag_embedding` | dim=1024, batch=64, seq=128, layers=12, dtype=bf16 |
 | `vision_encoder` | resolution=224, patch=14, batch=64, layers=12, dtype=bf16 |
 

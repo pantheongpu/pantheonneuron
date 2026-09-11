@@ -23,12 +23,14 @@ which engine is its decision, and the per-engine counters in the report are
 what actually happened rather than what this file intended. The comments
 name the intended engine so a divergence is visible rather than assumed.
 
-STATUS: UNTESTED ON HARDWARE. The per-engine counters exist on inf2 (108
-counters) but the trn1 set is smaller (90) and omits at least one throttle
-counter, so a missing engine reading is expected on Trainium rather than a
-fault.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10
+(53.7 TFLOPS via neuron-monitor). The per-engine counters exist on inf2
+(108 counters) but the trn1 set is smaller (90) and omits at least one
+throttle counter, so a missing engine reading is expected on Trainium
+rather than a fault.
 """
 
+import math
 import os
 import time
 import typing
@@ -74,7 +76,24 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     tile = min(m, int(os.environ.get("PANTHEON_NEURON_OMNI_TILE", m)))
 
     device = xm.xla_device()
-    lhs = torch.ones((tile, tile), dtype=dtype, device=device)
+    # lhs scaled by 1/tile so the first matmul lands on 1.0.
+    #
+    # Both were ones, which made the matmul produce `tile` -- 8192 at the
+    # pinned shape -- and tanh() saturates to exactly 1.0 for any input
+    # above about nine. So the vector stage's `* 1.0001 + 0.5` changed the
+    # chain's output by **zero**: removing that line entirely would have
+    # produced bit-identical results.
+    #
+    # The workload's premise is a dependent chain across all four engines,
+    # and one of the four links was value-invisible. It still cost time,
+    # so the throughput was never wrong; nothing could tell whether it ran.
+    #
+    # Scaled, the matmul gives 1.0, the vector stage gives 1.5001, and
+    # tanh gives 0.9052 against the 0.7616 it would give without the
+    # vector stage -- a 19% difference the output carries.
+    #
+    # Same shapes, same graph, same FLOP count.
+    lhs = torch.full((tile, tile), 1.0 / tile, dtype=dtype, device=device)
     rhs = torch.ones((tile, tile), dtype=dtype, device=device)
     xm.mark_step()
 
@@ -126,9 +145,32 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "analytic_unit": "TFLOPS",
         "score_method": "analytic",
         "analytic_basis": "matmul FLOPs issued / wall time, chain stages excluded",
-        **_shape_warning(tile, m, n, k, transformer_ops.output_check(
-            transformer_ops.read_back(sink), "chain output")),
+        # The whole chain is determined: matmul gives 1.0, the vector
+        # stage 1.5001, tanh 0.905166, the cumsum along `tile` elements
+        # 0.905166 * j, and the closing matmul sums those to
+        # 0.905166 * tile * (tile + 1) / 2. Simulating the bf16 cast of the
+        # cumsum puts the answer within 0.001% of that, so the tolerance
+        # is about correctness rather than rounding.
+        "expected_output": _chain_output(tile),
+        **_shape_warning(tile, m, n, k, transformer_ops.equals_check(
+            transformer_ops.read_back(sink), _chain_output(tile),
+            "chain output")),
     }
+
+
+def _chain_output(tile: int) -> float:
+    """What the four-engine chain must produce, from the pinned shape.
+
+    matmul(1/tile, ones) = 1.0, then `* 1.0001 + 0.5` = 1.5001, then
+    tanh = 0.905166, then a cumsum along the last axis giving
+    ``0.905166 * j`` for j in 1..tile, then a matmul against ones which
+    sums them: ``0.905166 * tile * (tile + 1) / 2``.
+
+    The cumsum runs in fp32 and is cast to bf16 once, and the closing
+    matmul accumulates in fp32, so the per-element rounding averages out
+    -- a simulated bf16 walk lands within 0.001% of this.
+    """
+    return math.tanh(1.0 * 1.0001 + 0.5) * tile * (tile + 1) / 2.0
 
 
 def _shape_warning(tile: int, m: int, n: int, k: int,
@@ -158,6 +200,13 @@ def engine_activity(metrics: typing.Mapping[str, typing.Any]) -> typing.Dict[str
     and trn1 exposes 90, so a missing engine here is a property of the part
     rather than a failed run -- and inventing a zero for it would read as an
     idle engine instead of an unreported one.
+
+    **The values are 0-1 fractions despite the ``_percent`` names.**
+    Measured on trn1.2xlarge 2026-09-10: a torch.matmul at 51.8 TFLOPS
+    reported ``tensor_engine_active_time_percent`` 0.451 and
+    ``mfu_max_achievable_estimated_percent`` exactly 1. Multiply by 100
+    before presenting any of them as a percentage. See
+    docs/neuron_counters.md.
     """
     found = {}
     for counter in ENGINE_COUNTERS:

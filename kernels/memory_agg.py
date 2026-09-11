@@ -25,9 +25,13 @@ from the analytic figure, which for this workload is honest -- each worker
 counts the bytes it moved, and the bytes are real whether or not a profiler
 watched them.
 
-STATUS: UNTESTED ON HARDWARE. The multi-process launch is the untested part;
-the kernel each worker runs is memory_read's or memory_write's, both
-verified on inf2.xlarge 2026-09-07.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10:
+543.2 GB/s read and 505.8 GB/s write aggregated across cores.
+
+The concurrency guard is doing real work at short durations. On the
+2026-09-10 ten-second pass the workers overlapped for only 1.9s of the
+10s span -- 19% -- and the row says so rather than reporting a summed
+bandwidth that was never a measurement of cores contending.
 """
 
 import json
@@ -166,6 +170,20 @@ def concurrent_window(results: typing.Sequence[dict]) -> typing.Optional[float]:
     return max(0.0, earliest_finish - latest_start)
 
 
+def _no_overlap_at_all(results: typing.Sequence[dict],
+                       span: float) -> bool:
+    """Whether the workers shared no window at all.
+
+    Deliberately narrower than ``verify_workers_overlapped``: unknown is
+    not zero, and a short overlap is not none. Only a measured zero
+    invalidates the Score.
+    """
+    if len(results) < 2 or span <= 0:
+        return False
+    overlap = concurrent_window(results)
+    return overlap is not None and overlap <= 0
+
+
 def verify_workers_overlapped(results: typing.Sequence[dict], span: float,
                               floor: float = 0.5) -> typing.Optional[str]:
     """Flag an "aggregate" whose workers were not running together.
@@ -237,12 +255,42 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
             "not an aggregate over the whole part"
         )
     else:
-        warning = (verify_workers_overlapped(results, span)
+        # Coverage first: a worker that did not move its planned bytes
+        # makes the aggregate wrong in a way an overlap or an unevenness
+        # finding would only distract from.
+        warning = (verify_cores_read_what_they_planned(per_core)
+                   or verify_workers_overlapped(results, span)
                    or verify_cores_scaled(per_core))
 
     return {
         "cores": core_count,
         "cores_reporting": len(results),
+        # Zero overlap is not a weak aggregate, it is not an aggregate.
+        # The summed bandwidth of workers that never ran together is the
+        # sum of independent single-core runs, which is a real number for
+        # a different question -- and the workload's whole question is
+        # whether the cores contend for a shared path to memory.
+        #
+        # llm_prefill, llm_decode and speculative_decode were published as
+        # PASS with Scores while every one of them had produced a NaN: the
+        # check fired, the message reached the row's Detail, and nothing
+        # acted on it. This is that shape exactly, so it acts.
+        #
+        # Partial overlap stays a warning. A 19% overlap still measures
+        # something; it just is not what the name says, and the row saying
+        # so is the honest response. Only "no overlapping window" makes the
+        # number mean nothing at all.
+        #
+        # A missing worker is the same case, and the check above could not
+        # see it: _no_overlap_at_all needs two results to compare, so when
+        # every worker died it returned False. On trn1.2xlarge 2026-09-10
+        # both workers of memory_read_agg and memory_write_agg exited -6
+        # and both rows published PASS with a Score of 0.0 GB/s -- the
+        # failures in the Detail, and nothing acting on them. One survivor
+        # of two is not an aggregate either: its bandwidth under this name
+        # would read as the whole part's.
+        "score_invalid": (bool(failures) or len(results) < core_count
+                          or _no_overlap_at_all(results, span)),
         "bytes_moved": total_bytes,
         "elapsed_s": elapsed,
         "worker_span_s": span,
@@ -257,6 +305,45 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         "analytic_basis": "summed bytes / longest worker span",
         "warning": warning,
     }
+
+
+def verify_cores_read_what_they_planned(
+    per_core: typing.Sequence[typing.Mapping],
+    floor: float = 0.99,
+) -> typing.Optional[str]:
+    """Flag a worker that moved less than the plan it was billed for.
+
+    Each worker's own kernel checks its coverage -- memory_read's
+    ``read_verified_ratio`` and memory_write's ``write_verified_ratio``
+    -- and the aggregate collects both into ``per_core``. It then
+    compared *rates* between cores and never looked at the ratios.
+
+    That leaves a specific hole. ``total_bytes`` sums each worker's
+    ``bytes_requested``, which is what the plan asked for rather than
+    what the kernel confirmed it touched, so a worker that covered half
+    its plan contributes its whole plan to the numerator. The aggregate
+    is then overstated by exactly the shortfall, the per-core rates stay
+    even -- so ``verify_cores_scaled`` says nothing -- and the row
+    carries the evidence in a field nothing reads.
+
+    A ratio of None means the worker did not report one, which is not
+    the same as reporting a bad one and is not accused here.
+    """
+    short = [
+        (core.get("core"), core["verified_ratio"])
+        for core in per_core
+        if isinstance(core.get("verified_ratio"), (int, float))
+        and core["verified_ratio"] < floor
+    ]
+    if not short:
+        return None
+    detail = ", ".join(f"core {core} covered {ratio:.3g}"
+                       for core, ratio in short)
+    return (
+        f"{detail} of its planned bytes -- the aggregate sums bytes "
+        "requested rather than bytes confirmed, so it is overstated by "
+        "the shortfall"
+    )
 
 
 def verify_cores_scaled(per_core: typing.Sequence[typing.Mapping],

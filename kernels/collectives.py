@@ -65,6 +65,11 @@ _ROW = re.compile(
 )
 
 
+# A line that starts with a size and has at least one more field. Every
+# real data row looks like this; only some of them also end in a float.
+_DATA_LINE = re.compile(r"^\s*\d+\s+\S", re.MULTILINE)
+
+
 def parse_busbw(output: str) -> typing.List[typing.Tuple[int, float]]:
     """Extract (bytes, busbw GB/s) rows from nccom-test output.
 
@@ -78,6 +83,36 @@ def parse_busbw(output: str) -> typing.List[typing.Tuple[int, float]]:
         if size > 0 and busbw > 0:
             rows.append((size, busbw))
     return rows
+
+
+def unparsed_rows(output: str) -> int:
+    r"""Data-shaped lines the bandwidth pattern did not match.
+
+    ``_ROW`` requires the trailing field to be ``\d+\.\d+``. A version of
+    nccom-test that prints an integer bus bandwidth on some rows -- or
+    puts a different column last -- drops those rows silently, and the
+    average is then over a biased subset of the sweep with nothing saying
+    so.
+
+    This module cannot be run on any part this account can reach, so the
+    regex is deliberately not loosened to guess at a format nobody here
+    has seen. What can be done without guessing is to notice the mismatch:
+    a caller that parsed 3 of 9 data lines is not looking at a sweep.
+    """
+    return max(0, len(_DATA_LINE.findall(output)) - len(parse_busbw(output)))
+
+
+def verify_sweep_was_fully_parsed(output: str) -> typing.Optional[str]:
+    """Flag a sweep where the parse dropped rows."""
+    dropped = unparsed_rows(output)
+    if not dropped:
+        return None
+    parsed = len(parse_busbw(output))
+    return (
+        f"parsed {parsed} of {parsed + dropped} data rows -- the bandwidth "
+        "pattern did not match the rest, so this average is over part of "
+        "the sweep"
+    )
 
 
 def _run(args: typing.Sequence[str]) -> str:
@@ -131,7 +166,9 @@ def run_all_reduce(problem: typing.Mapping[str, typing.Any],
         "ranks": ranks,
         "score_method": "nccom-test",
         "analytic_basis": "nccom-test all_reduce busbw, averaged over the sweep",
-        "warning": verify_sweep_covers_both_regimes(rows, bytes_min, bytes_max),
+        "warning": (verify_sweep_was_fully_parsed(output)
+                    or verify_sweep_covers_both_regimes(
+                        rows, bytes_min, bytes_max)),
     }
 
 

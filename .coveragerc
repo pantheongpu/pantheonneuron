@@ -1,0 +1,36 @@
+# Coverage configuration.
+#
+# The total sits near 79%, and the shape of that number matters more than
+# the number. Measured 2026-09-10:
+#
+#     harness (pantheon_neuron, neuron_monitor, registry, tiling,
+#              profiler, neuron_device)          90-100%
+#     kernel run() bodies                          14-30%
+#
+# The kernels are low because their bodies import neuronxcc and torch_xla
+# and cannot execute without a Neuron device. Everything in them that
+# *can* be tested off hardware -- tile arithmetic, plan derivation, the
+# verify_* functions, the derived expected values -- already is, and those
+# are the parts where the defects have been.
+#
+# So: do not raise this number by writing tests that assert a kernel body
+# raises BackendUnavailable. That is coverage of the import guard, not of
+# the kernel, and it would move the figure without moving the evidence.
+# The kernels are verified by running them on a trn1.2xlarge; see
+# data/hardware_runs.json.
+
+[run]
+branch = True
+omit =
+    */__pycache__/*
+    .venv/*
+
+[report]
+exclude_also =
+    # Hardware-only paths. These raise before doing anything on a machine
+    # with no Neuron toolchain, so they are unreachable in CI by design.
+    if typing.TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == .__main__.:
+show_missing = True
+skip_covered = True
