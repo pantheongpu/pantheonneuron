@@ -114,7 +114,7 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | `graph_replay` | ✅ per-period completion tallies, cv 0.006 | 3,038.8 graph-steps/s | `neuron-monitor` |
 | `allocation_fragmentation` | ✅ | 2,265.7 events/s | workload |
 | `llm_prefill` | ✅ pre-normalised, no NaN | 3,810.1 prompt-tokens/s | workload |
-| `llm_decode` | ✅ | 20.63 tokens/s | workload |
+| `llm_decode` | ✅ q, k, v and o per token since 2026-09-11 | 17.53 tokens/s | workload |
 | `kv_cache_churn` | ✅ memory-bound at last | 97,438 cache-updates/s | workload |
 | `fused_attention` | ✅ | 6,045.9 attention-tiles/s | workload |
 | `quantized_gemm` | ✅ | 18.44 TOPS | workload |
