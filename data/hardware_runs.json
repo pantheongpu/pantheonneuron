@@ -114,6 +114,46 @@
           ],
           "failed": [],
           "skipped": ["all_reduce", "p2p_thrasher"]
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/trn1-full-pass-deep-dive.log",
+          "note": "--test all --duration 30 with the deep-dive fixes: 24 PASS (baseline_metrics, which carries no Score, not listed), 0 FAIL. The profiler reservation is made after the aggregates, so memory_read (273.02 GB/s) and memory_write (274.41) report neuron-profile inside a full pass for the first time. neuron-monitor delivered the 1 s periods it was asked for: every monitor-scored row is a mean over 28-30 whole periods, where 5 s periods gave 5-7.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher"
+          ]
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/trn1-full-pass-final.log",
+          "note": "--test all --duration 30 at c1f4b31, every deep-dive fix: 24 PASS (baseline_metrics not listed), 0 FAIL. memory_read (273.07 GB/s) and memory_write (274.03) by neuron-profile from per-kernel compile directories that earlier runs had already used, found at candidate 2 of 3 and 3 of 4. pulse_virus sampled over whole 2 s cycles: 40.68 TFLOPS from the monitor against 40.68 from the kernel's own FLOPs. Targeted checks for each fix: trn1-pulse-sampling.log, trn1-compile-cache.log, trn1-repeat-and-order.log.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher"
+          ]
         }
       ]
     },
@@ -137,12 +177,31 @@
           "passed": ["memory_read", "memory_write", "pcie_bandwidth"],
           "failed": [],
           "skipped": []
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/inf2-full-pass.log",
+          "note": "First full pass on inf2.xlarge: --test all --duration 30 on c5cf396, 23 PASS (baseline_metrics, which carries no Score, not listed), 0 FAIL, 3 SKIPPED (the two collectives need 2 devices; transformer_train_step needs training). memory_read and memory_write are analytic here -- this code still turned the profiler reservation off for any selection with an aggregate. The same instance then ran the collectives module's fixed nccom-test invocation on its one device: data/validation-2026-09-11/inf2-nccom-invocation.log (core-to-core, not NeuronLink; the workloads themselves still skip).",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher", "transformer_train_step"
+          ]
         }
       ]
     }
   },
   "never_run_anywhere": {
-    "all_reduce": "Needs 2+ devices for NeuronLink. Skipped on every single-device part probed. Trn quota is 64 vCPU and trn1.32xlarge needs 128, so no multi-device part has been reached.",
-    "p2p_thrasher": "Same: needs 2+ devices for a NeuronLink peer, and the same 64 vCPU Trn quota blocks every multi-device part."
+    "all_reduce": "Needs 2+ devices for NeuronLink. Skipped on every single-device part probed. Trn quota is 64 vCPU and trn1.32xlarge needs 128, so no multi-device part has been reached. The module's nccom-test invocation has run (inf2.xlarge 2026-09-11, one device, core-to-core): data/validation-2026-09-11/inf2-nccom-invocation.log. That is not a run of this workload.",
+    "p2p_thrasher": "Same: needs 2+ devices for a NeuronLink peer, and the same 64 vCPU Trn quota blocks every multi-device part. The sendrecv invocation ran in the same one-device check; still not a run of this workload."
   }
 }

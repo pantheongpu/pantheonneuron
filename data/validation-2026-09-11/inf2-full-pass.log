@@ -1,0 +1,97 @@
+Full pass, inf2.xlarge 2026-09-11, code c5cf396 (before the deep-dive fixes): --test all --duration 30
+memory_read / memory_write are analytic here: the reservation was still decided once for the run and turned off by the aggregates.
+
+    [PANTHEON-NEURON] 1 device(s) [inf2], 26 workload(s)
+    [PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+    [PANTHEON-NEURON] -> baseline_metrics
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.41% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.3% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    59.43% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> int_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> pulse_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    59.72% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> transformer_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    46.69% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> omni_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    45.18% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 3 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-11 19:43:34.499622  3514:3517  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Re
+    [PANTHEON-NEURON]    61.61% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 7 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-11 19:44:11.011267  3627:3627  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Re
+    [PANTHEON-NEURON]    62.24% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> all_reduce
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> p2p_thrasher
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> pcie_bandwidth
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> llm_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> llm_prefill
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> kv_cache_churn
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> fused_attention
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> quantized_gemm
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> serving_mix
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> speculative_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> moe_router
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> transformer_train_step
+    [PANTHEON-NEURON]    SKIPPED (device 0 (inf2) lacks: training)
+    [PANTHEON-NEURON] -> allocation_fragmentation
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> graph_replay
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> rag_embedding
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> vision_encoder
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_191210.json
+    
+
+Rows from the report:
+
+    workload                 status          score unit                   method          detail
+    baseline_metrics         PASS                                                         
+    memory_read_agg          PASS         540.6846 GB/s                   workload        
+    memory_write_agg         PASS         548.5379 GB/s                   workload        
+    tensor_virus             PASS          56.4603 TFLOPS                 neuron-monitor  
+    int_virus                PASS          56.9554 TOPS                   neuron-monitor  
+    pulse_virus              PASS          28.3674 TFLOPS                 neuron-monitor  
+    transformer_virus        PASS           44.355 TFLOPS                 neuron-monitor  
+    omni_virus               PASS          42.9212 TFLOPS                 neuron-monitor  
+    memory_read              PASS         271.2583 GB/s                   analytic (bytes moved / wall time); declared source is neuron-profile hbm_read_bytes profiler unavailable, Score is analytic: none of 3 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile 
+    memory_write             PASS         274.0026 GB/s                   analytic (bytes moved / wall time); declared source is neuron-profile hbm_write_bytes profiler unavailable, Score is analytic: none of 7 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile 
+    all_reduce               SKIPPED               GB/s                                   needs 2 devices, 1 selected
+    p2p_thrasher             SKIPPED               GB/s                                   needs 2 devices, 1 selected
+    pcie_bandwidth           PASS           2.1412 GB/s                   workload        
+    llm_decode               PASS          17.4489 tokens/s               workload        
+    llm_prefill              PASS        3193.5884 prompt-tokens/s        workload        
+    kv_cache_churn           PASS       95823.4378 cache-updates/s        workload        
+    fused_attention          PASS        5935.7524 attention-tiles/s      workload        
+    quantized_gemm           PASS     14959214758233.826 quantized-ops/s        workload        
+    serving_mix              PASS            2.223 requests/s             workload        
+    speculative_decode       PASS           73.557 verified-tokens/s      workload        
+    moe_router               PASS      242924.6799 routed-tokens/s        workload        
+    transformer_train_step   SKIPPED               train-steps/s                          device 0 (inf2) lacks: training
+    allocation_fragmentation PASS        1668.2133 allocation-events/s    workload        
+    graph_replay             PASS        2248.8045 graph-steps/s          neuron-monitor  
+    rag_embedding            PASS          766.142 embedding-vectors/s    workload        
+    vision_encoder           PASS       54516.2854 image-tiles/s          workload        

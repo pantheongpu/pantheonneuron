@@ -1,0 +1,53 @@
+Post-fix checks a --repeat 1 full pass does not reach -- trn1.2xlarge 2026-09-11,
+tree at c3fcc25 plus the uncommitted pulse-sampling change.
+
+1. --test interconnect: the two collectives (cores:"all") run first and skip on one
+   device, then the reservation lands before pcie_bandwidth.
+2. --test memory_read --repeat 3: one Detail sentence for three repeats (the merge
+   stated a warning every repeat raised once). The Detail itself is the next bug:
+   the profiler searched 16 candidate NEFFs, newest first, and never reached the
+   kernel's graph -- the compile directory had collected every later workload's
+   graphs (see trn1-compile-cache.log). The copy check fired on real hardware
+   here: a graph covering 0.778 of the plan while moving 0.152x it the other way
+   was refused.
+3. --test tensor_virus --repeat 3: median row, cv 0.027.
+
+    === --test interconnect --duration 10
+    [PANTHEON-NEURON] 1 device(s) [trn1], 3 workload(s)
+    [PANTHEON-NEURON] -> all_reduce
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> p2p_thrasher
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> pcie_bandwidth
+    [PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.1 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_203624.json
+      all_reduce: SKIPPED Score=None method=None repeats=None dur=0.0 period=None
+        Detail: needs 2 devices, 1 selected
+      p2p_thrasher: SKIPPED Score=None method=None repeats=None dur=0.0 period=None
+        Detail: needs 2 devices, 1 selected
+      pcie_bandwidth: PASS Score=3.4612 method=workload repeats=None dur=16.99 period=1.0
+        Detail: d2h ran at 1.1 GB/s against 6.1 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link
+        Measurement: {}
+    === --test memory_read --duration 10 --repeat 3
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: covered 2.328e-10 of the plan; model.neff: covered 0.7782 of the plan but moved 0.152x it the other way -- a copy, not this kernel; model.neff: covered 0
+    [PANTHEON-NEURON]    61.72% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON]    3 repeats: 271.6312 to 271.7421, median 271.7197, cv 0.0002
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_203647.json
+      memory_read: PASS Score=271.7197 method=analytic (bytes moved / wall time); decl repeats={'attempted': 3, 'scored': 3, 'min': 271.6312, 'max': 271.7421, 'median': 271.7197, 'stdev': 0.0586, 'cv': 0.0002, 'trend': None} dur=377.81 period=1.0
+        Detail: profiler unavailable, Score is analytic: none of 16 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: covered 2.328e-10 of the plan; model.neff: covered 0.7782 of the plan but moved 0.152x it the other way -- a copy, not this kernel; model.neff: covered 0.002243 of the plan; model.neff: covered 2.328e-10 of the plan (raise PANTHEON_NEURON_NEFF_CANDIDATES to search further)
+        Measurement: {}
+    === --test tensor_virus --duration 8 --repeat 3
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    81.4% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON]    3 repeats: 74.5308 to 78.6086, median 77.3327, cv 0.0272
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_205552.json
+      tensor_virus: PASS Score=77.3327 method=neuron-monitor repeats={'attempted': 3, 'scored': 3, 'min': 74.5308, 'max': 78.6086, 'median': 77.3327, 'stdev': 2.0859, 'cv': 0.0272, 'trend': 'rising'} dur=8.54 period=1.0
+        Detail: 
+        Measurement: {}
