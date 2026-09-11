@@ -262,4 +262,20 @@ def select(devices, spec: str) -> typing.List[NeuronDevice]:
         raise NeuronUnavailable(
             f"Requested device(s) not present: {sorted(missing)}"
         )
+    # Only a leading run of devices is measured where it says it is. Nothing
+    # pins the runtime to the selection: the profiler split, the aggregates'
+    # per-core workers and the in-process runtime all number cores from 0,
+    # and cores 0..n-1 belong to the first devices. `--device 1` on a
+    # multi-device part would run on device 0's cores and report device 1.
+    # Every part this suite has run on has one device, so pinning a subset
+    # could not be tested on hardware; refusing it is what can be.
+    ordered = sorted(devices, key=lambda device: device.index)
+    if [d.index for d in chosen] != [d.index for d in ordered[:len(chosen)]]:
+        leading = ",".join(str(d.index) for d in ordered[:len(chosen)])
+        raise NeuronUnavailable(
+            f"--device {spec} is not the first {len(chosen)} device(s), and "
+            "cores are numbered from device 0, so the run would measure "
+            f"device(s) {leading} under the requested label. Select a "
+            "leading run of devices, or 'all'."
+        )
     return chosen

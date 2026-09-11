@@ -596,7 +596,7 @@ python pantheon_neuron.py --test interconnect --duration 120 --device 0,1
 ```
 
 Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
-workload), `--device` (indices or `all`), `--monitor-period` (telemetry
+workload), `--device` (`all`, or a leading run of indices such as `0,1`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
 ### The first clean run: 23 of 23, and eight fixes confirmed

@@ -65,7 +65,19 @@ def test_inferentia_does_not_claim_training_capability():
 def test_select_by_index():
     devices = [NeuronDevice(i, "trn1", "v2", 2, 1, True) for i in range(4)]
     assert [d.index for d in neuron_device.select(devices, "all")] == [0, 1, 2, 3]
-    assert [d.index for d in neuron_device.select(devices, "0,2")] == [0, 2]
+    assert [d.index for d in neuron_device.select(devices, "0,1")] == [0, 1]
+    assert [d.index for d in neuron_device.select(devices, "0")] == [0]
+
+
+def test_a_selection_that_is_not_a_leading_run_is_refused():
+    """Cores are numbered from device 0 and nothing pins the runtime to the
+    selection, so "0,2" would measure devices 0 and 1 under the label 0,2,
+    and "1" would measure device 0."""
+    devices = [NeuronDevice(i, "trn1", "v2", 2, 1, True) for i in range(4)]
+    for spec in ("0,2", "1", "2,3"):
+        with pytest.raises(neuron_device.NeuronUnavailable,
+                           match="not the first"):
+            neuron_device.select(devices, spec)
 
 
 def test_select_rejects_absent_device():

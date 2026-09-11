@@ -1684,7 +1684,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--duration", type=int, default=30, help="Seconds per workload (default: 30)"
     )
     parser.add_argument(
-        "--device", default="all", help="Comma-separated device indices or 'all'"
+        "--device", default="all", help="'all', or a leading run of device indices (0 or 0,1)"
     )
     parser.add_argument(
         "--monitor-period",
