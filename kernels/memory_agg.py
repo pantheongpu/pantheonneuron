@@ -53,13 +53,14 @@ _WORKER_TIMEOUT = 1800
 
 
 def worker_command(direction: str, core: int, problem: typing.Mapping,
-                   duration: int, result_path: str) -> typing.List[str]:
+                   duration: int, result_path: str,
+                   barrier: typing.Optional[str] = None) -> typing.List[str]:
     """The command one worker runs: this module, as a script, pinned to a core.
 
     Built as a function so a test can assert the pinning without launching
     anything -- the pin is the part that makes the aggregate meaningful.
     """
-    return [
+    command = [
         sys.executable, "-m", "kernels.memory_agg",
         "--direction", direction,
         "--core", str(core),
@@ -67,6 +68,63 @@ def worker_command(direction: str, core: int, problem: typing.Mapping,
         "--problem", json.dumps(dict(problem)),
         "--result", result_path,
     ]
+    if barrier is not None:
+        command += ["--barrier", barrier]
+    return command
+
+
+# The start barrier. Each worker compiles and warms up on its own schedule,
+# so their timed loops coincide only by luck -- and time a worker spends
+# alone is exactly the time in which contention for a shared memory path
+# cannot show. Measured by the loops' own brackets on trn1.2xlarge
+# 2026-09-11, 8 GiB reads for 30 s:
+#
+#     no barrier   loops 1.00 s apart, 97% overlap, 542.5 GB/s summed
+#     barrier      loops 0.01 s apart, 100% overlap, 542.3 GB/s summed
+#
+# The luck had been good (an estimate of "~11 s apart" read from 5-second
+# utilisation samples was wrong -- they cannot resolve a 1 s offset), and
+# the barrier makes it a guarantee. With the loops truly concurrent, each
+# core reads 271.0 and 271.4 GB/s against 271-273 alone: on this part the
+# two cores do not contend for HBM at these rates.
+_READY, _GO = "ready{core}", "go"
+_BARRIER_POLL_S = 0.01
+
+
+def await_release(barrier: str, core: int, timeout: float) -> bool:
+    """Worker side: say ready, then wait for the go file. False on timeout,
+    after which the worker runs anyway -- a stuck barrier must not turn into
+    a lost measurement, and the overlap check will say what happened."""
+    with open(os.path.join(barrier, _READY.format(core=core)), "w", encoding="utf-8"):
+        pass
+    deadline = time.monotonic() + timeout
+    go = os.path.join(barrier, _GO)
+    while time.monotonic() < deadline:
+        if os.path.exists(go):
+            return True
+        time.sleep(_BARRIER_POLL_S)
+    return False
+
+
+def release_when_ready(barrier: str, processes: typing.Sequence[typing.Any],
+                       timeout: float, poll: float = 0.05) -> bool:
+    """Parent side: write the go file once every worker is ready -- or once
+    any has exited, since a dead worker will never be ready and the others
+    must not wait on it. Returns whether all were ready."""
+    deadline = time.monotonic() + timeout
+    all_ready = False
+    while time.monotonic() < deadline:
+        ready = sum(os.path.exists(os.path.join(barrier, _READY.format(core=core)))
+                    for core in range(len(processes)))
+        if ready == len(processes):
+            all_ready = True
+            break
+        if any(process.poll() is not None for process in processes):
+            break
+        time.sleep(poll)
+    with open(os.path.join(barrier, _GO), "w", encoding="utf-8"):
+        pass
+    return all_ready
 
 
 def run(problem: typing.Mapping[str, typing.Any], duration: int,
@@ -81,6 +139,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
     results = []
     with tempfile.TemporaryDirectory(prefix="pantheon-agg-") as workdir:
         started = time.perf_counter()
+        barrier = os.path.join(workdir, "barrier")
+        os.makedirs(barrier)
+        logs = []
         for core in range(core_count):
             result_path = os.path.join(workdir, f"core{core}.json")
             environment = dict(os.environ)
@@ -93,24 +154,34 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
             environment["PANTHEON_NEURON_WORKDIR"] = os.path.join(
                 workdir, f"cc{core}"
             )
+            # To files, not pipes: the parent now waits on the barrier while
+            # the workers compile, and the compiler's output would fill a
+            # pipe nobody is draining and stall the worker before it could
+            # ever report ready.
+            log_path = os.path.join(workdir, f"core{core}.log")
+            log = open(log_path, "w", encoding="utf-8")  # closed after the workers finish
+            logs.append(log)
             workers.append((
                 core,
                 result_path,
                 subprocess.Popen(
                     worker_command(direction, core, problem, duration,
-                                   result_path),
+                                   result_path, barrier=barrier),
                     env=environment,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
                     text=True,
                     cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 ),
             ))
 
+        all_ready = release_when_ready(
+            barrier, [process for _, _, process in workers], _WORKER_TIMEOUT)
+
         failures = []
         for core, result_path, process in workers:
             try:
-                _, stderr = process.communicate(timeout=_WORKER_TIMEOUT)
+                process.communicate(timeout=_WORKER_TIMEOUT)
             except subprocess.TimeoutExpired:
                 process.kill()
                 # Reap after killing. kill() only sends the signal; without
@@ -126,7 +197,12 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
                 failures.append(f"core {core} timed out")
                 continue
             if process.returncode != 0:
-                tail = (stderr or "").strip().splitlines()
+                try:
+                    with open(os.path.join(workdir, f"core{core}.log"),
+                              encoding="utf-8", errors="replace") as handle:
+                        tail = handle.read().strip().splitlines()
+                except OSError:
+                    tail = []
                 failures.append(
                     f"core {core} exited {process.returncode}: "
                     f"{tail[-1] if tail else 'no stderr'}"
@@ -139,8 +215,34 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
                 failures.append(f"core {core} wrote no result: {error}")
 
         elapsed = time.perf_counter() - started
+        for log in logs:
+            log.close()
 
-    return summarise(results, failures, elapsed, core_count, direction)
+    summary = summarise(results, failures, elapsed, core_count, direction)
+    summary["barrier_all_ready"] = all_ready
+    return summary
+
+
+def loop_window(result: typing.Mapping[str, typing.Any]
+                ) -> typing.Optional[typing.Tuple[float, float]]:
+    """Wall-clock (start, end) of one worker's timed loop.
+
+    The kernel's own brackets when it reports them. Before 2026-09-11 the
+    loop was placed as the last ``elapsed_s`` before the worker's run()
+    returned -- but run() continues after the loop (a read-back, a profiler
+    attempt that fails in a one-core worker), for a time that differs per
+    worker, so two loops could be computed as coincident while running
+    offset. On trn1.2xlarge 2026-09-11 the placement said 99% where the
+    brackets said 97% -- small, as it happened, and unknowable until the
+    brackets existed. The fallback stays for results from before them.
+    """
+    started, finished = result.get("loop_started_at"), result.get("loop_finished_at")
+    if isinstance(started, (int, float)) and isinstance(finished, (int, float)):
+        return float(started), float(finished)
+    finished, loop = result.get("finished_at"), result.get("elapsed_s")
+    if isinstance(finished, (int, float)) and isinstance(loop, (int, float)):
+        return float(finished) - float(loop), float(finished)
+    return None
 
 
 def concurrent_window(results: typing.Sequence[dict]) -> typing.Optional[float]:
@@ -157,12 +259,10 @@ def concurrent_window(results: typing.Sequence[dict]) -> typing.Optional[float]:
     """
     windows = []
     for result in results:
-        finished = result.get("finished_at")
-        loop = result.get("elapsed_s")
-        if not isinstance(finished, (int, float)) or not isinstance(
-                loop, (int, float)):
+        window = loop_window(result)
+        if window is None:
             return None
-        windows.append((finished - loop, finished))
+        windows.append(window)
     if not windows:
         return None
     latest_start = max(start for start, _ in windows)
@@ -387,6 +487,7 @@ def _worker_main(argv: typing.Optional[typing.Sequence[str]] = None) -> int:
     parser.add_argument("--duration", type=int, required=True)
     parser.add_argument("--problem", required=True)
     parser.add_argument("--result", required=True)
+    parser.add_argument("--barrier", default=None)
     args = parser.parse_args(argv)
 
     problem = json.loads(args.problem)
@@ -395,8 +496,15 @@ def _worker_main(argv: typing.Optional[typing.Sequence[str]] = None) -> int:
     # Wall-clock, not monotonic: these have to be comparable across
     # processes, and the whole question is whether the workers were moving
     # bytes at the same time as each other.
+    released = {}
+
+    def before_loop():
+        released["ok"] = await_release(args.barrier, args.core, _WORKER_TIMEOUT)
+
     started_at = time.time()
-    result = module.run(problem, args.duration)
+    result = module.run(problem, args.duration,
+                        before_loop=before_loop if args.barrier else None)
+    result["barrier_released"] = released.get("ok")
     result["core"] = args.core
     # The kernel's own elapsed_s covers its timed loop; the window this
     # brackets also covers the compile, so the overlap is computed from the

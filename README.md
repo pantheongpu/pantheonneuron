@@ -104,8 +104,8 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
 | `memory_read` | ✅ scored from its declared source | 272.94 GB/s | `neuron-profile` |
 | `memory_write` | ✅ scored from its declared source, 4 GiB pin | 254.31 GB/s | `neuron-profile` |
-| `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
-| `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
+| `memory_read_agg` | ✅ loops start together (barrier), 100% overlap | 542.13 GB/s | workload |
+| `memory_write_agg` | ✅ loops start together (barrier), 100% overlap | 505.44 GB/s | workload |
 | `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 72.46 TFLOPS | `neuron-monitor` |
 | `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
 | `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 36.17 TFLOPS | `neuron-monitor` |

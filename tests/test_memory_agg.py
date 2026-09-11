@@ -353,3 +353,75 @@ def test_verify_cores_scaled_cannot_see_a_uniform_shortfall():
                       {"core": 1, "gbps": 250.0, "verified_ratio": 0.5}]
     assert memory_agg.verify_cores_scaled(even_but_short) is None
     assert memory_agg.verify_cores_read_what_they_planned(even_but_short)
+
+
+# -- the loops must coincide, and be placed where they ran -------------------
+
+def test_the_loop_is_placed_by_its_own_brackets_not_by_when_run_returned():
+    """run() goes on after the loop (read-back, a failed profiler attempt),
+    for a time that differs per worker, so finished_at - elapsed_s can
+    place offset loops as coincident. Synthetic offsets here; on
+    trn1.2xlarge 2026-09-11 the real pair was 97% by brackets, 99% by the
+    old placement -- the method was wrong, the error small that time."""
+    a = {"loop_started_at": 483.0, "loop_finished_at": 513.0,
+         "finished_at": 540.0, "elapsed_s": 30.0}
+    b = {"loop_started_at": 494.0, "loop_finished_at": 524.0,
+         "finished_at": 540.0, "elapsed_s": 30.0}
+    assert memory_agg.concurrent_window([a, b]) == 19.0
+    # What the old placement said about the same pair.
+    old = [{k: r[k] for k in ("finished_at", "elapsed_s")} for r in (a, b)]
+    assert memory_agg.concurrent_window(old) == 30.0
+
+
+def test_the_barrier_releases_once_every_worker_is_ready(tmp_path):
+    class Alive:
+        def poll(self):
+            return None
+    for core in range(2):
+        (tmp_path / f"ready{core}").touch()
+    assert memory_agg.release_when_ready(str(tmp_path), [Alive(), Alive()], timeout=1.0)
+    assert (tmp_path / "go").exists()
+
+
+def test_a_dead_worker_releases_the_others(tmp_path):
+    """It will never be ready, and the survivors must not wait on it."""
+    class Alive:
+        def poll(self):
+            return None
+
+    class Dead:
+        def poll(self):
+            return -6
+    (tmp_path / "ready0").touch()
+    assert memory_agg.release_when_ready(str(tmp_path), [Alive(), Dead()], timeout=1.0) is False
+    assert (tmp_path / "go").exists()
+
+
+def test_a_worker_reports_ready_and_waits_for_go(tmp_path):
+    (tmp_path / "go").touch()
+    assert memory_agg.await_release(str(tmp_path), 1, timeout=1.0) is True
+    assert (tmp_path / "ready1").exists()
+
+
+def test_a_stuck_barrier_times_out_rather_than_losing_the_run(tmp_path):
+    assert memory_agg.await_release(str(tmp_path), 0, timeout=0.05) is False
+
+
+def test_workers_are_launched_behind_the_barrier():
+    command = memory_agg.worker_command(
+        "read", 0, {"bytes": 1 << 30}, 30, "/tmp/out.json", barrier="/tmp/b")
+    assert command[command.index("--barrier") + 1] == "/tmp/b"
+    code = sourcecheck.flat_function_code(memory_agg.run)
+    assert code.index("release_when_ready") < code.index("process . communicate")
+    # Files, not pipes: nothing drains a pipe while the parent waits.
+    assert "subprocess . PIPE" not in code
+
+
+def test_both_kernels_bracket_their_loop_and_take_the_hook():
+    from kernels import memory_read, memory_write
+    for module in (memory_read, memory_write):
+        code = sourcecheck.flat_function_code(module.run)
+        hook = code.index("before_loop ( )")
+        assert hook < code.index("loop_started_at = time . time ( )") < code.index(
+            "started = time . perf_counter ( )"), module.__name__
+        assert '"loop_finished_at" : loop_finished_at' in code, module.__name__

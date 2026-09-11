@@ -1,0 +1,24 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. memory_*_agg: do the workers' timed loops coincide?
+# Two trees on one instance, identical except that pn_nobar has the start barrier disabled
+# (worker_command(..., barrier=None) and no release_when_ready). agg_overlap.py runs
+# memory_agg.run(8 GiB read, 30 s, 2 cores) and prints each worker's loop brackets
+# (loop_started_at / loop_finished_at, new in both kernels) relative to the earliest start.
+# PREDICTED (wrongly, from 5-second utilisation samples): loops ~11 s apart without the
+# barrier. Measured: 1.00 s. The barrier makes it 0.01 s.
+
+pn_nobar read: 542.5 GB/s, barrier_all_ready None, warning None
+   core 0: loop    1.00..  31.08s  run() returned   36.86s  271.0 GB/s  barrier_released None
+   core 1: loop    0.00..  30.09s  run() returned   36.64s  271.5 GB/s  barrier_released None
+   overlap by loop brackets 29.09s (97%); by the old placement 29.87s (99%)
+pn read: 542.3 GB/s, barrier_all_ready True, warning None
+   core 0: loop    0.01..  30.08s  run() returned   32.36s  271.0 GB/s  barrier_released True
+   core 1: loop    0.00..  30.06s  run() returned   32.20s  271.4 GB/s  barrier_released True
+   overlap by loop brackets 30.06s (100%); by the old placement 29.92s (99%)
+
+
+## Harness, barrier tree, --duration 30
+memory_write_agg: PASS Score 505.4387 | Detail ''
+   {k: m.get(k) for k in ('barrier_all_ready', 'concurrent_window_s', 'worker_span_s')} = {'barrier_all_ready': True, 'concurrent_window_s': 30.04409384727478, 'worker_span_s': 30.047171907999882}
+memory_read_agg: PASS Score 542.1313 | Detail ''
+   {k: m.get(k) for k in ('barrier_all_ready', 'concurrent_window_s', 'worker_span_s')} = {'barrier_all_ready': True, 'concurrent_window_s': 30.058977603912354, 'worker_span_s': 30.089179249999916}
+

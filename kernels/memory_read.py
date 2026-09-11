@@ -115,7 +115,8 @@ def _build_kernel():
     return nki, nl, memory_read_kernel
 
 
-def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
+def run(problem: typing.Mapping[str, typing.Any], duration: int,
+        before_loop: typing.Optional[typing.Callable[[], None]] = None) -> dict:
     """Execute the streaming read and return timing plus byte accounting.
 
     Returns the raw material for a Score; it does not compute the Score
@@ -194,6 +195,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # counted thousands of submissions; the device ran the graph once.
     sink = None
     passes = 0
+    # memory_agg's start barrier: every worker compiled and warmed up, then
+    # released together, so the aggregate's loops coincide.
+    if before_loop is not None:
+        before_loop()
+    # Wall-clock brackets of the timed loop itself, comparable across
+    # processes. The aggregate placed each loop by subtracting elapsed_s
+    # from when run() *returned* -- but run() goes on after the loop (read
+    # back, a profiler attempt), for a time that differs per worker.
+    loop_started_at = time.time()
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
@@ -202,6 +212,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    loop_finished_at = time.time()
 
     # One pass reduces an all-ones buffer along the free axis, so every
     # partition of the accumulator must equal tiles * FREE_ELEMENTS exactly.
@@ -225,6 +236,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     result = {
         "passes": passes,
         "elapsed_s": elapsed,
+        "loop_started_at": loop_started_at,
+        "loop_finished_at": loop_finished_at,
         "bytes_requested": bytes_requested,
         "analytic_gbps": analytic,
         "profiler_gbps": None,

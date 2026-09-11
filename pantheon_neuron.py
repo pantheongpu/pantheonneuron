@@ -1266,6 +1266,9 @@ _PROVENANCE_KEYS = (
     # trn1.2xlarge 2026-09-10 with every byte still read; only these said so.
     "consumer_engine_active",
     "dma_active",
+    # memory_*_agg: whether every worker reached the start barrier, so the
+    # timed loops began together.
+    "barrier_all_ready",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,
