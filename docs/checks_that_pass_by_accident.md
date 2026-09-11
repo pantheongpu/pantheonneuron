@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-two of them, and they are collected
+would go. This repo has now produced twenty-three of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -475,6 +475,27 @@ is undocumented, measure what it does at a boundary** (idle, stop,
 restart) before building on it. A second quantity catches a
 disagreement, but it cannot say which side is wrong.
 
+### 23. The tolerance was widened to fit a bias, and let a wrong graph through
+
+memory_read's profiler figure is checked against its wall-clock rate,
+and the check allowed 50%. It had to. The profiler divided by
+`total_time`, which includes a 2.08 ms startup the workload never pays,
+so the honest profile figure ran 6% low at 8 GiB and 35% low at 1 GiB.
+Any tighter and the check would have rejected the right graph.
+
+But the check also existed to reject the *wrong* graph. At 1 GiB on
+trn1.2xlarge 2026-09-10, a buffer-copy graph that read the same 1 GiB
+(and wrote it, with no vector work) was among the candidates. Over its
+active time it reads 0.66 of the wall clock, which is inside 50%. The
+kernel's own graph, once the startup is removed, reads within 0.5–2.3%
+of the wall clock at every size.
+
+The tolerance was sized to the bias, so every error smaller than the
+bias passed. Removing the bias let the check be tight (15%), and a tight
+check rejects the copy graph. **When a check needs a wide margin, find
+out what is using the margin.** A bias absorbed into a tolerance does
+not go away. It becomes the check's blind spot.
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -495,4 +516,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-two above were found by reading what a passing check had filtered out.
+twenty-three above were found by reading what a passing check had filtered out.

@@ -190,8 +190,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_read_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='hbm_read_bytes / total_time / 1e9')),
+                 formula='hbm_read_bytes / total_active_time / 1e9')),
     # 4 GiB, not the 8 GiB memory_read uses, and the asymmetry is measured.
     # A write's destination is the whole plan and the runtime still holds
     # the previous one while the next is allocated, so the pin costs twice
@@ -219,8 +220,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_write_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='hbm_write_bytes / total_time / 1e9')),
+                 formula='hbm_write_bytes / total_active_time / 1e9')),
     Workload("memory_read_agg", "memory",
              "Aggregate HBM read bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
@@ -230,8 +232,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_read_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='sum(hbm_read_bytes over cores) / total_time / 1e9')),
+                 formula='sum(hbm_read_bytes over cores) / total_active_time / 1e9')),
     # 4 GiB per core, for the same residency reason as memory_write: each
     # worker allocates its own destination on its own core, so the pin is
     # per-core and the arithmetic is identical.
@@ -244,8 +247,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_write_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='sum(hbm_write_bytes over cores) / total_time / 1e9')),
+                 formula='sum(hbm_write_bytes over cores) / total_active_time / 1e9')),
 
     # -- interconnect ------------------------------------------------------
     Workload("all_reduce", "interconnect",

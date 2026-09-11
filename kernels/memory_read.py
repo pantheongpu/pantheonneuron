@@ -15,7 +15,9 @@ kernel reads every byte the plan describes. Measured 264 GB/s on trn1 at
 1 GiB and 236.9 GB/s on inf2 at the pinned 8 GiB.
 
 Its declared Score source **now produces a number**: 256.0888 GB/s via
-neuron-profile on trn1.2xlarge 2026-09-10. For a long time it did not --
+neuron-profile on trn1.2xlarge 2026-09-10 -- and 272.94 (cv 0.0006) once
+the profile's 2.08 ms idle startup stopped counting as transfer time.
+See profiler.bandwidth_gbps. For a long time it did not --
 the profiler needs a NeuronCore to replay the NEFF and the workload held
 them all -- and the core reservation in kernels/cores.py is what closed it.
 
@@ -357,6 +359,12 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         "score_method": registry.PROFILER,
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        # The Score's denominator and what it excludes: the profiled
+        # execution's idle startup, 2.08 ms on trn1.2xlarge 2026-09-10,
+        # which the workload's back-to-back executions do not pay. See
+        # profiler.bandwidth_gbps.
+        "profiler_time_basis": profiler.execution_window(counters)[1],
+        "profiler_startup_s": _startup(counters),
         # Which side of the kernel set the rate: the loads (DMA) or the
         # reduction that consumes them (vector). See CONSUMER_BOUND.
         "consumer_engine_active": counters.get("vector_engine_active_time_percent"),
@@ -395,8 +403,29 @@ def verify_read_completed(
     return None
 
 
+# How far the profile figure may sit from the wall-clock one. It was 50%,
+# and had to be while the profile divided by total_time: its bias ran from
+# 6% at 8 GiB to 51% at 1 GiB (trn1.2xlarge 2026-09-10). Over
+# total_active_time the kernel's graph lands 0.5-2.3% above the wall clock
+# at every size, while a buffer-copy graph captured by mistake at 1 GiB
+# read 0.66 of it -- inside the old tolerance, so it would have been
+# published. When the two diverge the kernel's own coverage check decides
+# and the Score falls back to analytic, so tightening this can only cost a
+# declared Score, never publish a wrong one.
+ANALYTIC_TOLERANCE = 0.15
+
+
+def _startup(counters) -> typing.Optional[float]:
+    """Seconds of the profiled execution in which nothing was active."""
+    total, active = counters.get("total_time"), counters.get("total_active_time")
+    if isinstance(total, (int, float)) and isinstance(active, (int, float)):
+        return round(total - active, 9)
+    return None
+
+
 def verify_against_analytic(
-    profiler_gbps: float, analytic_gbps: float, tolerance: float = 0.5
+    profiler_gbps: float, analytic_gbps: float,
+    tolerance: float = ANALYTIC_TOLERANCE,
 ) -> typing.Optional[str]:
     """Compare the profiler Score against the analytic cross-check.
 

@@ -102,8 +102,8 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | Workload | Status | Measured | Score source |
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
-| `memory_read` | ✅ scored from its declared source | 256.17 GB/s | `neuron-profile` |
-| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.50 GB/s | `neuron-profile` |
+| `memory_read` | ✅ scored from its declared source | 272.94 GB/s | `neuron-profile` |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 254.31 GB/s | `neuron-profile` |
 | `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
 | `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
 | `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 72.46 TFLOPS | `neuron-monitor` |
@@ -285,6 +285,12 @@ history: 2 of 4, on both parts.**
 | `memory_write` | 226.50 GB/s | 226.77 GB/s | **`neuron-profile`** |
 | `allocation_fragmentation` | 544.42 | 492.93 | workload |
 | `pcie_bandwidth` | 3.56 GB/s | 2.12 GB/s | workload |
+
+*Correction, 2026-09-10 later:* both profiler figures above divided by
+`total_time`, which opens with a 2.08 ms idle startup that the workload's
+back-to-back executions don't pay. Over `total_active_time` the same
+kernels read **272.94** and **254.31** GB/s, within 0.4% and 1.1% of the
+wall clock. See `kernels/profiler.bandwidth_gbps`.
 
 `memory_read`'s 256.17 GB/s cross-checks against the 264 GB/s wall-clock
 figure measured on this part in August, which is what
@@ -863,10 +869,10 @@ how many chips an instance carries.
 
 | workload | Score | cores it had | of its share |
 |---|--:|--:|--:|
-| `memory_read_agg` | 541.5 GB/s | 2 of 2 | **61.5%** |
-| `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
+| `memory_read` | 272.9 GB/s | 1 of 2 | **62.0%** |
+| `memory_read_agg` | 541.5 GB/s | 2 of 2 | 61.5% |
+| `memory_write` | 254.3 GB/s | 1 of 2 | 57.8% |
 | `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
-| `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
 | `tensor_virus` | 72.46 TFLOPS | 1 of 2 | **76.3%** |
 | `pulse_virus` | 36.17 TFLOPS | 1 of 2, 50% duty | **76.2%** |
 | `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |

@@ -133,10 +133,10 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `pulse_virus` | `neuroncore_counters.*.effective_flops`<br>`throttle_active_nc0_time_ns` |
 | `transformer_virus` | `neuroncore_counters.*.effective_flops` |
 | `omni_virus` | `neuroncore_counters.*.effective_flops`<br>`tensor_engine_active_time_percent`<br>`vector_engine_active_time_percent`<br>`scalar_engine_active_time_percent`<br>`gpsimd_engine_active_time_percent` |
-| `memory_read` | `hbm_read_bytes`<br>`total_time` |
-| `memory_write` | `hbm_write_bytes`<br>`total_time` |
-| `memory_read_agg` | `hbm_read_bytes`<br>`total_time` |
-| `memory_write_agg` | `hbm_write_bytes`<br>`total_time` |
+| `memory_read` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_write` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_read_agg` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_write_agg` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
 | `all_reduce` | `busbw` |
 | `p2p_thrasher` | `busbw` |
 | `pcie_bandwidth` | `bytes_transferred`<br>`elapsed_s` |
