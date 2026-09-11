@@ -90,7 +90,8 @@ def _build_kernel(total_rows: int):
     return nki, nl, memory_write_kernel
 
 
-def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
+def run(problem: typing.Mapping[str, typing.Any], duration: int,
+        before_loop: typing.Optional[typing.Callable[[], None]] = None) -> dict:
     """Execute the streaming write and return timing plus byte accounting."""
     nki_backend.require_toolchain()
 
@@ -164,6 +165,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # the buffer from that point, so dropping our reference frees it for the
     # next pass rather than pruning the computation.
     passes = 0
+    # memory_agg's start barrier: every worker compiled and warmed up, then
+    # released together, so the aggregate's loops coincide.
+    if before_loop is not None:
+        before_loop()
+    # Wall-clock brackets of the timed loop itself, comparable across
+    # processes. The aggregate placed each loop by subtracting elapsed_s
+    # from when run() *returned* -- but run() goes on after the loop (read
+    # back, a profiler attempt), for a time that differs per worker.
+    loop_started_at = time.time()
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
@@ -175,6 +185,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    loop_finished_at = time.time()
 
     # One extra pass, kept, purely to read the destination back. It is
     # deliberately outside the timed region: it exists to prove the stores
@@ -205,6 +216,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     result = {
         "passes": passes,
         "elapsed_s": elapsed,
+        "loop_started_at": loop_started_at,
+        "loop_finished_at": loop_finished_at,
         "bytes_written": bytes_written,
         "analytic_gbps": analytic,
         "profiler_gbps": None,
