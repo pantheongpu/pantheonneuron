@@ -103,9 +103,9 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
 | `memory_read` | ✅ scored from its declared source | 272.94 GB/s | `neuron-profile` |
-| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 254.31 GB/s | `neuron-profile` |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin, 8192-wide stores | 274.53 GB/s | `neuron-profile` |
 | `memory_read_agg` | ✅ loops start together (barrier), 100% overlap | 542.13 GB/s | workload |
-| `memory_write_agg` | ✅ loops start together (barrier), 100% overlap | 505.44 GB/s | workload |
+| `memory_write_agg` | ✅ loops start together (barrier), 8192-wide stores | 537.46 GB/s | workload |
 | `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 72.46 TFLOPS | `neuron-monitor` |
 | `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
 | `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 36.17 TFLOPS | `neuron-monitor` |
@@ -880,8 +880,8 @@ how many chips an instance carries.
 |---|--:|--:|--:|
 | `memory_read` | 272.9 GB/s | 1 of 2 | **62.0%** |
 | `memory_read_agg` | 541.5 GB/s | 2 of 2 | 61.5% |
-| `memory_write` | 254.3 GB/s | 1 of 2 | 57.8% |
-| `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
+| `memory_write` | 274.5 GB/s | 1 of 2 | 62.4% |
+| `memory_write_agg` | 537.5 GB/s | 2 of 2 | 61.0% |
 | `tensor_virus` | 72.46 TFLOPS | 1 of 2 | **76.3%** |
 | `pulse_virus` | 36.17 TFLOPS | 1 of 2, 50% duty | **76.2%** |
 | `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |

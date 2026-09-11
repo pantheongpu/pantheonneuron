@@ -504,6 +504,13 @@ def bandwidth_gbps(counters: typing.Mapping[str, typing.Any],
     and 273.0, within 0.5-2.3% above the wall clock, as a rate without the
     loop's per-pass overhead should be.
 
+    **It is right for wide transfers, not universally.** A 512-wide store
+    kernel read 229.0 GB/s over active time against 69.4 by the wall clock
+    (trn1.2xlarge 2026-09-11): with 16,384 small stores per pass, the loop
+    pays ~21 ms per execution that the profile does not count as active.
+    The analytic cross-check is what catches that -- at 15% it would refuse
+    this profile and publish the wall-clock figure.
+
     total_active_time is the union of time any engine or DMA queue was
     busy, so it excludes only time in which nothing ran. A kernel stalled
     on its consumer is still active (the consumer is), which keeps the

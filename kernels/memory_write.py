@@ -49,6 +49,22 @@ FREE_ELEMENTS = tiling.FREE_ELEMENTS
 tile_plan = tiling.tile_plan
 
 
+# Stores are 8192 elements wide, where reads stay at tiling.FREE_ELEMENTS.
+# Swept on trn1.2xlarge 2026-09-11, 2 GiB destination, each width its own
+# process, every destination verified:
+#
+#     width    wall GB/s   over active time
+#      512       69.4          229.0
+#     2048      255.1          254.1      (this kernel until then)
+#     8192      272.6          274.4
+#
+# So the write figure was a kernel limit: at 2048 the stores ran 7% below
+# what the part does, and 8192 matches the read rate. Reads showed no such
+# effect (269.5 at 2048, 269.8 at 8192), so memory_read keeps its width and
+# its history.
+STORE_FREE_ELEMENTS = 8192
+
+
 def _build_kernel(total_rows: int):
     """Import NKI and construct the kernel.
 
@@ -97,7 +113,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
 
     import torch_xla.core.xla_model as xm  # type: ignore
 
-    plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]))
+    plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]),
+                     free=STORE_FREE_ELEMENTS)
     rows = plan["tiles"] * PARTITION
     _, _, kernel = _build_kernel(rows)
 
