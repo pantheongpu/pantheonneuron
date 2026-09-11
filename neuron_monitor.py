@@ -70,86 +70,90 @@ def _scrub(sample: dict) -> dict:
     return clean
 
 
-def execution_rate(series: typing.Sequence[typing.Tuple[int, int]],
-                   times: typing.Sequence[float]) -> typing.Dict[str, typing.Any]:
-    """delta(completed) / period, over the span the counter actually moved.
+def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
+                   ) -> typing.Dict[str, typing.Any]:
+    """Executions per second from neuron-monitor's per-period completion counts.
 
-    ``series`` is (sample index, completed count) for every sample that
-    carried the counter; ``times`` is the arrival time of every sample.
+    ``series`` is (sample index, completed, period) for every sample that
+    carried ``execution_stats.execution_summary.completed``.
 
-    Both ends are trimmed. A leading flat run is the workload compiling --
-    the counter exists and does not move -- and a trailing flat run is the
-    workload having finished while the monitor is still sampling. Including
-    either dilutes a rate with time no execution happened in, and the
-    leading one is the larger error because compiles are slow.
+    **``completed`` is a count per period, not a running total.** Measured
+    on trn1.2xlarge 2026-09-10 with graph_replay, the monitor sampling
+    every ~5s through compile, 60,000 replays, and an idle tail:
 
-    When there is nothing to measure it says which nothing it is, because
-    the three cases need different responses from a reader:
+        completed per period:  0 ... 0, 6657, 15409, 15273, 15199, 7465, 0, 0
+        sum:                   60,003   (60,000 replays + 3 setup graphs)
+        interior / period:     3082, 3055, 3040 per s   (loop's clock: 3057)
+
+    It falls back to zero when the work stops, which a running total cannot
+    do. This function used to take last minus first over the samples, which
+    on per-period counts is the difference between two periods' tallies:
+    zero on a run whose last sample is idle, and 1012 or 1506 or 729 on
+    others, depending only on where the samples fell. The "about four
+    replays per NEFF execution" graph_replay documented came from the same
+    misreading -- one period's 14,737 set against the run's 60,000.
+
+    The rate is taken over the **interior** of the active run: the first
+    and last periods with completions are only partly busy (6657 and 7465
+    above, against ~15,300 for a full one), and including them dilutes
+    the rate by the idle part of each. Interior periods are wholly inside
+    the execution, so their completions over their periods is the rate.
+
+    When there is nothing to measure it says which nothing it is:
 
     - **No samples carried the counter** -- telemetry is missing or the
       counter does not exist on this part.
-    - **One sample carried it** -- the run was too short for a delta. Raise
-      the duration or lower the monitor period.
-    - **The counter never moved** -- the samples are there and the device
-      completed nothing. That is a failing workload, not a slow one.
-
-    ``graph_replay`` produced a Score from this counter on 2026-09-08 and
-    degraded to the analytic fallback on 2026-09-10, and the row said only
-    "neuron-monitor reported no execution rate" -- which is true of all
-    three and actionable in none of them. A rate over a counter that never
-    advanced is not a slow rate; it is no measurement, and a row that
-    cannot tell a reader which of the three it hit is not much better.
+    - **No period completed anything** -- the samples are there and the
+      device finished nothing. A failing workload, not a slow one.
+    - **Too few whole periods** -- the device was busy across so few
+      sampling periods that none was busy throughout. Run longer.
     """
-    if len(series) < 2:
-        return {"execution_samples": len(series),
-                "execution_rate_absent": (
-                    "no sample carried the completion counter"
-                    if not series else
-                    "only one sample carried the completion counter, so "
-                    "there is no delta to divide -- raise --duration or "
-                    "lower the monitor period")}
+    if not series:
+        return {"execution_samples": 0,
+                "execution_rate_absent": "no sample carried the completion counter"}
 
-    first_count = series[0][1]
-    last_count = series[-1][1]
-    if last_count <= first_count:
-        return {"executions_delta": last_count - first_count,
-                "execution_samples": len(series),
-                "execution_rate_absent": (
-                    f"the completion counter did not advance across "
-                    f"{len(series)} samples, so the device completed "
-                    "nothing measurable")}
-
-    # Last sample before the counter moved, and first sample after it
-    # stopped: the window in which work was actually being completed.
-    start = series[0][0]
-    for index, count in series:
-        if count == first_count:
-            start = index
-        else:
-            break
-
-    end = series[-1][0]
-    for index, count in reversed(series):
-        if count == last_count:
-            end = index
-        else:
-            break
-
+    total = sum(count for _, count, _ in series)
     summary: typing.Dict[str, typing.Any] = {
-        "executions_delta": last_count - first_count,
         "execution_samples": len(series),
+        # The run's executions, which the old maximum over samples was not:
+        # it reported one period's tally as the total.
+        "executions_total": total,
     }
-    if len(times) > max(start, end) and end > start:
-        span = times[end] - times[start]
-        summary["execution_span_s"] = round(span, 4)
-        # How much of the observed window was not executing. A large value
-        # means the Score was mostly measuring a compile.
-        observed = times[series[-1][0]] - times[series[0][0]]
-        if observed > 0:
-            summary["execution_idle_fraction"] = round(1 - span / observed, 4)
-        if span > 0:
-            summary["executions_per_s"] = (last_count - first_count) / span
+    if total <= 0:
+        summary["execution_rate_absent"] = (
+            f"no period across {len(series)} samples completed an execution, "
+            "so the device completed nothing measurable")
+        return summary
+
+    active = [i for i, (_, count, _) in enumerate(series) if count > 0]
+    interior = [series[i] for i in active[1:-1]]
+    usable = [(count, period) for _, count, period in interior
+              if isinstance(period, (int, float)) and period > 0]
+    summary["execution_active_periods"] = len(active)
+    summary["execution_samples_used"] = len(usable)
+    if not usable:
+        summary["execution_rate_absent"] = (
+            f"the device was busy across {len(active)} sampling period(s) and "
+            "none of them throughout, so no period measures the rate -- run "
+            "longer")
+        return summary
+
+    span = sum(period for _, period in usable)
+    # The rate's denominator: whole periods the device was executing in.
+    summary["execution_span_s"] = round(span, 4)
+    summary["executions_per_s"] = sum(count for count, _ in usable) / span
     return summary
+
+
+def _completed_in(sample: dict) -> typing.Optional[int]:
+    """The completion tally one sample carries, summed over runtimes."""
+    total = None
+    for runtime in (sample.get("neuron_runtime_data") or []):
+        stats = (runtime.get("report") or {}).get("execution_stats") or {}
+        count = (stats.get("execution_summary") or {}).get("completed")
+        if isinstance(count, (int, float)):
+            total = (total or 0) + int(count)
+    return total
 
 
 class NeuronMonitor:
@@ -262,6 +266,33 @@ class NeuronMonitor:
         self._thread.start()
         return True
 
+    def await_idle_period(self, timeout: float = 15.0,
+                          poll: float = 0.25) -> bool:
+        """Keep sampling until a period with no completions arrives.
+
+        ``completed`` is a tally per period, and the period in which the
+        work ended is only reported when that period closes. Stopping the
+        monitor as soon as the workload returns loses it: on trn1.2xlarge
+        2026-09-10 graph_replay ran 60,000 replays and the row's total
+        read 45,709 -- which a reader would take as replays lost, the very
+        misreading execution_rate exists to correct. One idle period after
+        the work means every busy one has been reported.
+
+        Returns whether it arrived. False on timeout, or when no sample
+        after the call carries the counter at all.
+        """
+        if self.mock:
+            return True
+        seen = len(self._samples)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            fresh = self._samples[seen:]
+            for sample in fresh:
+                if _completed_in(sample) == 0:
+                    return True
+            time.sleep(poll)
+        return False
+
     def stop(self) -> dict:
         """Stop sampling and return the aggregated, scrubbed metrics."""
         self._stop.set()
@@ -370,7 +401,7 @@ class NeuronMonitor:
             "sram_ecc_uncorrected": 0,
         }
 
-        completed_series: typing.List[typing.Tuple[int, int]] = []
+        completed_series: typing.List[typing.Tuple[int, int, typing.Any]] = []
 
         for index, sample in enumerate(self._samples):
             for runtime in (sample.get("neuron_runtime_data") or []):
@@ -407,11 +438,11 @@ class NeuronMonitor:
                 summary = stats.get("execution_summary", {})
                 completed = summary.get("completed")
                 if isinstance(completed, (int, float)):
-                    executions = max(executions, int(completed))
-                    # Kept per sample as well as as a maximum: graph_replay
-                    # is scored from delta(completed) / period, and a
-                    # maximum alone cannot say how fast the count moved.
-                    completed_series.append((index, int(completed)))
+                    # A count for this period, so the run's total is the
+                    # sum -- see execution_rate for the measurement.
+                    executions += int(completed)
+                    completed_series.append(
+                        (index, int(completed), stats.get("period")))
                 for key in (
                     "completed_with_err",
                     "completed_with_num_err",
@@ -479,21 +510,10 @@ class NeuronMonitor:
                 "p50_mean": round(statistics.fmean(latency_p50), 6),
                 "p99_peak": round(max(latency_p99), 6) if latency_p99 else None,
             }
-        # graph_replay's declared formula is delta(completed) / period,
-        # which a maximum cannot answer: it says how many executions the run
-        # reached, not how fast it got there.
-        #
-        # The span is trimmed to where the counter was actually moving, and
-        # that is not a refinement. The monitor starts before the workload
-        # and stops after it, and a workload compiles before it executes --
-        # during which the counter is present and flat. Spanning the first
-        # sample that *carried* the counter therefore puts compile time in
-        # the denominator of a rate. Two runs of graph_replay at the same
-        # pinned problem reported 729.3 and 1174.8 graph-steps/s on
-        # trn1.2xlarge 2026-09-08, a 61% swing: the ratio implies 38% of
-        # the slower run's window was spent not executing, which at
-        # DURATION=20 is about 7.6 seconds of compile.
-        rate = execution_rate(completed_series, self._sample_times)
+        # graph_replay's declared Score. The 729.3 and 1174.8 graph-steps/s
+        # of 2026-09-08, once read as compile time diluting a span, were
+        # differences of per-period tallies -- see execution_rate.
+        rate = execution_rate(completed_series)
         summary.update(rate)
 
         summary["ecc_events"] = ecc

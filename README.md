@@ -111,7 +111,7 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 37.42 TFLOPS | `neuron-monitor` |
 | `omni_virus` | ✅ at the pinned 8192³ | 54.02 TFLOPS | `neuron-monitor` |
 | `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
-| `graph_replay` | ✅ rate trimmed of compile time | 3,040.2 graph-steps/s | `neuron-monitor` |
+| `graph_replay` | ✅ per-period completion tallies, cv 0.006 | 3,038.8 graph-steps/s | `neuron-monitor` |
 | `allocation_fragmentation` | ✅ | 2,265.7 events/s | workload |
 | `llm_prefill` | ✅ pre-normalised, no NaN | 3,810.1 prompt-tokens/s | workload |
 | `llm_decode` | ✅ | 20.63 tokens/s | workload |
@@ -591,6 +591,13 @@ hardware source.
 | `rag_embedding` | 1,551,194 | **853.7** | ÷2040 — measured ÷1817 |
 | `vision_encoder` | 1,676,047 | **58,131** | ÷18 — measured ÷28.8 |
 | `serving_mix` | 138 | **0.0312** | a real request is many steps |
+
+*Correction, 2026-09-10 later:* `graph_replay`'s 1,189 and the swing
+before it were not dilution. neuron-monitor's `completed` is a tally per
+sampling period, and the rate was last minus first of two tallies. Read
+as tallies, with the rate taken over whole busy periods, it is
+**3,038.8 graph-steps/s at cv 0.006**, agreeing with the kernel's own
+clock. See [`docs/neuron_counters.md`](docs/neuron_counters.md).
 
 The last four are the size of the "ran a fraction of the model" defect,
 and in each case the prediction made from arithmetic beforehand matched

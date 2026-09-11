@@ -1,192 +1,122 @@
-"""delta(completed) / period, over the span the counter actually moved.
+"""Executions per second from neuron-monitor's per-period completion counts.
 
-graph_replay reported 729.3 and 1174.8 graph-steps/s on two runs of the
-same pinned problem, a 61% swing. The monitor starts before the workload
-and stops after it, and a workload compiles before it executes -- during
-which the counter is present and flat. Spanning the first sample that
-*carried* the counter therefore put compile time in the denominator of a
-rate, and the two runs differed in how long they compiled for.
+``execution_summary.completed`` is a tally for each sampling period, not a
+running total. Measured on trn1.2xlarge 2026-09-10, graph_replay, 60,000
+replays, the monitor sampling every ~5 s through compile and an idle tail:
 
-The ratio implies 38% of the slower run's window was spent not executing,
-which at DURATION=20 is about 7.6 seconds.
+    0 ... 0, 6657, 15409, 15273, 15199, 7465, 0, 0     sum 60,003
+
+It falls to zero when the work stops, which a running total cannot. The
+old reading -- last minus first -- was the difference between two
+periods' tallies, and produced 729, 1012, 1506 or nothing depending on
+where the samples fell.
 """
 
 import pytest
 
 from neuron_monitor import execution_rate
 
-
-def _flat_then_moving(idle_samples, moving_samples, per_sample=1000):
-    """A counter that sits still while compiling, then advances."""
-    times = [float(i) for i in range(idle_samples + moving_samples)]
-    series = [(i, 0) for i in range(idle_samples)]
-    series += [(idle_samples + i, (i + 1) * per_sample)
-               for i in range(moving_samples)]
-    return series, times
-
-
-# -- the defect ---------------------------------------------------------------
-
-def test_a_compile_prefix_is_not_counted_against_the_rate():
-    """The whole point: 8 idle seconds must not dilute 12 working ones."""
-    series, times = _flat_then_moving(idle_samples=9, moving_samples=12)
-    rate = execution_rate(series, times)
-
-    assert rate["executions_per_s"] == 1000.0
-    assert rate["execution_span_s"] == 12.0
-    assert rate["execution_idle_fraction"] == pytest.approx(0.4)
-
-    # What the untrimmed span would have reported.
-    untrimmed = (series[-1][1] - series[0][1]) / (
-        times[series[-1][0]] - times[series[0][0]])
-    assert untrimmed == 600.0
-    assert untrimmed < rate["executions_per_s"] * 0.7
+# The measured series, verbatim: (sample index, completed, period).
+MEASURED_PERIODS = [0, 4.9947, 4.99946, 5.00083, 4.99976, 5.00031, 4.99906,
+                    5.00079, 4.99991, 4.99956, 5.00011, 5.00062, 4.99909,
+                    5.00031, 4.99987, 5.00072, 4.99947, 4.99998, 4.99965,
+                    5.00087, 4.99935, 4.99986]
+MEASURED_COUNTS = [0] * 15 + [6657, 15409, 15273, 15199, 7465, 0, 0]
+MEASURED = [(i, c, p) for i, (c, p) in enumerate(zip(MEASURED_COUNTS, MEASURED_PERIODS))]
+LOOP_RATE = 3057.1  # the kernel's own clock, same run
+REPLAYS = 60000
 
 
-def test_the_graph_replay_swing_is_reproduced_by_an_idle_prefix():
-    """Two runs, same true rate, different compile times.
-
-    This is the shape of the 729 / 1175 pair: nothing about the workload
-    differed, only how much of the window was spent compiling.
-    """
-    slow_series, slow_times = _flat_then_moving(9, 12)      # 38% idle
-    fast_series, fast_times = _flat_then_moving(1, 20)      # barely any
-
-    def untrimmed(series, times):
-        return (series[-1][1] - series[0][1]) / (
-            times[series[-1][0]] - times[series[0][0]])
-
-    # Untrimmed, the same workload reports two very different rates.
-    assert untrimmed(slow_series, slow_times) < 0.7 * untrimmed(
-        fast_series, fast_times)
-
-    # Trimmed, they agree.
-    assert execution_rate(slow_series, slow_times)["executions_per_s"] == (
-        execution_rate(fast_series, fast_times)["executions_per_s"])
+def test_the_measured_run_gives_the_loops_rate():
+    rate = execution_rate(MEASURED)
+    assert rate["executions_per_s"] == pytest.approx(LOOP_RATE, rel=0.01)
+    assert rate["execution_samples_used"] == 3
 
 
-def test_a_trailing_idle_run_is_trimmed_too():
-    """The workload finishes; the monitor keeps sampling."""
-    times = [float(i) for i in range(20)]
-    series = [(i, i * 100) for i in range(11)]          # moving for 10s
-    series += [(i, 1000) for i in range(11, 20)]        # then flat
-    rate = execution_rate(series, times)
-
-    assert rate["executions_per_s"] == 100.0
-    assert rate["execution_span_s"] == 10.0
+def test_the_total_is_every_replay_plus_setup():
+    """The sum is what the device completed. The old max over samples
+    reported one period's 15,409 as the run's total."""
+    total = execution_rate(MEASURED)["executions_total"]
+    assert total == 60003
+    assert total - REPLAYS == 3
+    assert max(MEASURED_COUNTS) < total / 3
 
 
-def test_both_ends_trim_together():
-    times = [float(i) for i in range(30)]
-    series = [(i, 0) for i in range(5)]
-    series += [(5 + i, (i + 1) * 50) for i in range(10)]
-    series += [(15 + i, 500) for i in range(15)]
-    rate = execution_rate(series, times)
-
-    assert rate["execution_span_s"] == 10.0
-    assert rate["executions_per_s"] == 50.0
+def test_last_minus_first_would_have_said_nothing_ran():
+    """What the old formula computed on this run: the last sample is idle,
+    so last - first is 0 - 0."""
+    assert MEASURED_COUNTS[-1] - MEASURED_COUNTS[0] == 0
+    assert "executions_per_s" in execution_rate(MEASURED)
 
 
-# -- refusing to report a rate that is not one --------------------------------
-
-def test_a_counter_that_never_moved_reports_no_rate():
-    """Not a slow rate -- no measurement. A workload that never executed
-    must not publish a number that looks like throughput."""
-    times = [float(i) for i in range(10)]
-    series = [(i, 7) for i in range(10)]
-    rate = execution_rate(series, times)
-
-    assert "executions_per_s" not in rate
-    assert rate["executions_delta"] == 0
+def test_the_partial_edge_periods_are_not_in_the_rate():
+    """6657 and 7465 are the first and last busy periods, each partly idle;
+    including them would read 2400/s against the loop's 3057."""
+    active = [(c, p) for _, c, p in MEASURED if c > 0]
+    with_edges = sum(c for c, _ in active) / sum(p for _, p in active)
+    assert with_edges < LOOP_RATE * 0.8
+    assert execution_rate(MEASURED)["executions_per_s"] > LOOP_RATE * 0.99
 
 
-def test_a_single_sample_reports_no_rate():
-    """These two asserted `== {}` and now check the thing that matters.
-
-    An empty dict was the old way of saying "nothing to measure", and it
-    said nothing about *which* nothing -- see the three tests at the end
-    of this file. What both cases have always meant is that no rate comes
-    out, so that is what they assert.
-    """
-    assert "executions_per_s" not in execution_rate([(0, 100)], [0.0])
+def test_the_span_is_the_rates_denominator_and_sits_inside_the_run():
+    """Three whole periods, 15 s, inside the loop's 19.63 s -- which is what
+    span_outran_the_kernel checks."""
+    span = execution_rate(MEASURED)["execution_span_s"]
+    assert span == pytest.approx(15.0, abs=0.01)
+    assert span < 19.63
 
 
-def test_no_samples_report_no_rate():
-    assert "executions_per_s" not in execution_rate([], [])
+def test_compile_time_cannot_dilute_the_rate():
+    """Idle periods before the work carry zero and are not active, however
+    many there are -- the 2026-09-08 "compile in the span" hypothesis has
+    no way in."""
+    busy = [(0, 100, 1.0), (1, 500, 1.0), (2, 500, 1.0), (3, 500, 1.0), (4, 200, 1.0)]
+    short = execution_rate([(i, 0, 1.0) for i in range(2)]
+                           + [(i + 2, c, p) for i, c, p in busy])
+    long = execution_rate([(i, 0, 1.0) for i in range(40)]
+                          + [(i + 40, c, p) for i, c, p in busy])
+    assert short["executions_per_s"] == long["executions_per_s"] == 500.0
 
 
-def test_a_counter_that_went_backwards_reports_no_rate():
-    """A runtime restart resets it; the delta is meaningless, not negative
-    throughput."""
-    times = [0.0, 1.0, 2.0]
-    rate = execution_rate([(0, 900), (1, 950), (2, 10)], times)
-    assert "executions_per_s" not in rate
-
-
-def test_missing_timestamps_do_not_raise():
-    """The times list is parallel to samples and could be short."""
-    series, _ = _flat_then_moving(2, 3)
-    assert "executions_per_s" not in execution_rate(series, [0.0])
-
-
-def test_the_idle_fraction_says_how_much_was_compile():
-    """The number that would have made the swing obvious at a glance."""
-    series, times = _flat_then_moving(9, 12)
-    assert execution_rate(series, times)["execution_idle_fraction"] > 0.3
-
-    series, times = _flat_then_moving(1, 20)
-    assert execution_rate(series, times)["execution_idle_fraction"] < 0.1
-
-
-# -- "no rate" covered three different problems ------------------------------
+# -- the three kinds of nothing ----------------------------------------------
 
 def test_no_samples_says_so():
-    absent = execution_rate([], [])
+    absent = execution_rate([])
     assert absent["execution_samples"] == 0
     assert "no sample carried" in absent["execution_rate_absent"]
     assert "executions_per_s" not in absent
 
 
-def test_one_sample_names_the_fix():
-    """A single sample has no delta. Raise the duration or the rate."""
-    absent = execution_rate([(0, 100)], [0.0])
-    assert absent["execution_samples"] == 1
-    message = absent["execution_rate_absent"]
-    assert "no delta" in message
-    assert "--duration" in message
+def test_a_counter_that_never_moved_is_a_failing_workload():
+    absent = execution_rate([(i, 0, 5.0) for i in range(6)])
+    assert absent["executions_total"] == 0
+    assert "completed nothing" in absent["execution_rate_absent"]
     assert "executions_per_s" not in absent
 
 
-def test_a_counter_that_never_moved_is_a_failing_workload():
-    """Not a slow one, and the message must not read like one."""
-    series = [(0, 100), (1, 100), (2, 100)]
-    absent = execution_rate(series, [0.0, 1.0, 2.0])
-    assert absent["executions_delta"] == 0
-    assert absent["execution_samples"] == 3
-    assert "did not advance" in absent["execution_rate_absent"]
+def test_too_few_whole_periods_names_the_fix():
+    """Two busy periods are both edges: neither was busy throughout."""
+    absent = execution_rate([(0, 0, 5.0), (1, 9000, 5.0), (2, 4000, 5.0), (3, 0, 5.0)])
+    assert absent["executions_total"] == 13000
+    assert "run longer" in absent["execution_rate_absent"]
     assert "executions_per_s" not in absent
 
 
 def test_the_three_reasons_are_distinguishable():
-    """Which was the whole point: one message for three causes is
-    actionable in none of them.
-
-    graph_replay produced a Score from this counter on 2026-09-08 and
-    degraded to the analytic fallback on 2026-09-10, and the row said
-    only "neuron-monitor reported no execution rate".
-    """
-    messages = {
-        execution_rate([], [])["execution_rate_absent"],
-        execution_rate([(0, 1)], [0.0])["execution_rate_absent"],
-        execution_rate(
-            [(0, 1), (1, 1)], [0.0, 1.0])["execution_rate_absent"],
+    reasons = {
+        execution_rate([])["execution_rate_absent"],
+        execution_rate([(0, 0, 5.0), (1, 0, 5.0)])["execution_rate_absent"],
+        execution_rate([(0, 10, 5.0), (1, 10, 5.0)])["execution_rate_absent"],
     }
-    assert len(messages) == 3, messages
+    assert len(reasons) == 3
 
 
 def test_a_working_rate_carries_no_absence_message():
-    """The control: a measurement must not explain why it is missing."""
-    series = [(0, 0), (1, 10), (2, 20)]
-    rate = execution_rate(series, [0.0, 1.0, 2.0])
-    assert rate["executions_per_s"] > 0
-    assert "execution_rate_absent" not in rate
+    assert "execution_rate_absent" not in execution_rate(MEASURED)
+
+
+def test_a_period_the_monitor_did_not_report_is_not_divided_by():
+    series = [(0, 10, 5.0), (1, 500, None), (2, 500, 5.0), (3, 10, 5.0)]
+    rate = execution_rate(series)
+    assert rate["execution_samples_used"] == 1
+    assert rate["executions_per_s"] == 100.0

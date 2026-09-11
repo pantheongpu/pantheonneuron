@@ -99,7 +99,7 @@ def _prose():
         "monitor caught and read as a measurement.",
         "",
         "`graph_replay` is also neuron-monitor-sourced but is **not** on this "
-        "path: its formula is `delta(completed) / period` in graph-steps/s. "
+        "path: its formula is `sum(completed) / sum(period)` over whole busy periods, in graph-steps/s. "
         "The gate matches on the declared counter, not on the source, so the "
         "FLOPS arithmetic cannot reach it.",
         "",

@@ -1,0 +1,62 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. What does execution_summary.completed count?
+# Raw output; host paths removed.
+#
+## 1. Probe: NeuronMonitor sampling through graph_replay's compile, 60,000 replays, and a
+##    15 s idle tail (old all-ones chain). PREDICTED: cumulative -> holds its final value
+##    through the tail; per-period -> falls to 0 and sums to the replays executed.
+loop: 60000 replays submitted, 19.63s, 3057.1/s by the loop's clock; loop ran t=3.0..360.9s (compile included at the start)
+  t (s)  period  completed  completed/period
+  267.2       0          0               nan
+  272.2 4.99470          0               0.0
+  277.2 4.99946          0               0.0
+  282.2 5.00083          0               0.0
+  287.2 4.99976          0               0.0
+  292.2 5.00031          0               0.0
+  297.2 4.99906          0               0.0
+  302.2 5.00079          0               0.0
+  307.2 4.99991          0               0.0
+  312.2 4.99956          0               0.0
+  317.2 5.00011          0               0.0
+  322.2 5.00062          0               0.0
+  327.2 4.99909          0               0.0
+  332.2 5.00031          0               0.0
+  337.2 4.99987          0               0.0
+  342.2 5.00072       6657            1331.2
+  347.2 4.99947      15409            3082.1
+  352.2 4.99998      15273            3054.6
+  357.2 4.99965      15199            3040.0
+  362.2 5.00087       7465            1492.7
+  367.2 4.99935          0               0.0
+  372.2 4.99986          0               0.0
+sum(completed) over samples = 60003   replays submitted = 60000
+
+
+## 2. Harness after execution_rate was rewritten for per-period tallies and the chain
+##    became a cyclic permutation: the real kernel (--repeat 3), then a copy that counts
+##    replay 1000 without running it. 60,000-replay pin; monitor stopped at once.
+=== real: --test graph_replay --duration 30 --repeat 3 ===
+[PANTHEON-NEURON]    PASS (the completion rate rests on 1 whole sampling period(s); fewer than 2 leaves no second period to check it against, so run longer before quoting this)
+[PANTHEON-NEURON]    3 repeats: 2941.4336 to 3048.3869, median 3044.1238, cv 0.0201
+   Status PASS | Score 3044.1238 neuron-monitor
+   Detail: 'the completion rate rests on 1 whole sampling period(s); fewer than 2 leaves no second period to check it against, so run longer before quoting this'
+   Repeats: {'attempted': 3, 'scored': 3, 'min': 2941.4336, 'max': 3048.3869, 'median': 3044.1238, 'stdev': 60.5564, 'cv': 0.0201, 'trend': 'rising'}
+   monitor: {'executions_total': 45709, 'total_executions': 45709, 'execution_samples': 4, 'execution_active_periods': 3, 'execution_samples_used': 1, 'execution_span_s': 5.0, 'executions_per_s': 3048.386896204088}
+=== planted skip: --test graph_replay --duration 30 ===
+[PANTHEON-NEURON]    FAIL (the replay chain did not land where the submitted replays put it, so the device did not execute each replay exactly once)
+   Status FAIL | Score None None
+   Detail: 'the replay chain did not land where the submitted replays put it, so the device did not execute each replay exactly once'
+   Repeats: None
+   monitor: {'executions_total': 55235, 'total_executions': 55235, 'execution_samples': 5, 'execution_active_periods': 4, 'execution_samples_used': 2, 'execution_span_s': 10.0006, 'executions_per_s': 2954.6114000632665}
+
+
+## 3. Pin raised to 200,000 (--duration bounds the window) and the orchestrator waiting for
+##    one idle period before stopping the monitor. --duration 30 --repeat 3.
+##    PREDICTED: >= 3 whole periods, no thinness warning, executions_total within 10 of the
+##    replays run (no 'executions unaccounted' warning).
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    3 repeats: 3028.2399 to 3062.6686, median 3038.7891, cv 0.0058
+   Status PASS | Score 3038.7891 neuron-monitor
+   Detail: ''
+   Repeats: {'attempted': 3, 'scored': 3, 'min': 3028.2399, 'max': 3062.6686, 'median': 3038.7891, 'stdev': 17.6392, 'cv': 0.0058, 'trend': None}
+   monitor: {'executions_total': 90930, 'execution_tail_reported': True, 'execution_active_periods': 7, 'execution_samples_used': 5, 'execution_span_s': 24.9994, 'executions_per_s': 3038.7890888147595}
+
