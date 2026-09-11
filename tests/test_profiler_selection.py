@@ -601,3 +601,46 @@ def test_the_ceiling_clears_every_coverage_ever_observed():
     planned = 1 << 30
     assert profiler.verify_profile_covers_plan(
         _counters(int(planned * observed)), "read", planned) is None
+
+
+# -- a copy covers the plan too ---------------------------------------------
+
+def test_a_copy_graph_is_passed_over_for_the_kernel(monkeypatch):
+    """trn1.2xlarge 2026-09-10 at 1 GiB: a buffer-copy graph read 1 GiB and
+    wrote 1 GiB beside memory_read's kernel, which read 1 GiB and wrote
+    nothing. Coverage alone gave both 1.0 and took whichever came first."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/copy.neff": {"hbm_read_bytes": planned, "hbm_write_bytes": planned,
+                           "total_time": 0.008167},
+        "/tmp/kernel.neff": {"hbm_read_bytes": planned, "hbm_write_bytes": 512,
+                             "total_time": 0.006020},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+    found = profiler.select_by_plan(
+        ["/tmp/copy.neff", "/tmp/kernel.neff"], "/tmp/s.ntff", "read", planned)
+    assert found["neff"] == "/tmp/kernel.neff"
+    assert fake.captured == ["/tmp/copy.neff", "/tmp/kernel.neff"]
+
+
+def test_the_write_kernels_own_source_read_is_not_mistaken_for_a_copy(monkeypatch):
+    """memory_write reads one 2 MiB tile per pass of a 4 GiB plan."""
+    planned = 4 << 30
+    fake = _FakeCaptures({
+        "/tmp/kernel.neff": {"hbm_write_bytes": planned, "hbm_read_bytes": 2 << 20,
+                             "total_time": 0.019},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+    found = profiler.select_by_plan(["/tmp/kernel.neff"], "/tmp/s.ntff", "write", planned)
+    assert found["neff"] == "/tmp/kernel.neff"
+
+
+def test_only_copies_means_no_selection_and_says_why(monkeypatch):
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/copy.neff": {"hbm_read_bytes": planned, "hbm_write_bytes": planned,
+                           "total_time": 0.008},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+    with pytest.raises(profiler.ProfilerUnavailable, match="a copy, not this kernel"):
+        profiler.select_by_plan(["/tmp/copy.neff"], "/tmp/s.ntff", "read", planned)
