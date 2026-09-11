@@ -119,6 +119,24 @@ def test_execution_errors_flip_a_pass_to_fail(mock_env, monkeypatch):
     )
     assert row["Status"] == "FAIL"
     assert "execution error" in row["Detail"]
+    # Every other path to FAIL drops the Score; this one published it.
+    assert row["Score"] is None
+    assert row["Percent Of Peak"] is None
+
+
+def test_a_repeat_failed_by_execution_errors_is_not_in_the_spread(mock_env, monkeypatch):
+    """Its Score was kept, so it joined the repeats' spread and could be
+    published as the median of a row that failed."""
+    stops = iter([{"samples": 3, "execution_errors": 1},
+                  {"samples": 3}, {"samples": 3}])
+    monkeypatch.setattr(pantheon_neuron.neuron_monitor.NeuronMonitor,
+                        "stop", lambda self: next(stops))
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 5.0)
+    row = pantheon_neuron.run_workload(
+        _workload("tensor_virus"), TRN1, duration=0.02, monitor_period=0.01,
+        repeat=3)
+    assert row["Status"] == "FAIL"
+    assert row["Repeats"]["scored"] == 2
 
 
 def test_report_is_written_atomically(mock_env, tmp_path, monkeypatch):

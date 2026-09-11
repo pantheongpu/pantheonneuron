@@ -379,8 +379,14 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             detail = "; ".join(filter(None, [detail, unaccounted]))
 
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
-        status = "FAIL"
-        detail = f"{metrics['execution_errors']} Neuron execution error(s)"
+        # The Score goes with the status, as on every other path to FAIL.
+        # It was kept, so the row published a FAIL beside a number -- and
+        # under --repeat that number joined the spread and could become
+        # the median of a row whose repeats had failed.
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [
+            f"{metrics['execution_errors']} Neuron execution error(s)",
+            detail]))
 
     # The compute workloads declare neuron-monitor as their Score source, and
     # the monitor has only just stopped -- its counters do not exist while the
