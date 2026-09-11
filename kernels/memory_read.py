@@ -49,6 +49,13 @@ product exact):
   neuron-profile), so the DMA side is close to saturated. The two-core
   aggregate reads exactly 2x (541 GB/s), which also points at a per-core
   limit on the DMA side, not at HBM.
+- **The loads sit at a per-core DMA ceiling, not at HBM.** Reads reach
+  ~273 and 8192-wide writes ~275 GB/s on one core; a read-and-write copy
+  on one core moves ~207 combined (kv_cache_churn); two cores sum to
+  exactly 2x (542 of the chip's 880). And more DMA concurrency does not
+  lift it -- trn1.2xlarge 2026-09-11, 2 GiB: two independent loads per
+  iteration 268.8, one 16384-wide load 271.1, against 269.5 for this
+  kernel. Whatever the ceiling is, it is per core and it is not issue rate.
 - **The kernel is not a floor.** The compiler's own reduction over the
   same bytes is 1.55x slower. That is the opposite of tensor_virus, where
   torch.matmul was 2.53x the hand-written kernel.
