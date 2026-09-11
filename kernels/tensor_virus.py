@@ -25,6 +25,8 @@ Coalesced tiling (the default) 2026-09-10: 70.42 TFLOPS analytic, 71.80
 by neuron-monitor (median of three), every row-tile of the product exact.
 72.46 at cv 0.0005 once the monitor mean stopped including the partly
 busy first and last sampling periods (neuron_monitor.whole_period_flops).
+78.50 at cv 0.0023 (82.6% of one core) with COALESCE_ROWS raised from 4
+to 8, 2026-09-11 -- see the sweep at COALESCE_ROWS.
 Streaming tiling 2026-09-08 and 2026-09-10: 26.1 TFLOPS, product exact.
 Earlier verification at reduced shapes on inf2.xlarge 2026-09-07:
 ``verify_product_is_correct`` returned exactly 1.0 at 1024^3 (2.68 TFLOPS)
@@ -85,11 +87,24 @@ MOVING = 512                        # N per matmul call
 # tiles at once makes each row COALESCE_ROWS * 256 bytes and cuts the
 # number of lhs loads by the same factor.
 #
-# 4 because the accumulator grows with it: COALESCE_ROWS fp32 tiles of
-# MOVING columns is 8 KiB per partition at 4, half of NeuronCore-v2's
-# 16 KiB of PSUM per partition, which leaves room for the compiler to
-# double-buffer. 8 would fill it.
-COALESCE_ROWS = 4
+# 8, which fills PSUM: COALESCE_ROWS fp32 tiles of MOVING columns is
+# 16 KiB per partition, all of NeuronCore-v2's. This was 4, on the reasoning
+# that half of PSUM would leave the compiler room to double-buffer and a
+# full one would not. Measured on trn1.2xlarge 2026-09-11, 8192^3 bf16,
+# every variant's product checked row-tile by row-tile:
+#
+#     COALESCE_ROWS  MOVING  lhs per row  PSUM     TFLOPS
+#          2          512       512 B     1/4      51.80
+#          4          512      1 KiB      1/2      71.72
+#          8          512      2 KiB      full     78.15
+#          8          256      2 KiB      1/2      61.86
+#         16          128      4 KiB      1/2      30.73
+#
+# A full PSUM did not stall anything: the wider lhs load is worth 9%. And
+# the load is not the only term -- narrowing the moving tile to fit more
+# accumulators in half the PSUM cost more than its wider loads bought, so
+# the matmul instruction's own size matters as well.
+COALESCE_ROWS = 8
 
 # Which tiling the kernel uses. Both compute the same product -- both
 # product-verify at exactly 1.0 on hardware -- and they differ only in how
@@ -187,7 +202,15 @@ def gemm_plan(shape: typing.Sequence[int], dtype: str) -> typing.Dict[str, int]:
 
 # Distinct values per row-tile, so a kernel that stores the right number
 # into the wrong rows cannot pass. Cycles through 1..ROW_CHECK_PERIOD.
-ROW_CHECK_PERIOD = 7
+#
+# The period has to exceed COALESCE_ROWS, or two tiles of one coalesced
+# block carry the same value and a swap between them is invisible. It was
+# 7, chosen when blocks were 4 tiles; raising COALESCE_ROWS to 8 on
+# 2026-09-11 made a block's first and eighth tiles indistinguishable, and a
+# test of the planted-defect arithmetic caught it before hardware did.
+# 13 is prime, above any block here, and exact everywhere it must be: 13 in
+# bf16 and uint8, and 8192 x 13 far inside fp32's 2^24.
+ROW_CHECK_PERIOD = 13
 
 
 def row_tile_scale(tile_index: int) -> int:
