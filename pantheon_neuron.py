@@ -127,6 +127,35 @@ def run_order(workloads) -> list:
     return baseline + spawning + rest
 
 
+def reservation_point(workloads) -> typing.Optional[int]:
+    """Where in an ordered selection to reserve the profiler's core.
+
+    Before the first workload that runs in this process -- after baseline
+    telemetry and after every ``cores: "all"`` aggregate, which run_order
+    has already moved to the front.
+
+    The reservation used to be decided once, before anything ran, and a
+    selection containing an aggregate turned it off for the whole run: the
+    runtime reads NEURON_RT_VISIBLE_CORES once, and an aggregate must see
+    every core. So --test all and --test memory always published
+    memory_read and memory_write from the analytic fallback. But once the
+    aggregates run first, in their own worker processes, nothing in this
+    process has touched a runtime when they finish -- baseline telemetry
+    opens none (the 2026-09-11 full passes ran the aggregates after it
+    with every worker getting its core). The reservation can simply wait
+    for them.
+
+    None when every workload is baseline or an aggregate.
+    """
+    for position, workload in enumerate(workloads):
+        if workload.suite == "baseline":
+            continue
+        if (workload.problem or {}).get("cores") == "all":
+            continue
+        return position
+    return None
+
+
 def reservation_cost(workloads) -> typing.Tuple[typing.List[str], typing.List[str]]:
     """What a selection costs the profiler: (aggregate names, workloads billed).
 
@@ -173,13 +202,11 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     that says otherwise. A missing profiler Score announces itself in the
     row; a Score over the wrong core count does not.
 
-    That rule has a consequence worth stating plainly, because it applies to
-    the invocation the README puts first: ``--test all`` and ``--test
-    memory`` both select an aggregate workload, so neither can reach the
-    profiler for ``memory_read`` or ``memory_write``. The declared source is
-    available only to a selection with no ``cores: "all"`` workload in it.
-    The message below names which workloads are paying, rather than saying
-    "these Scores" and leaving the reader to work out which.
+    main() now calls this after the aggregates have run (see
+    ``reservation_point``), with only the workloads that remain, so a
+    selection like ``--test all`` still reaches the profiler for
+    ``memory_read`` and ``memory_write``. The aggregate branch below stays
+    for a caller that passes a selection still containing one.
     """
     if nki_backend.mock_mode():
         return None
@@ -1667,14 +1694,18 @@ def main(argv=None) -> int:
         f"{len(workloads)} workload(s)"
     )
 
-    reserve_profiler_core(devices, workloads)
     workloads = run_order(workloads)
+    reserve_at = reservation_point(workloads)
 
     snapshot = get_system_snapshot(devices)
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results = []
 
-    for workload in workloads:
+    for position, workload in enumerate(workloads):
+        # After the aggregates, before anything initialises a runtime here:
+        # see reservation_point.
+        if position == reserve_at:
+            reserve_profiler_core(devices, workloads[position:])
         print(f"[PANTHEON-NEURON] -> {workload.name}")
         row = run_workload(workload, devices, args.duration,
                            args.monitor_period, repeat=args.repeat)

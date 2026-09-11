@@ -230,9 +230,8 @@ CALLED_ONLY_BY_TESTS = {
     # The workload whose entire premise is per-engine behaviour is scored
     # by the reader that cannot see any engine. Reaching those counters
     # needs a profiler capture of omni_virus's own NEFF, which needs a
-    # reserved core, which is off for any selection containing a
-    # cores: "all" workload. That is a real piece of work, not an
-    # oversight, and it is not done.
+    # reserved core. The core is available; the capture is not written.
+    # That is a real piece of work, not an oversight, and it is not done.
     "engine_activity",
 }
 

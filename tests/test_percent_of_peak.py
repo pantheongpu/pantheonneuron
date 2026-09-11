@@ -350,8 +350,8 @@ def test_a_reservation_leaves_an_unpinned_workload_one_core(monkeypatch):
 
 
 def test_an_aggregate_is_never_capped_by_the_reservation(monkeypatch):
-    """The reservation is off for any selection containing a cores: "all"
-    workload, and aggregates give each worker its own visibility.
+    """Aggregates run before the reservation is made, and give each worker
+    its own visibility.
 
     Applying the cap anyway reported memory_read_agg at 123% of peak --
     an impossible figure from a configuration the orchestrator refuses to

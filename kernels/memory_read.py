@@ -27,9 +27,10 @@ needed compile-cache isolation, because timestamp narrowing alone selected
 the wrong graph and verify_profile_covers_plan correctly refused it
 (*profiled graph moved 4 bytes against a plan of 8589934592*).
 
-The reservation is not free: it is off for any selection containing a
-`cores: "all"` workload, which includes --test all and --test memory. See
-docs/workload_counter_map.md.
+The reservation used to be off for any selection containing a
+`cores: "all"` workload, which included --test all and --test memory.
+Since 2026-09-11 it is made after those aggregates run, so a full pass
+reaches the profiler too (pantheon_neuron.reservation_point).
 
 **What sets the rate, measured rather than assumed** (trn1.2xlarge
 2026-09-10, 2 GiB bf16, one core, each variant in its own process, every

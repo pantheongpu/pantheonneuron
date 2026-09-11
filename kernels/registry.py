@@ -619,9 +619,10 @@ SCORE_DEPENDS_ON_PIN = {
 # is scored by the reader that cannot see any engine.**
 #
 # Reaching them needs a profiler capture of the workload's own NEFF, which
-# needs a reserved core, which is off for any selection containing a
-# cores: "all" workload. Real work, not an oversight, and not done -- so
-# it is written down here rather than left as a false attribution.
+# needs a reserved core -- available in every selection since 2026-09-11
+# (pantheon_neuron.reservation_point), but the capture itself is not
+# written. Real work, not an oversight, and not done -- so it is written
+# down here rather than left as a false attribution.
 #
 # docs/neuron_counters.md records the probe that established which reader
 # has what; data/probe-2026-08-26-tools/ carries the raw 108-counter set.

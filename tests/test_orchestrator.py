@@ -307,4 +307,36 @@ def test_a_selection_without_aggregates_keeps_registry_order():
 def test_main_runs_the_ordered_selection():
     code = sourcecheck.flat_function_code(pantheon_neuron.main)
     assert code.index("workloads = run_order ( workloads )") < code.index(
-        "for workload in workloads")
+        "for position , workload in enumerate ( workloads )")
+
+
+# -- the profiler's core, reserved once the aggregates are done --------------
+
+def test_the_reservation_waits_for_the_aggregates():
+    """--test all used to turn the reservation off for the whole run, so
+    memory_read and memory_write always fell back to analytic."""
+    ordered = pantheon_neuron.run_order(registry.resolve("all"))
+    at = pantheon_neuron.reservation_point(ordered)
+    names = [w.name for w in ordered]
+    assert names.index("memory_read_agg") < at and names.index("memory_write_agg") < at
+    # From there on nothing declares cores: all, so the reservation holds.
+    aggregate, _ = pantheon_neuron.reservation_cost(ordered[at:])
+    assert aggregate == []
+    assert "memory_read" in names[at:] and "memory_write" in names[at:]
+
+
+def test_without_aggregates_the_reservation_comes_first():
+    ordered = pantheon_neuron.run_order(registry.resolve("core"))
+    assert pantheon_neuron.reservation_point(ordered) == 0
+
+
+def test_a_selection_of_only_aggregates_reserves_nothing():
+    ordered = [w for w in registry.WORKLOADS if (w.problem or {}).get("cores") == "all"]
+    assert ordered and pantheon_neuron.reservation_point(ordered) is None
+
+
+def test_main_reserves_inside_the_loop_at_that_point():
+    code = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert "reserve_at = reservation_point ( workloads )" in code
+    assert code.index("for position , workload in enumerate ( workloads )") < code.index(
+        "reserve_profiler_core ( devices , workloads [ position : ] )")

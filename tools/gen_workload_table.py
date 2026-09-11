@@ -134,15 +134,15 @@ def _prose():
         "run and cannot be renegotiated per workload. `memory_read_agg` and "
         "`memory_write_agg` declare `cores: \"all\"`, and holding a core back "
         "from them would report the aggregate of all-but-one core under a name "
-        "that says otherwise — so their presence turns the reservation off for "
-        "the entire run.",
+        "that says otherwise. Until 2026-09-11 their presence turned the "
+        "reservation off for the entire run, so `--test all` and "
+        "`--test memory` could not reach the profiler for `memory_read` or "
+        "`memory_write`.",
         "",
-        "**`--test all` and `--test memory` both select them**, which means "
-        "neither invocation can reach the profiler for `memory_read` or "
-        "`memory_write`. The declared source is available only to a selection "
-        "with no `cores: \"all\"` workload in it, such as `--test memory_read`. "
-        "`pantheon_neuron.reservation_cost` derives which workloads are paying "
-        "and the run names them on the console.",
+        "They now run first, in their own worker processes, and the "
+        "reservation is made after them (`pantheon_neuron.reservation_point`), "
+        "so every selection reaches the declared source. The console names "
+        "where the reservation lands.",
         "",
         "## Where the comparison does not hold",
         "",

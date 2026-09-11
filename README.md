@@ -1125,28 +1125,28 @@ median of unlike numbers is not a measurement.
 A failure in any repeat fails the row. A workload that works four times in
 five is not a workload that works.
 
-### What `--test all` cannot measure
+### What `--test all` could not measure, until 2026-09-11
 
 The profiler needs a NeuronCore of its own to replay a NEFF, and the Neuron
 runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation — so the split
-between workload and profiler is fixed for a whole run and cannot be
-renegotiated per workload.
+between workload and profiler is fixed once a runtime starts in the
+orchestrator's process.
 
-`memory_read_agg` and `memory_write_agg` declare `cores: "all"`. Holding a
-core back from them would report the aggregate of all-but-one core under a
-name that says otherwise, so their presence in a selection turns the
-reservation off for the entire run. **`--test all` and `--test memory` both
-select them**, which means `memory_read` and `memory_write` report the
-analytic fallback rather than the `neuron-profile` Score they declare.
+`memory_read_agg` and `memory_write_agg` declare `cores: "all"`, and holding
+a core back from them would report the aggregate of all-but-one core under a
+name that says otherwise. Until 2026-09-11 their presence in a selection
+turned the reservation off for the entire run, so **`--test all` and
+`--test memory` published `memory_read` and `memory_write` from the
+analytic fallback** rather than the `neuron-profile` Score they declare.
 
-To reach the declared source, run them in a selection with no `cores: "all"`
-workload in it:
+That constraint no longer holds. The aggregates now run first, in their own
+worker processes, before anything in the orchestrator starts a runtime; the
+reservation is made after them (`reservation_point`). Measured on
+trn1.2xlarge with `--test memory --duration 30`: both aggregates pass at
+542.6 and 537.5 GB/s, the reservation lands, and `memory_read` (273.09) and
+`memory_write` (274.93) report `neuron-profile`.
 
-```bash
-python pantheon_neuron.py --test memory_read --duration 60
-```
-
-The run says which it did — the console names the workloads that are paying,
+The run says which it did — the console names where the reservation lands,
 and each row's `Score Method` records the method actually used.
 
 **The aggregates themselves run first.** The Neuron runtime in the
