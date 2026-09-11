@@ -1,0 +1,7 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. quantized_gemm with the bf16 reference measured
+# in the same run (4096^3, 10 s, product verified) rather than quoted from the 2026-09-10 probe.
+# PREDICTED: reference near the probe's 70.38 and the ratio near 0.26 -- now from one run.
+
+=== quantized_gemm ===
+quantized_gemm: PASS Score 18443653782759.39 | Detail ''
+   Measurement {'quantized_tops': 18.44365378275939, 'ratio_to_bf16': 0.264, 'reference_bf16_tops': 69.8766839493433, 'expected_output': 81.92}

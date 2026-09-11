@@ -1858,3 +1858,28 @@ def test_the_new_tokens_key_and_value_reach_the_output():
     code = sourcecheck.flat_function_code(llm_inference.run_decode)
     assert "k_new" in code[code.index("fresh ="):code.index("probs =")]
     assert "v_new" in code[code.index("attended ="):code.index("state = state +")]
+
+
+# -- a ratio from one run, not two -------------------------------------------
+
+def test_the_bf16_reference_is_measured_in_the_same_run():
+    """ratio_to_bf16 divided today's int8 rate by 70.38, a figure from the
+    2026-09-10 dtype probe. Both sides now share the process and shape."""
+    code = sourcecheck.flat_function_code(inference_mix.run_quantized_gemm)
+    assert "_bf16_reference_tops (" in code
+    ratio = code[code.index('"ratio_to_bf16"'):code.index('"reference_bf16_tops"')]
+    assert "OPERAND_RATES_4096" not in ratio and "bf16_tops" in ratio
+
+
+def test_the_reference_verifies_its_own_product():
+    """A bf16 reference that did not compute K is not a reference."""
+    code = sourcecheck.flat_function_code(inference_mix._bf16_reference_tops)
+    assert "observed != float ( k )" in code
+    assert "return None" in code
+
+
+def test_the_reference_window_is_bounded():
+    """It is a cross-check, not a second workload."""
+    code = sourcecheck.flat_function_code(inference_mix.run_quantized_gemm)
+    assert "min ( duration , BF16_REFERENCE_S )" in code
+    assert 0 < inference_mix.BF16_REFERENCE_S <= 15
