@@ -56,7 +56,9 @@ part with 2+ devices, and this account's Trn quota is 64 vCPU against the
 128 the smallest such shape needs.
 
 The last full passes were **23 PASS, 0 FAIL** on trn1.2xlarge, 2026-09-08
-and 2026-09-10.
+and 2026-09-10, and **24 PASS, 0 FAIL** (all but the two two-device
+workloads) three times on 2026-09-11, the last at every change described
+below.
 
 **Scores from a declared hardware source: 7 or 8 of 23**, and which it is
 varies between runs of the same code. That is not a rounding detail — it is
@@ -93,7 +95,8 @@ decimals.
 **`tensor_virus` was a floor, not this part's capability, until
 2026-09-10.** A `torch.matmul` at the same shape reached 2.53× it. The
 coalesced tiling, now the default, closes that: 70.42 TFLOPS against
-`torch.matmul`'s 66.25 in one session, and 71.80 by `neuron-monitor`. The
+`torch.matmul`'s 66.25 in one session, and 71.80 by `neuron-monitor` —
+**78.50** since 2026-09-11, when its coalesce factor went from 4 to 8. The
 `tensor_virus`, `int_virus` and `pulse_virus` rows below are at the new
 default; older reports ran `streaming` and are ~2.7× lower. See
 [the headline TFLOPS figure is the kernel, not the
@@ -939,12 +942,14 @@ the compute engines near idle and counting cores by arithmetic activity
 would call a saturated memory path unused.
 
 It also separates the two kinds of gap. The bandwidth kernels reach
-51–62% of HBM — ordinary for a streaming benchmark, and a figure worth
-comparing across vendors. `tensor_virus` reached 27.5% under the
+61–62.6% of HBM — ordinary for a streaming benchmark, and a figure worth
+comparing across vendors. (51–62% before 2026-09-11, when the profiler's
+idle startup stopped counting as transfer time and `memory_write`'s
+stores went 8192 wide.) `tensor_virus` reached 27.5% under the
 `streaming` tiling, which was a statement about the kernel: a plain
 `torch.matmul` on the same core reaches 69.8%. Coalescing its lhs loads
-took it to 75.6% — past the compiler's matmul — and nothing about the
-silicon changed in between.
+took it to 75.6% — past the compiler's matmul — and eight accumulators
+to 82.6%, and nothing about the silicon changed in between.
 
 **A Score above 105% of its ceiling now fails the row.** A planted defect
 in the coalesced kernel posted 186.8 TFLOPS on one 95 TFLOPS core: the
@@ -990,7 +995,8 @@ product checked:
 | `torch.matmul` | 66.25 | — |
 
 `neuron-monitor`, the declared Score source, reads **71.80** (median of
-three, cv 0.035).
+three, cv 0.035). With the monitor mean over whole sampling periods and
+the coalesce factor at 8, both 2026-09-11, it reads **78.50** (cv 0.0023).
 
 What caused it was measured, not guessed. Coalescing changes the load
 width and gives each lhs load four independent accumulators, so a
