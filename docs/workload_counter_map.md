@@ -45,7 +45,7 @@ A `—` in an instance column means the capability gate skips it: `all_reduce` a
 
 ## How a monitor-sourced Score is read
 
-The five compute workloads declare `mean(effective_flops) / 1e12`. That counter exists only in the neuron-monitor stream — it is absent from the CloudWatch metric set, and sysfs leaves `flop_count` at zero — so unlike the bandwidth kernels, their Score cannot come from the kernel. `pantheon_neuron.monitor_score` reads it from the telemetry the run just collected, after the monitor stops.
+The five compute workloads declare `mean(effective_flops over whole busy periods) / 1e12`. That counter exists only in the neuron-monitor stream — it is absent from the CloudWatch metric set, and sysfs leaves `flop_count` at zero — so unlike the bandwidth kernels, their Score cannot come from the kernel. `pantheon_neuron.monitor_score` reads it from the telemetry the run just collected, after the monitor stops.
 
 `mean` is across NeuronCores. A part reports one series per core, and a workload that saturates the device runs on all of them; summing would make a two-core part look twice as fast as the same silicon reported per core.
 
@@ -54,7 +54,7 @@ Two cases deliberately produce no Score rather than a number:
 - **The counter is absent** — a mock run, telemetry disabled, or a kernel that never reached the Tensor Engine. The row records a PASS with no Score and says why.
 - **The workload failed** — telemetry keeps sampling through a failure, so without a status gate a FAIL row would carry whatever the monitor caught and read as a measurement.
 
-`graph_replay` is also neuron-monitor-sourced but is **not** on this path: its formula is `delta(completed) / period` in graph-steps/s. The gate matches on the declared counter, not on the source, so the FLOPS arithmetic cannot reach it.
+`graph_replay` is also neuron-monitor-sourced but is **not** on this path: its formula is `sum(completed) / sum(period)` over whole busy periods, in graph-steps/s. The gate matches on the declared counter, not on the source, so the FLOPS arithmetic cannot reach it.
 
 ## The declared profiler Score has never been produced by a run
 
@@ -120,7 +120,7 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `moe_router` | experts=8, top_k=2, hidden=4096, tokens=4096 |
 | `transformer_train_step` | hidden=4096, layers=4, batch=1, seq=2048, dtype=bf16 |
 | `allocation_fragmentation` | allocations=40000, size_min=4096, size_max=16777216 |
-| `graph_replay` | hidden=2048, replays=60000, dtype=bf16 |
+| `graph_replay` | hidden=2048, replays=200000, dtype=bf16 |
 | `rag_embedding` | dim=1024, batch=64, seq=128, layers=12, dtype=bf16 |
 | `vision_encoder` | resolution=224, patch=14, batch=64, layers=12, dtype=bf16 |
 
@@ -133,10 +133,10 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `pulse_virus` | `neuroncore_counters.*.effective_flops`<br>`throttle_active_nc0_time_ns` |
 | `transformer_virus` | `neuroncore_counters.*.effective_flops` |
 | `omni_virus` | `neuroncore_counters.*.effective_flops`<br>`tensor_engine_active_time_percent`<br>`vector_engine_active_time_percent`<br>`scalar_engine_active_time_percent`<br>`gpsimd_engine_active_time_percent` |
-| `memory_read` | `hbm_read_bytes`<br>`total_time` |
-| `memory_write` | `hbm_write_bytes`<br>`total_time` |
-| `memory_read_agg` | `hbm_read_bytes`<br>`total_time` |
-| `memory_write_agg` | `hbm_write_bytes`<br>`total_time` |
+| `memory_read` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_write` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_read_agg` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_write_agg` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
 | `all_reduce` | `busbw` |
 | `p2p_thrasher` | `busbw` |
 | `pcie_bandwidth` | `bytes_transferred`<br>`elapsed_s` |

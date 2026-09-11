@@ -552,3 +552,39 @@ def test_a_real_score_through_the_same_path_passes(monkeypatch):
     row = pantheon_neuron._measure_once(workload, TRN1, 1, 0.5)
     assert row["Status"] == "PASS", row["Detail"]
     assert row["Score"] == 70.42
+
+
+# -- a matching unit is not a matching quantity ------------------------------
+
+def test_pcie_is_not_measured_against_hbm():
+    """--test all, trn1.2xlarge 2026-09-10: "0.44% of 880.5 GB/s" for a
+    host-to-device PCIe rate."""
+    assert pantheon_neuron.peak_share(_named("pcie_bandwidth"), TRN1) is None
+    assert pantheon_neuron.percent_of_peak(
+        3.8962, pantheon_neuron.peak_share(_named("pcie_bandwidth"), TRN1)) is None
+
+
+def test_interconnect_workloads_get_no_borrowed_ceiling():
+    for name in ("all_reduce", "p2p_thrasher"):
+        assert pantheon_neuron.peak_share(_named(name), TRN1) is None, name
+
+
+def test_only_the_hbm_path_gets_the_hbm_ceiling():
+    """Every GB/s workload that receives hbm_gbps is in the memory suite;
+    any other must say in NO_PUBLISHED_PEAK why it has none. A new GB/s
+    workload cannot inherit the HBM ceiling by its unit alone."""
+    gbps = [w for w in registry.WORKLOADS if w.unit == "GB/s"]
+    assert gbps
+    for workload in gbps:
+        share = pantheon_neuron.peak_share(workload, TRN1)
+        if share is not None:
+            assert share["peak_field"] == "hbm_gbps"
+            assert workload.suite == "memory", workload.name
+        else:
+            assert workload.name in registry.NO_PUBLISHED_PEAK, workload.name
+
+
+def test_the_memory_kernels_keep_their_ceiling():
+    """The control: the exclusion must not reach the workloads it is for."""
+    for name in ("memory_read", "memory_write", "memory_read_agg", "memory_write_agg"):
+        assert pantheon_neuron.peak_share(_named(name), TRN1) is not None, name

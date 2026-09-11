@@ -118,7 +118,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12')),
     # dtype is uint8, not int8, and the difference is measured rather than
     # stylistic. trn1's Tensor Engine rejects signed int8 outright --
     # `nc_matmul does not support stationary.dtype=int8`, 2026-09-08 -- and
@@ -145,7 +145,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12   # uint8 ops, reported as TOPS')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12   # uint8 ops, reported as TOPS')),
     Workload("pulse_virus", "core",
              "Duty-cycled load to provoke power/clock transients.", _COMPUTE,
              unit="TFLOPS",
@@ -156,7 +156,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'neuroncore_counters.*.effective_flops',
                      'throttle_active_nc0_time_ns',
                  ),
-                 formula='mean(effective_flops) / 1e12; throttle_active_nc0_time_ns recorded alongside')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12; throttle_active_nc0_time_ns recorded alongside')),
     Workload("transformer_virus", "core",
              "Full transformer block under sustained load.", _COMPUTE,
              unit="TFLOPS",
@@ -165,7 +165,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'neuroncore_counters.*.effective_flops',
                  ),
-                 formula='mean(effective_flops) / 1e12')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12')),
     Workload("omni_virus", "core",
              "All engines concurrently: tensor, vector, scalar, GpSimd.", _COMPUTE,
              unit="TFLOPS",
@@ -179,7 +179,7 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'scalar_engine_active_time_percent',
                      'gpsimd_engine_active_time_percent',
                  ),
-                 formula='mean(effective_flops) / 1e12; per-engine active_time_percent recorded alongside')),
+                 formula='mean(effective_flops over whole busy periods) / 1e12; per-engine active_time_percent recorded alongside')),
 
     # -- memory: HBM bandwidth --------------------------------------------
     Workload("memory_read", "memory",
@@ -190,8 +190,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_read_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='hbm_read_bytes / total_time / 1e9')),
+                 formula='hbm_read_bytes / total_active_time / 1e9')),
     # 4 GiB, not the 8 GiB memory_read uses, and the asymmetry is measured.
     # A write's destination is the whole plan and the runtime still holds
     # the previous one while the next is allocated, so the pin costs twice
@@ -219,8 +220,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_write_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='hbm_write_bytes / total_time / 1e9')),
+                 formula='hbm_write_bytes / total_active_time / 1e9')),
     Workload("memory_read_agg", "memory",
              "Aggregate HBM read bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
@@ -230,8 +232,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_read_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='sum(hbm_read_bytes over cores) / total_time / 1e9')),
+                 formula='sum(hbm_read_bytes over cores) / total_active_time / 1e9')),
     # 4 GiB per core, for the same residency reason as memory_write: each
     # worker allocates its own destination on its own core, so the pin is
     # per-core and the arithmetic is identical.
@@ -244,8 +247,9 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  counters=(
                      'hbm_write_bytes',
                      'total_time',
+                     'total_active_time',
                  ),
-                 formula='sum(hbm_write_bytes over cores) / total_time / 1e9')),
+                 formula='sum(hbm_write_bytes over cores) / total_active_time / 1e9')),
 
     # -- interconnect ------------------------------------------------------
     Workload("all_reduce", "interconnect",
@@ -471,13 +475,25 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              # over a shorter window and is more likely to lose its
              # declared Score. 60,000 gives about 20 seconds at the
              # observed rate and would still give 13 at half of it.
-             problem={"hidden": 2048, "replays": 60000, "dtype": "bf16"},
+             #
+             # 200,000 since 2026-09-10, so that --duration bounds the
+             # window rather than the count. The completion counter is a
+             # tally per ~5 s sampling period, and the rate is taken over
+             # whole periods only; 60,000 replays is ~20 s, four periods,
+             # and on trn1.2xlarge it left one whole period to divide.
+             # 200,000 is ~65 s at the measured rate, past any default
+             # duration, so the window is whatever the caller asked for.
+             problem={"hidden": 2048, "replays": 200000, "dtype": "bf16"},
              score_source=ScoreSource(MONITOR,
                  counters=(
                      'execution_stats.execution_summary.completed',
                      'execution_stats.period',
                  ),
-                 formula='delta(completed) / period')),
+                 # completed is a tally per sampling period, not a running
+                 # total (trn1.2xlarge 2026-09-10: it falls to zero when the
+                 # work stops, and the tallies sum to the replays run). This
+                 # read delta(completed) / period until then.
+                 formula='sum(completed) / sum(period) over whole busy periods')),
 
     # -- ai_auxiliary ------------------------------------------------------
     Workload("rag_embedding", "ai_auxiliary",
@@ -698,6 +714,22 @@ PART_PEAKS = {
 PEAK_FOR_UNIT = {
     "GB/s": "hbm_gbps",
     "TFLOPS": "bf16_tflops",
+}
+
+# GB/s workloads whose bytes do not cross the HBM path, so the HBM ceiling
+# is not theirs. The unit matched and the column divided anyway: the
+# 2026-09-10 --test all on trn1.2xlarge printed pcie_bandwidth at "0.44%
+# of 880.5 GB/s" -- a host-to-device PCIe rate as a share of device
+# memory bandwidth, which is not a fraction of anything. No PCIe or
+# NeuronLink ceiling has been verified for these parts, so they get none
+# rather than a borrowed one.
+NO_PUBLISHED_PEAK = {
+    "pcie_bandwidth": "host-to-device PCIe transfers; the HBM ceiling is not "
+                      "on this path and no PCIe ceiling has been verified",
+    "all_reduce": "a collective's bus bandwidth between cores; no NeuronLink "
+                  "or on-chip interconnect ceiling has been verified",
+    "p2p_thrasher": "device-to-device transfers; no NeuronLink ceiling has "
+                    "been verified",
 }
 
 # What pantheongpu reports for those names since v1.0.19.

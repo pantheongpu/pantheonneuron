@@ -77,7 +77,7 @@ def _prose():
     return [
         "## How a monitor-sourced Score is read",
         "",
-        "The five compute workloads declare `mean(effective_flops) / 1e12`. "
+        "The five compute workloads declare `mean(effective_flops over whole busy periods) / 1e12`. "
         "That counter exists only in the neuron-monitor stream — it is absent "
         "from the CloudWatch metric set, and sysfs leaves `flop_count` at zero "
         "— so unlike the bandwidth kernels, their Score cannot come from the "
@@ -99,7 +99,7 @@ def _prose():
         "monitor caught and read as a measurement.",
         "",
         "`graph_replay` is also neuron-monitor-sourced but is **not** on this "
-        "path: its formula is `delta(completed) / period` in graph-steps/s. "
+        "path: its formula is `sum(completed) / sum(period)` over whole busy periods, in graph-steps/s. "
         "The gate matches on the declared counter, not on the source, so the "
         "FLOPS arithmetic cannot reach it.",
         "",

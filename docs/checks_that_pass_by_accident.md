@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-one of them, and they are collected
+would go. This repo has now produced twenty-three of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -402,6 +402,13 @@ answer looks different from a right one. `run()` now builds those
 operands and checks every row-tile of the product after the clock stops
 (`rows_in_wrong_place`); a wrong tile becomes the run's warning.
 
+A second instance the same day, in graph_replay. Its chain multiplied
+all-ones matrices, so every element grew by 2048 per replay and bf16
+overflowed to inf by the twelfth. The check that the replays executed
+was "the result can be read back". inf can be, so 12 executed replays
+and 60,000 passed the same way. The chain is now a cyclic permutation,
+and its final position says how many replays ran.
+
 The general form: **a correctness check is only as strong as the set of
 wrong answers that produce a different output.** Uniform inputs collapse
 that set. Before trusting a check against a change, plant the defect the
@@ -424,6 +431,71 @@ assumed the second. The tests now assert the row's Status and Score for
 each failure. Reverting either fix fails them, which was checked by
 reverting it.
 
+### 22. The counter's meaning was assumed, and a finding was built on it
+
+neuron-monitor's `execution_summary.completed` is a tally per sampling
+period. This suite read it as a running total, taking its maximum as the
+run's executions and last minus first as a rate. The AWS guide says
+only "executions completed successfully", so the assumption was never
+checked against anything.
+
+It produced worse than a wrong number: a **finding**. graph_replay's
+docstring recorded, as measured, that "roughly four replays reach the
+device as one NEFF execution". The evidence was 60,000 replays submitted
+against 14,737 completed, from one run, both counters side by side. That
+was the right method, and it gave the wrong conclusion, because 14,737 was
+one period's tally. The declared Score from last minus first read 729,
+1174, 1012 or 1506 graph-steps/s on different runs. That drift was
+explained twice more, as compile time left in a span and as a thin
+sample, before anyone asked what the counter counted.
+
+The observation that settled it: the monitor kept sampling after the work
+stopped, and the counter fell to zero. A running total cannot fall.
+Measured on trn1.2xlarge 2026-09-10, the tallies sum to 60,003 for 60,000
+replays, and whole periods give 3059/s against the loop's 3057.
+
+The right reading had been in the repo from the start. The 2026-08-26
+schema probe's baseline in `data/baselines.json` is derived as
+"completed 816 / period 1.00059", a tally over its period. The code
+written later read the same field another way, and nothing compared the
+two.
+
+Once the periods were visible, the same flaw showed up in the other
+counter. `effective_flops` is correctly a rate per period, but the
+TFLOPS Score averaged every busy period, including the partly busy
+first and last. On one `tensor_virus` run the edges read 18.25 and 53.43
+against ~72.3 in between, which put the Score 14% low. The five-sample
+minimum had been set against that same symptom (17.74 / 26.14 / 26.13)
+and attributed to thin sampling. It was the edges.
+
+The same function had summed the `error_summary` counts from the same
+stats block, which only makes sense if they are per-period. Two
+readings of one block's semantics sat a few lines apart. **When a counter
+is undocumented, measure what it does at a boundary** (idle, stop,
+restart) before building on it. A second quantity catches a
+disagreement, but it cannot say which side is wrong.
+
+### 23. The tolerance was widened to fit a bias, and let a wrong graph through
+
+memory_read's profiler figure is checked against its wall-clock rate,
+and the check allowed 50%. It had to. The profiler divided by
+`total_time`, which includes a 2.08 ms startup the workload never pays,
+so the honest profile figure ran 6% low at 8 GiB and 35% low at 1 GiB.
+Any tighter and the check would have rejected the right graph.
+
+But the check also existed to reject the *wrong* graph. At 1 GiB on
+trn1.2xlarge 2026-09-10, a buffer-copy graph that read the same 1 GiB
+(and wrote it, with no vector work) was among the candidates. Over its
+active time it reads 0.66 of the wall clock, which is inside 50%. The
+kernel's own graph, once the startup is removed, reads within 0.5–2.3%
+of the wall clock at every size.
+
+The tolerance was sized to the bias, so every error smaller than the
+bias passed. Removing the bias let the check be tight (15%), and a tight
+check rejects the copy graph. **When a check needs a wide margin, find
+out what is using the margin.** A bias absorbed into a tolerance does
+not go away. It becomes the check's blind spot.
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -444,4 +516,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-one above were found by reading what a passing check had filtered out.
+twenty-three above were found by reading what a passing check had filtered out.

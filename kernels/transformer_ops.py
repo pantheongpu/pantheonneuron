@@ -171,6 +171,8 @@ def decode_step_flops(hidden: int, context: int, batch: int = 1) -> int:
     arithmetic that makes decode latency-bound where prefill is
     compute-bound, and the reason they are separate workloads.
     """
+    # q, k, v and o for the new token. llm_decode computed only q and o
+    # until 2026-09-11 while this counted four; the kernel now matches.
     projections = 4 * (2 * batch * hidden * hidden)
     attention_matmuls = 2 * (2 * batch * context * hidden)
     mlp = 2 * (2 * batch * hidden * 4 * hidden)

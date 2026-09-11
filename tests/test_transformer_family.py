@@ -627,10 +627,25 @@ def test_a_step_costs_a_whole_cache_copy_not_a_slice():
     """
     plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
 
-    assert plan["bytes_per_step"] == 2 * plan["resident_bytes"]
+    # Counted by neuron-profile on trn1.2xlarge 2026-09-11: every slot
+    # graph read 268.47 MB and wrote 247.46 MB -- twice the resident caches
+    # read, 1.84x written. This test asserted 2 x resident before the count.
+    assert plan["read_bytes_per_step"] == pytest.approx(268.47e6, rel=0.001)
+    assert plan["write_bytes_per_step"] == pytest.approx(247.46e6, rel=0.001)
+    assert plan["bytes_per_step"] > 3.8 * plan["resident_bytes"]
     assert plan["bytes_per_step"] > plan["slice_bytes"]
     # The gap is the size of the mistake, and it grows with the cache.
-    assert plan["bytes_per_step"] / plan["slice_bytes"] == plan["ring_slots"] * 2
+    assert plan["bytes_per_step"] / plan["slice_bytes"] > plan["ring_slots"] * 3.8
+
+
+def test_the_counted_traffic_matches_the_loops_step_time():
+    """516 MB per step at the loop's 380.9 steps/s is 197 GB/s: memory-bound,
+    as a copy of both caches twice should be. The old plan's 102 read as an
+    update running at a third of the read bandwidth."""
+    plan = llm_inference.cache_plan(PROBLEMS["kv_cache_churn"])
+    gbps = plan["bytes_per_step"] * 380.9 / 1e9
+    assert 190 < gbps < 205
+    assert llm_inference.verify_memory_bound(gbps * 1e9) is None
 
 
 def test_a_step_writes_every_layer_not_one():
@@ -1825,3 +1840,21 @@ def test_read_back_still_works_on_a_plain_object():
 
     assert transformer_ops.read_back(Flat()) == 2.5
     assert transformer_ops.read_back(None) is None
+
+
+def test_decode_multiplies_every_weight_its_flop_count_charges_for():
+    """decode_step_flops counts q, k, v and o projections and a two-matrix
+    MLP. run_decode used q and o only until 2026-09-11: it read 10 h^2
+    weights per layer where a decode reads 12, while the implied_tflops
+    beside it charged for 12."""
+    code = sourcecheck.function_code(llm_inference.run_decode)
+    for weight in ("q", "k", "v", "o", "w1", "w2"):
+        assert f'params [ "{weight}" ]' in code or f'params["{weight}"]' in code, weight
+
+
+def test_the_new_tokens_key_and_value_reach_the_output():
+    """Computed but unused, k and v would be dead code the compiler drops --
+    projections charged for and never run. Both must feed the attention."""
+    code = sourcecheck.flat_function_code(llm_inference.run_decode)
+    assert "k_new" in code[code.index("fresh ="):code.index("probs =")]
+    assert "v_new" in code[code.index("attended ="):code.index("state = state +")]

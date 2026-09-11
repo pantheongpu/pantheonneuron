@@ -22,6 +22,10 @@ VERIFIED_COUNTERS = {
     "execution_stats.period",
     # neuron-profile
     "hbm_read_bytes", "hbm_write_bytes", "total_time",
+    # Read from memory_read's kernel graph on trn1.2xlarge 2026-09-10 at
+    # 1, 2, 4 and 8 GiB (3.934 / 7.867 / 15.746 / 31.463 ms); see
+    # data/validation-2026-09-10/trn1-profile-startup.log.
+    "total_active_time",
     "neuroncore_cycle_count", "throttle_active_nc0_time_ns",
     "tensor_engine_active_time_percent", "vector_engine_active_time_percent",
     "scalar_engine_active_time_percent", "gpsimd_engine_active_time_percent",

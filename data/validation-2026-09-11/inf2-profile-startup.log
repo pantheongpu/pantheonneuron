@@ -1,0 +1,19 @@
+# inf2.xlarge (us-east-1d), 2026-09-11 UTC. The profiler startup on the other part.
+# --duration 20, one run each, same tree as trn1-full-pass.log section 2.
+# PREDICTED: the same ~2 ms startup; Scores within a few percent of the wall clock.
+
+=== inf2: memory_read ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    62.04% of 440.25 GB/s across 1 of 2 core(s)
+   Score 273.116 neuron-profile
+   Measurement {'profiler_time_basis': 'total_active_time', 'profiler_startup_s': 0.002074494, 'profiler_total_time_s': 0.033526094909, 'analytic_gbps': 271.2141071983839}
+=== inf2: memory_write ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    57.82% of 440.25 GB/s across 1 of 2 core(s)
+   Score 254.5729 neuron-profile
+   Measurement {'profiler_time_basis': 'total_active_time', 'profiler_startup_s': 0.002092171, 'profiler_total_time_s': 0.01896344021, 'analytic_gbps': 255.2974581792983}
+=== inf2: pcie_bandwidth ===
+[PANTHEON-NEURON]    PASS
+   Score 2.1613 workload
+   Measurement {'profiler_time_basis': None, 'profiler_startup_s': None, 'profiler_total_time_s': None, 'analytic_gbps': 2.1613494314335875}
+

@@ -480,17 +480,52 @@ def select_by_plan(candidates: typing.Sequence[str],
 
 def bandwidth_gbps(counters: typing.Mapping[str, typing.Any],
                    direction: str = "read") -> float:
-    """Compute HBM bandwidth exactly as the registry's formula declares.
+    """HBM bandwidth of one NEFF execution: bytes over the time it was active.
 
-    ``hbm_read_bytes / total_time / 1e9``. Both counters are per-execution,
-    so this is the bandwidth of one NEFF run, not of the whole workload.
+    ``hbm_read_bytes / total_active_time / 1e9``, falling back to
+    ``total_time`` when the profile does not report an active time.
+
+    **total_time carries a startup the workload does not pay.** Measured on
+    trn1.2xlarge 2026-09-10, memory_read's kernel graph at four sizes:
+
+        buffer   total_time   total_active_time   wall per pass
+        1 GiB      6.020 ms        3.934 ms          4.025 ms
+        2 GiB      9.950           7.867             7.968
+        4 GiB     17.825          15.746            15.855
+        8 GiB     33.540          31.463            31.614
+
+    The profiled execution opens with 2.08 ms in which no byte moves -- the
+    trace's DMA throughput reads 0 across its first ~2 ms, then a steady
+    273-275 GB/s. The same kernel back to back in the timed loop pays
+    about 0.08 ms of fixed cost per pass, so the startup belongs to the
+    single profiled execution, not to the workload. Over total_time the
+    declared Score read 178.4, 215.8, 240.9 and 256.1 GB/s: a bias set by
+    the pinned size. Over total_active_time it reads 272.9, 273.0, 272.8
+    and 273.0, within 0.5-2.3% above the wall clock, as a rate without the
+    loop's per-pass overhead should be.
+
+    total_active_time is the union of time any engine or DMA queue was
+    busy, so it excludes only time in which nothing ran. A kernel stalled
+    on its consumer is still active (the consumer is), which keeps the
+    consumer-bound case -- memory_read.verify_consumer_not_binding -- from
+    being hidden by the change.
     """
     key = {"read": "hbm_read_bytes", "write": "hbm_write_bytes"}[direction]
-    total_time = counters.get("total_time")
     measured = counters.get(key)
-
     if not isinstance(measured, (int, float)):
         raise ProfilerUnavailable(f"{key} missing from profiler output")
+    seconds, _ = execution_window(counters)
+    return measured / seconds / 1e9
+
+
+def execution_window(counters: typing.Mapping[str, typing.Any]
+                     ) -> typing.Tuple[float, str]:
+    """The time a profiled execution was doing anything, and which counter
+    said so. See bandwidth_gbps for why total_time is only the fallback."""
+    total_time = counters.get("total_time")
     if not isinstance(total_time, (int, float)) or total_time <= 0:
         raise ProfilerUnavailable("total_time missing or non-positive")
-    return measured / total_time / 1e9
+    active = counters.get("total_active_time")
+    if isinstance(active, (int, float)) and 0 < active <= total_time:
+        return float(active), "total_active_time"
+    return float(total_time), "total_time"

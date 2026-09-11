@@ -1,0 +1,63 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. effective_flops per sampling period, and the
+# Scores after averaging whole periods only. Raw output; host paths removed.
+#
+## 1. Probe: NeuronMonitor through tensor_virus 8192^3 (coalesced) for 30 s, 15 s idle tail.
+##    PREDICTED: if edges dilute, first/last nonzero samples well below ~72.5 and the
+##    all-sample mean a few percent under the interior mean. Then pcie_bandwidth through the
+##    harness, to confirm no Percent Of Peak line after NO_PUBLISHED_PEAK.
+=== 1. effective_flops per sample, tensor_virus 8192^3 ===
+analytic 71.93 TFLOPS over 30.0s, run returned at t=361.1s, tiling coalesced, row-tiles wrong 0
+  t= 237.0  period=0  effective_flops=   0.00 TFLOPS  util=0
+  t= 242.0  period=4.9945  effective_flops=   0.00 TFLOPS  util=0
+  t= 247.0  period=4.9997  effective_flops=   0.00 TFLOPS  util=0
+  t= 252.0  period=4.9995  effective_flops=   0.00 TFLOPS  util=0
+  t= 257.0  period=5.0002  effective_flops=   0.00 TFLOPS  util=0
+  t= 262.0  period=4.9999  effective_flops=   0.00 TFLOPS  util=0
+  t= 267.0  period=4.9997  effective_flops=   0.00 TFLOPS  util=0
+  t= 272.0  period=5.0000  effective_flops=   0.00 TFLOPS  util=0
+  t= 277.0  period=4.9997  effective_flops=   0.00 TFLOPS  util=0
+  t= 282.0  period=5.0007  effective_flops=   0.00 TFLOPS  util=0
+  t= 287.0  period=4.9993  effective_flops=   0.00 TFLOPS  util=0
+  t= 292.0  period=5.0007  effective_flops=   0.00 TFLOPS  util=0
+  t= 297.0  period=4.9992  effective_flops=   0.00 TFLOPS  util=0
+  t= 302.0  period=5.0004  effective_flops=   0.00 TFLOPS  util=0
+  t= 307.0  period=4.9995  effective_flops=   0.00 TFLOPS  util=0
+  t= 312.0  period=5.0003  effective_flops=   0.00 TFLOPS  util=0
+  t= 317.0  period=4.9998  effective_flops=   0.00 TFLOPS  util=0
+  t= 322.0  period=5.0000  effective_flops=   0.00 TFLOPS  util=0
+  t= 327.0  period=4.9998  effective_flops=   0.00 TFLOPS  util=0
+  t= 332.0  period=4.9996  effective_flops=  18.25 TFLOPS  util=25.080235638495097
+  t= 337.0  period=5.0003  effective_flops=  72.34 TFLOPS  util=99.22200402426472
+  t= 342.0  period=4.9995  effective_flops=  72.35 TFLOPS  util=99.23653534850907
+  t= 347.0  period=5.0008  effective_flops=  71.02 TFLOPS  util=97.40249027757963
+  t= 352.0  period=4.9999  effective_flops=  72.35 TFLOPS  util=99.23013758253997
+  t= 357.0  period=4.9997  effective_flops=  72.57 TFLOPS  util=99.53471650866132
+  t= 362.0  period=5.0001  effective_flops=  53.43 TFLOPS  util=73.28712503844935
+  t= 367.0  period=4.9992  effective_flops=   0.00 TFLOPS  util=0
+  t= 372.0  period=5.0004  effective_flops=   0.00 TFLOPS  util=0
+all nonzero: n=7 mean 61.76   interior: n=5 mean 72.13   edges 18.25, 53.43
+=== 2. pcie_bandwidth through the harness ===
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.5 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-09-08 split was a per-pass host allocation, not the link), then the negoti
+
+
+## 2. Harness after whole_period_flops, --duration 30 --repeat 3 each.
+=== tensor_virus ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    76.27% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 72.4564 to 72.5148, median 72.4568, cv 0.0005
+   Score 72.4568 | Detail: '' | cv 0.0005
+   last repeat: mean 72.46 mean_all_samples 71.94 whole 4 of 6
+=== pulse_virus ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    76.15% of 47.5 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 36.1189 to 37.0538, median 36.1727, cv 0.0144
+   Score 36.1727 | Detail: '' | cv 0.0144
+   last repeat: mean 36.17 mean_all_samples 37.42 whole 4 of 6
+=== omni_virus ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    56.97% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 54.1147 to 54.1185, median 54.1183, cv 0.0
+   Score 54.1183 | Detail: '' | cv 0.0
+   last repeat: mean 54.11 mean_all_samples 54.03 whole 4 of 6
+

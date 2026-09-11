@@ -1,0 +1,104 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. python pantheon_neuron.py --test all --duration 30
+# One process, at commit 06ac77a: whole-period effective_flops, per-period completion
+# tallies with the idle-tail wait, profiler bandwidth over total_active_time, NO_PUBLISHED_PEAK.
+# PREDICTED: 24 PASS / 0 FAIL / 2 SKIPPED, no new check firing on a real workload.
+# Console filtered to workload / status / percent-of-peak / report, cut at 330 characters.
+# memory_read and memory_write are analytic here by design (a cores:"all" workload in the
+# selection turns the profiler reservation off). pcie_bandwidth's advice is the old message:
+# this pass ran the committed code; section 2 is the new guard on the same instance.
+
+[PANTHEON-NEURON] no core reserved: memory_read_agg measures all cores
+[PANTHEON-NEURON] -> baseline_metrics
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    61.64% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    57.55% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] -> tensor_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    76.21% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> int_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> pulse_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    76.04% of 47.5 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> transformer_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    56.14% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> omni_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    56.91% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 3 candidate NEFF(s) moved the planned 8589934592 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-11 03:16:41.573220  3344:3351  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 
+[PANTHEON-NEURON]    61.74% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> memory_write
+[PANTHEON-NEURON]    PASS (profiler unavailable, Score is analytic: none of 7 candidate NEFF(s) moved the planned 4294967296 bytes -- model.neff: capture failed (neuron-profile exited 1: 2026-Sep-11 03:17:19.830713  3601:3610  ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s) not available - Requested:2 
+[PANTHEON-NEURON]    58.35% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] -> all_reduce
+[PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+[PANTHEON-NEURON] -> p2p_thrasher
+[PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.6 the other way -- before reading this as a link property, check that both legs reused a preallocated buffer (the 2026-09-08 split was a per-pass host allocation, not the link), then the negotiated link width)
+[PANTHEON-NEURON] -> llm_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> llm_prefill
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> kv_cache_churn
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> fused_attention
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> quantized_gemm
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> serving_mix
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> speculative_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> moe_router
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> transformer_train_step
+[PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and the model never updates. The Score still measures what a training step costs; it does not measure train
+[PANTHEON-NEURON] -> allocation_fragmentation
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> graph_replay
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> rag_embedding
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] -> vision_encoder
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON] report: database/pantheon_neuron_report_20260911_025442.json
+
+
+## Report rows
+baseline_metrics         PASS     None   [None]
+memory_read_agg          PASS     542.7083 GB/s  [workload]
+memory_write_agg         PASS     506.7571 GB/s  [workload]
+tensor_virus             PASS     72.4042 TFLOPS  [neuron-monitor]
+int_virus                PASS     78.1224 TOPS  [neuron-monitor]
+pulse_virus              PASS     36.1187 TFLOPS  [neuron-monitor]
+transformer_virus        PASS     53.3325 TFLOPS  [neuron-monitor]
+omni_virus               PASS     54.0607 TFLOPS  [neuron-monitor]
+memory_read              PASS     271.7884 GB/s  [analytic (bytes moved / wall time); declared source is neuron-profile hbm_read_bytes]
+memory_write             PASS     256.8956 GB/s  [analytic (bytes moved / wall time); declared source is neuron-profile hbm_write_bytes]
+all_reduce               SKIPPED  None GB/s  [None]
+p2p_thrasher             SKIPPED  None GB/s  [None]
+pcie_bandwidth           PASS     3.8944 GB/s  [workload]
+llm_decode               PASS     20.6044 tokens/s  [workload]
+llm_prefill              PASS     3811.8934 prompt-tokens/s  [workload]
+kv_cache_churn           PASS     97274.8413 cache-updates/s  [workload]
+fused_attention          PASS     6050.1951 attention-tiles/s  [workload]
+quantized_gemm           PASS     18455805973759.996 quantized-ops/s  [workload]
+serving_mix              PASS     2.4779 requests/s  [workload]
+speculative_decode       PASS     73.7459 verified-tokens/s  [workload]
+moe_router               PASS     255068.4171 routed-tokens/s  [workload]
+transformer_train_step   PASS     3.647 train-steps/s  [workload]
+allocation_fragmentation PASS     2311.7898 allocation-events/s  [workload]
+graph_replay             PASS     3003.6247 graph-steps/s  [neuron-monitor]
+rag_embedding            PASS     854.3653 embedding-vectors/s  [workload]
+vision_encoder           PASS     58144.9553 image-tiles/s  [workload]
+
+## 2. pcie_bandwidth with the guard naming the measured d2h cliff (uncommitted at the time)
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 5.9 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link)

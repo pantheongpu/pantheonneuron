@@ -1,6 +1,6 @@
 """Dense matmul kernel for the ``tensor_virus`` workload.
 
-Score: **TFLOPS**, from ``mean(effective_flops) / 1e12`` as declared in the
+Score: **TFLOPS**, from ``mean(effective_flops over whole busy periods) / 1e12`` as declared in the
 registry. That counter comes from neuron-monitor rather than from this
 kernel, so the Score is read by the orchestrator after the monitor stops --
 see ``pantheon_neuron.monitor_score``. What this module returns is the
@@ -23,6 +23,8 @@ caller across ``mark_step()``, for the reason memory_read documents.
 STATUS: VERIFIED ON HARDWARE at the pinned 8192^3 shape, trn1.2xlarge.
 Coalesced tiling (the default) 2026-09-10: 70.42 TFLOPS analytic, 71.80
 by neuron-monitor (median of three), every row-tile of the product exact.
+72.46 at cv 0.0005 once the monitor mean stopped including the partly
+busy first and last sampling periods (neuron_monitor.whole_period_flops).
 Streaming tiling 2026-09-08 and 2026-09-10: 26.1 TFLOPS, product exact.
 Earlier verification at reduced shapes on inf2.xlarge 2026-09-07:
 ``verify_product_is_correct`` returned exactly 1.0 at 1024^3 (2.68 TFLOPS)

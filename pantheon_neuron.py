@@ -337,7 +337,18 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         if window:
             detail = "; ".join(filter(None, [detail, window]))
 
+    # A rate workload's last busy period is only reported when it closes,
+    # so wait for one idle period before stopping -- see
+    # NeuronMonitor.await_idle_period.
+    tail_reported = None
+    if telemetry_started and status == "PASS" and _wants_execution_rate(workload):
+        tail_reported = monitor.await_idle_period()
     metrics = monitor.stop() if telemetry_started else {"samples": 0}
+    if tail_reported is not None:
+        metrics["execution_tail_reported"] = tail_reported
+        unaccounted = executions_unaccounted(metrics, run_result)
+        if unaccounted:
+            detail = "; ".join(filter(None, [detail, unaccounted]))
 
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
         status = "FAIL"
@@ -381,19 +392,31 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             thin = thin_monitor_sample(metrics, workload)
             if thin:
                 detail = "; ".join(filter(None, [detail, thin]))
-        elif score is None and (_wants_monitor_score(workload)
-                                or _wants_execution_rate(workload)):
+        elif _wants_monitor_score(workload) or _wants_execution_rate(workload):
             counter = ("effective_flops" if _wants_monitor_score(workload)
                        else "execution rate")
-            # neuron_monitor.execution_rate says which of the three reasons
-            # it was -- no samples, one sample, or a counter that never
-            # advanced. Those need different responses and the generic
-            # message covered all three: graph_replay degraded on
-            # 2026-09-10 and the row said only that the rate was absent.
-            because = metrics.get("execution_rate_absent")
-            detail = detail or "; ".join(filter(None, [
-                f"neuron-monitor reported no {counter}, so this run has "
-                "no Score from its declared source",
+            # neuron_monitor says which of its reasons it was -- no samples,
+            # no whole period, a counter that never moved. Those need
+            # different responses and a generic message covered all of
+            # them: graph_replay degraded on 2026-09-10 and the row said
+            # only that the rate was absent.
+            because = metrics.get("execution_rate_absent"
+                                  if _wants_execution_rate(workload)
+                                  else "effective_flops_absent")
+            # Said whether or not the kernel's own figure takes the Score's
+            # place. It was said only when there was no fallback, so a
+            # 5-second tensor_virus on trn1.2xlarge 2026-09-11 published
+            # its analytic 72.45 with an empty Detail: the Score Method
+            # recorded the fallback, and nothing recorded why ("run
+            # longer"). memory_read's profiler fallback always said.
+            consequence = ("the kernel's analytic figure is published instead"
+                           if score is not None else
+                           "so this run has no Score from its declared source")
+            # Appended, not substituted for an empty detail: it was
+            # `detail or ...`, so any earlier note dropped this sentence.
+            detail = "; ".join(filter(None, [
+                detail,
+                f"neuron-monitor reported no {counter}, {consequence}",
                 because,
             ]))
 
@@ -553,42 +576,49 @@ OVERRIDE_DISAGREEMENT = 1.5
 SPAN_OVERHANG = 1.1
 
 
+# Executions the device runs besides the replays themselves: the warm-up
+# and the graphs that place the operands. Three on trn1.2xlarge
+# 2026-09-10 (60,003 completed for 60,000 replays); the bound is loose on
+# purpose, because what it guards against is a shortfall.
+SETUP_EXECUTIONS_MAX = 10
+
+
+def executions_unaccounted(metrics, run_result) -> typing.Optional[str]:
+    """The device's completion count, held against the replays submitted.
+
+    Only when the monitor reported the idle period after the work -- before
+    that, the last busy period's tally is missing and a shortfall is the
+    monitor's, not the device's.
+    """
+    if metrics.get("execution_tail_reported") is not True:
+        return None
+    total = metrics.get("executions_total")
+    replays = run_result.get("replays")
+    if not isinstance(total, int) or not isinstance(replays, int) or replays <= 0:
+        return None
+    if replays <= total <= replays + SETUP_EXECUTIONS_MAX:
+        return None
+    return (
+        f"the device completed {total} executions for {replays} replays "
+        "submitted -- every replay should be one execution, plus a few for "
+        "setup"
+    )
+
+
 def span_outran_the_kernel(span, elapsed) -> typing.Optional[str]:
     """Say so when a rate's denominator is longer than the run it describes.
 
-    ``execution_rate`` trims a leading flat run (the workload compiling)
-    and a trailing one (the workload finished while the monitor sampled),
-    so its span should sit inside the kernel's own window.
+    ``execution_rate`` divides by whole sampling periods the device was busy
+    throughout, so its span should sit inside the kernel's own window.
 
     On trn1.2xlarge 2026-09-10 it did not: graph_replay measured a 20.47s
-    window and the monitor reported a 24.99s span, 22% longer, with
-    ``execution_idle_fraction`` at 0.0 -- meaning nothing was trimmed at
-    either end. Every extra second is time no replay was running, divided
-    into a completion count that stopped growing, so the declared Score
-    came out low by the same 22%.
-
-    That matters here beyond the arithmetic. graph_replay's declared and
-    analytic figures differ by about four, and a denominator inflated by a
-    fifth is exactly the sort of thing that gets offered as the
-    explanation for a discrepancy it is far too small to explain.
-
-    **Where the extra time comes from, as a hypothesis rather than a
-    finding.** The monitor starts before the workload and stops after it,
-    so its window is compile plus run. ``execution_rate`` trims a leading
-    flat run to remove the compile, and that trim only works if the
-    completion counter is perfectly flat while compiling -- any activity
-    at all, from another process or from the warm-up, leaves the leading
-    samples looking like progress and the compile stays in the span.
-
-    That would explain both observations. graph_replay's 24.99s against a
-    20.47s window is a short compile; pulse_virus reported 89.99s against
-    20.00s on trn1.2xlarge 2026-09-10, and its pinned 8192^3 takes about
-    seventy seconds to compile cold. 70 + 20 is 90.
-
-    Not established: it needs a run that records the compile boundary
-    separately, and ``execution_idle_fraction`` reading 0.0 in the
-    graph_replay case says nothing was trimmed, which is consistent with
-    the story and does not prove it.
+    window and the monitor reported a 24.99s span. This docstring offered a
+    hypothesis -- compile time left in the span by an imperfect trim -- and
+    the explanation turned out to be simpler. ``completed`` is a tally per
+    ~5s period, not a running total, so the old span ran from the first
+    busy period to the last: five periods, 25 seconds, two of them only
+    partly busy. The rate now uses interior periods only (15 s of the same
+    run's 19.6), and this check stays as the guard that it keeps doing so.
     """
     if not isinstance(span, (int, float)) or span <= 0:
         return None
@@ -708,6 +738,10 @@ def peak_share(workload, devices, telemetry=None) -> typing.Optional[dict]:
     if peak is None:
         return None
 
+    # The unit picks the ceiling, unless the workload's bytes never use the
+    # path that ceiling describes -- see registry.NO_PUBLISHED_PEAK.
+    if workload.name in registry.NO_PUBLISHED_PEAK:
+        return None
     field = registry.PEAK_FOR_UNIT.get(workload.unit)
     if field is None or peak.get(field) is None:
         return None
@@ -1012,7 +1046,8 @@ _LAST_RUN: typing.Dict[str, dict] = {}
 
 # The counter string exactly as the registry declares it. Matching on the
 # counter rather than on the source is the point: graph_replay is also
-# neuron-monitor-sourced, but its formula is delta(completed) / period and
+# neuron-monitor-sourced, but its formula is a rate over the execution
+# counter and
 # its unit is graph-steps/s. Gating on the source alone would apply the
 # FLOPS arithmetic to it and publish a TFLOPS number wearing a
 # graph-steps/s label -- precisely the unlike-quantity comparison
@@ -1020,8 +1055,9 @@ _LAST_RUN: typing.Dict[str, dict] = {}
 FLOPS_COUNTER = "neuroncore_counters.*.effective_flops"
 
 # The other monitor-sourced formula. graph_replay declares
-# delta(completed) / period in graph-steps/s, which is a rate over the
-# execution counter rather than an average of a throughput counter -- the
+# sum(completed) / sum(period) in graph-steps/s, which is a rate over the
+# execution counter's per-period tallies rather than an average of a
+# throughput counter -- the
 # reason the flops gate matches on its counter and not on the source.
 EXECUTIONS_COUNTER = "execution_stats.execution_summary.completed"
 
@@ -1049,7 +1085,7 @@ def _wants_monitor_score(workload) -> bool:
 def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     """The Score its registry entry declares, read from monitor telemetry.
 
-    The compute workloads declare ``mean(effective_flops) / 1e12``. That
+    The compute workloads declare ``mean(effective_flops over whole busy periods) / 1e12``. That
     counter exists only in the neuron-monitor stream: it is absent from the
     CloudWatch metric set, and sysfs leaves ``flop_count`` at zero. So the
     figure has to be taken from the telemetry the run just collected rather
@@ -1067,10 +1103,10 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
     and be compared against real GPU results.
     """
     if _wants_execution_rate(workload):
-        # delta(completed) / period, computed by the monitor over the span it
-        # actually observed. Absent when fewer than two samples carried the
-        # counter, which is the honest answer for a run too short to measure
-        # a rate over.
+        # Completions over the whole periods the device was busy in -- see
+        # neuron_monitor.execution_rate. Absent when no period was busy
+        # throughout, which is the honest answer for a run too short to
+        # measure a rate over.
         rate = metrics.get("executions_per_s")
         return rate if isinstance(rate, (int, float)) else None
 
@@ -1107,7 +1143,24 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 # So the advice this suite gives -- "run longer or with a shorter
 # --monitor-period" -- is only half right, and the half that works is
 # running longer.
-MIN_FLOPS_SAMPLES = 5
+#
+# **The five was set against a symptom of something else.** The spread it
+# guarded against -- 17.74, 26.14, 26.13 -- was a partly busy edge period
+# pulling the mean down, not too few readings: on trn1.2xlarge 2026-09-10
+# the whole periods of one tensor_virus run read 72.34, 72.35, 71.02,
+# 72.35, 72.57, and the two edges 18.25 and 53.43. The mean is now over
+# whole periods only (neuron_monitor.whole_period_flops), each already a
+# 5-second average of a steady kernel, and two is the least that lets one
+# be checked against another -- the same reasoning as MIN_RATE_PERIODS.
+MIN_FLOPS_SAMPLES = 2
+
+# The completion rate needs fewer, because each of its samples is not a
+# reading but a tally: execution_summary.completed counts every execution
+# in its period. Measured on trn1.2xlarge 2026-09-10, graph_replay's three
+# whole periods read 3082, 3055 and 3040 per second against the loop's
+# 3057 -- any one of them within 1.4%. Two is the least that lets one
+# period be checked against another.
+MIN_RATE_PERIODS = 2
 
 
 def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
@@ -1132,14 +1185,13 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
     every workload but graph_replay uses.
     """
     if workload is not None and _wants_execution_rate(workload):
-        samples = metrics.get("execution_samples")
-        if not isinstance(samples, int) or samples >= MIN_FLOPS_SAMPLES:
+        periods = metrics.get("execution_samples_used")
+        if not isinstance(periods, int) or periods >= MIN_RATE_PERIODS:
             return None
         return (
-            f"the completion counter moved across {samples} sample(s); a "
-            f"rate over fewer than {MIN_FLOPS_SAMPLES} moves with any one "
-            "of them, so run longer before quoting this -- neuron-monitor "
-            "floors around 2s per sample whatever --monitor-period asks for"
+            f"the completion rate rests on {periods} whole sampling "
+            f"period(s); fewer than {MIN_RATE_PERIODS} leaves no second "
+            "period to check it against, so run longer before quoting this"
         )
 
     flops = metrics.get("effective_flops") or {}
@@ -1148,10 +1200,11 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
     if not counts or min(counts) >= MIN_FLOPS_SAMPLES:
         return None
     return (
-        f"effective_flops averaged over {min(counts)} sample(s); a mean over "
-        f"fewer than {MIN_FLOPS_SAMPLES} moves with any one of them, so run "
-        "longer before quoting this -- neuron-monitor floors around 2s per "
-        "sample whatever --monitor-period asks for"
+        f"effective_flops averaged over {min(counts)} whole sampling "
+        f"period(s); fewer than {MIN_FLOPS_SAMPLES} leaves no second period "
+        "to check it against, so run longer before quoting this -- "
+        "neuron-monitor floors around 2s per sample whatever "
+        "--monitor-period asks for"
     )
 
 
@@ -1204,6 +1257,8 @@ _PROVENANCE_KEYS = (
     "hbm_read_bytes",
     "hbm_write_bytes",
     "profiler_total_time_s",
+    "profiler_time_basis",
+    "profiler_startup_s",
     # The cross-check the profiler figure is meant to be compared against.
     "analytic_gbps",
     # memory_read: which side set the rate -- the loads or the reduction

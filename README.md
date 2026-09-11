@@ -102,19 +102,19 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 | Workload | Status | Measured | Score source |
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
-| `memory_read` | ✅ scored from its declared source | 256.17 GB/s | `neuron-profile` |
-| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 226.50 GB/s | `neuron-profile` |
+| `memory_read` | ✅ scored from its declared source | 272.94 GB/s | `neuron-profile` |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 254.31 GB/s | `neuron-profile` |
 | `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
 | `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
-| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 71.80 TFLOPS | `neuron-monitor` |
+| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 72.46 TFLOPS | `neuron-monitor` |
 | `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
-| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 37.42 TFLOPS | `neuron-monitor` |
-| `omni_virus` | ✅ at the pinned 8192³ | 54.02 TFLOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 36.17 TFLOPS | `neuron-monitor` |
+| `omni_virus` | ✅ at the pinned 8192³ | 54.12 TFLOPS | `neuron-monitor` |
 | `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
-| `graph_replay` | ✅ rate trimmed of compile time | 3,040.2 graph-steps/s | `neuron-monitor` |
+| `graph_replay` | ✅ per-period completion tallies, cv 0.006 | 3,038.8 graph-steps/s | `neuron-monitor` |
 | `allocation_fragmentation` | ✅ | 2,265.7 events/s | workload |
 | `llm_prefill` | ✅ pre-normalised, no NaN | 3,810.1 prompt-tokens/s | workload |
-| `llm_decode` | ✅ | 20.63 tokens/s | workload |
+| `llm_decode` | ✅ q, k, v and o per token since 2026-09-11 | 17.53 tokens/s | workload |
 | `kv_cache_churn` | ✅ memory-bound at last | 97,438 cache-updates/s | workload |
 | `fused_attention` | ✅ | 6,045.9 attention-tiles/s | workload |
 | `quantized_gemm` | ✅ | 18.44 TOPS | workload |
@@ -203,7 +203,7 @@ part.
 
 ### The pinned problem compiles, and neuron-monitor finally scored
 
-`tensor_virus` and its four relatives declare `mean(effective_flops) / 1e12`
+`tensor_virus` and its four relatives declare `mean(effective_flops over whole busy periods) / 1e12`
 from neuron-monitor. **That source had never once produced a Score**, and the
 reason was not the monitor: the pinned 8192³ problem had never compiled, so
 the compute workloads had only ever been run by hand at a reduced shape,
@@ -285,6 +285,14 @@ history: 2 of 4, on both parts.**
 | `memory_write` | 226.50 GB/s | 226.77 GB/s | **`neuron-profile`** |
 | `allocation_fragmentation` | 544.42 | 492.93 | workload |
 | `pcie_bandwidth` | 3.56 GB/s | 2.12 GB/s | workload |
+
+*Correction, 2026-09-10 later:* both profiler figures above divided by
+`total_time`, which opens with a 2.08 ms idle startup that the workload's
+back-to-back executions don't pay. Over `total_active_time` the same
+kernels read **272.94** and **254.31** GB/s on trn1.2xlarge and **273.12**
+and **254.57** on inf2.xlarge, with the same 2.07–2.09 ms startup on both
+parts and each within 1.1% of its wall clock. The parts still agree; they
+had agreed on a figure 6–11% low. See `kernels/profiler.bandwidth_gbps`.
 
 `memory_read`'s 256.17 GB/s cross-checks against the 264 GB/s wall-clock
 figure measured on this part in August, which is what
@@ -592,6 +600,13 @@ hardware source.
 | `vision_encoder` | 1,676,047 | **58,131** | ÷18 — measured ÷28.8 |
 | `serving_mix` | 138 | **0.0312** | a real request is many steps |
 
+*Correction, 2026-09-10 later:* `graph_replay`'s 1,189 and the swing
+before it were not dilution. neuron-monitor's `completed` is a tally per
+sampling period, and the rate was last minus first of two tallies. Read
+as tallies, with the rate taken over whole busy periods, it is
+**3,038.8 graph-steps/s at cv 0.006**, agreeing with the kernel's own
+clock. See [`docs/neuron_counters.md`](docs/neuron_counters.md).
+
 The last four are the size of the "ran a fraction of the model" defect,
 and in each case the prediction made from arithmetic beforehand matched
 the measurement to within a factor of two. That is the one class of
@@ -669,7 +684,14 @@ hidden, a 128 MiB cache and a 256 MiB step — and `bytes_per_step` reports the
 copy rather than the slice, because counting the slice would report a
 sixteenth of what the hardware moves.
 
-**Unverified at this size.** The 2 GiB version never finished compiling.
+**Counted at this size, 2026-09-11, and it is twice what was assumed.**
+neuron-profile on every ring-slot graph at the pinned problem: **268.47 MB
+read and 247.46 MB written per step**, against a 134.22 MB cache. The
+caches are read twice and very nearly rewritten twice, so each append
+moves about 3.8 times the cache it updates. `cache_gbps` counted one copy
+and reported 102 GB/s; the hardware moves **196 GB/s**. That is a
+memory-bound double copy, not an update running at a third of the read
+bandwidth.
 
 ### What repeating the whole pass found
 
@@ -856,16 +878,23 @@ how many chips an instance carries.
 
 | workload | Score | cores it had | of its share |
 |---|--:|--:|--:|
-| `memory_read_agg` | 541.5 GB/s | 2 of 2 | **61.5%** |
-| `memory_read` | 256.1 GB/s | 1 of 2 | 58.2% |
+| `memory_read` | 272.9 GB/s | 1 of 2 | **62.0%** |
+| `memory_read_agg` | 541.5 GB/s | 2 of 2 | 61.5% |
+| `memory_write` | 254.3 GB/s | 1 of 2 | 57.8% |
 | `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
-| `memory_write` | 226.5 GB/s | 1 of 2 | 51.5% |
-| `pulse_virus` | 37.42 TFLOPS | 1 of 2, 50% duty | **78.8%** |
-| `tensor_virus` | 71.80 TFLOPS | 1 of 2 | **75.6%** |
+| `tensor_virus` | 72.46 TFLOPS | 1 of 2 | **76.3%** |
+| `pulse_virus` | 36.17 TFLOPS | 1 of 2, 50% duty | **76.2%** |
 | `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |
-| `omni_virus` | 54.0 TFLOPS | 1 of 2 | 56.8% |
+| `omni_virus` | 54.12 TFLOPS | 1 of 2 | 57.0% |
 | `transformer_virus` | 53.2 TFLOPS | 1 of 2 | 56.0% |
 | `tensor_virus`, `streaming` tiling (before 2026-09-10) | 26.1 TFLOPS | 1 of 2 | 27.5% |
+
+The monitor-sourced figures above are means over **whole** sampling
+periods (trn1.2xlarge 2026-09-10). Until then the mean included the
+partly busy first and last periods: one `tensor_virus` run averaged 61.76
+that way against 72.13 over its whole periods. The repeats now agree to
+cv 0.0005 (`tensor_virus`) and below 0.0001 (`omni_virus`). See
+[`docs/neuron_counters.md`](docs/neuron_counters.md).
 
 "Cores it had" is what the run exposed, not what the problem says. The
 profiler reservation sets `NEURON_RT_VISIBLE_CORES=0` on every
@@ -889,6 +918,12 @@ uses both, and neuron-monitor answered it, trn1.2xlarge 2026-09-10:
 | core 0 | `tensor_virus` | 28.74% | 0.0% |
 | both | `transformer_virus` | 24.35% | **0.0%** |
 | core 0 | `transformer_virus` | 29.85% | 0.0% |
+
+*The core-0 figures are means over every sample, compile included* —
+the utilisation mean was not taken over whole busy periods until
+2026-09-11, and a core busy 97–99.5% throughout its run published 42%.
+They show core 0 was used; they don't show how much. The zeros on core 1
+hold either way.
 
 Core 1 did nothing in any case, for the hand-written NKI kernel and the
 torch-lowered one alike: neither is sharded, and one XLA device is one

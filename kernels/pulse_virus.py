@@ -1,6 +1,6 @@
 """Duty-cycled matmul for the ``pulse_virus`` workload.
 
-Score: **TFLOPS**, from ``mean(effective_flops) / 1e12`` as declared in the
+Score: **TFLOPS**, from ``mean(effective_flops over whole busy periods) / 1e12`` as declared in the
 registry, read by the orchestrator from neuron-monitor after the run.
 
 The load is the same GEMM ``tensor_virus`` runs, switched on and off on a

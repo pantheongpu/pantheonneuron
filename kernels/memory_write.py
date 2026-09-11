@@ -17,7 +17,9 @@ cheap sanity check -- if ``hbm_read_bytes`` comes back anywhere near
 
 STATUS: VERIFIED ON HARDWARE at the pinned size, trn1.2xlarge 2026-09-08
 and 2026-09-10: 226.6 GB/s **from its declared neuron-profile source**, not
-the analytic fallback.
+the analytic fallback -- and 254.31 (cv 0.0013, within 1.1% of the wall
+clock) once the profile's 2.08 ms idle startup stopped counting as
+transfer time. See profiler.bandwidth_gbps.
 
 The registry pinned 8 GiB when this note was first written and that did not
 fit: a NeuronCore on this part has 16 GB, the destination is the whole plan,
@@ -284,6 +286,12 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         "hbm_write_bytes": counters.get("hbm_write_bytes"),
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        # The Score's denominator and what it excludes: the profiled
+        # execution's idle startup, 2.08 ms on trn1.2xlarge 2026-09-10,
+        # which the workload's back-to-back executions do not pay. See
+        # profiler.bandwidth_gbps.
+        "profiler_time_basis": profiler.execution_window(counters)[1],
+        "profiler_startup_s": _startup(counters),
         "profiler_neff": os.path.basename(found["neff"]),
         "profiler_plan_coverage": found["plan_coverage"],
         "profiler_candidates_tried": found["candidates_tried"],
@@ -291,10 +299,30 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
     }
 
 
+# How far the profile figure may sit from the wall-clock one. It was 50%,
+# and had to be while the profile divided by total_time: its bias ran from
+# 6% at 8 GiB to 51% at 1 GiB (trn1.2xlarge 2026-09-10). Over
+# total_active_time the kernel's graph lands 0.5-2.3% above the wall clock
+# at every size, while a buffer-copy graph captured by mistake at 1 GiB
+# read 0.66 of it -- inside the old tolerance, so it would have been
+# published. When the two diverge the kernel's own coverage check decides
+# and the Score falls back to analytic, so tightening this can only cost a
+# declared Score, never publish a wrong one.
+ANALYTIC_TOLERANCE = 0.15
+
+
+def _startup(counters) -> typing.Optional[float]:
+    """Seconds of the profiled execution in which nothing was active."""
+    total, active = counters.get("total_time"), counters.get("total_active_time")
+    if isinstance(total, (int, float)) and isinstance(active, (int, float)):
+        return round(total - active, 9)
+    return None
+
+
 def verify_against_analytic(
     profiler_gbps: typing.Optional[float],
     analytic_gbps: float,
-    tolerance: float = 0.5,
+    tolerance: float = ANALYTIC_TOLERANCE,
 ) -> typing.Optional[str]:
     """Flag a profiler figure that disagrees with the analytic one."""
     if analytic_gbps <= 0:

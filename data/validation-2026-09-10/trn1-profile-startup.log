@@ -1,0 +1,58 @@
+# trn1.2xlarge (us-east-1), 2026-09-10. Does neuron-profile's total_time carry a fixed
+# cost that is not the kernel? memory_read's kernel (2048 wide, cast + sum), 1/2/4/8 GiB bf16.
+# Wall: 20 s loops on core 0, each size its own process. Profiles: core 1.
+# PREDICTED: fixed cost -> total_time - wall/pass ~= 2 ms at every size; else the gap scales.
+
+## 1. The sweep. NOTE: the 1 GiB profile line is the WRONG graph -- the probe took the last
+##    NEFF that read >= the plan, and at 1 GiB that was a buffer-copy graph (section 3).
+=== wall (core 0) ===
+1 GiB  wall/pass    4.025 ms    266.7 GB/s  coverage 1.000000
+2 GiB  wall/pass    7.968 ms    269.5 GB/s  coverage 1.000000
+4 GiB  wall/pass   15.855 ms    270.9 GB/s  coverage 1.000000
+8 GiB  wall/pass   31.614 ms    271.7 GB/s  coverage 1.000000
+=== profile (core 1) ===
+  dma record keys: ['aggregated', 'crc', 'dest', 'dma_engine', 'dma_queue', 'duplicate', 'duration', 'id', 'is_cc_dma', 'op', 'packet_aggregation_id', 'packet_idx', 'queue_type', 'read_size', 'semaphore_id', 'source', 'subgroup', 'timestamp', 'transfer_rate', 'transfer_size', 'variable', 'write_size']
+  top-level keys: ['active_time', 'dma', 'dma_queues_info', 'dma_throughput', 'instruction', 'layer_summary', 'metadata', 'model_info', 'nc_mem_usage', 'neff_header', 'neff_node', 'pending_dma', 'profile_info', 'semaphore_update', 'summary', 'summary_group_order', 'summary_groups', 'terminology', 'warnings']
+1 GiB  total_time    8.167 ms  wall/pass    4.025  gap  4.141 ms  dma window    8.162 ms (if ns)
+2 GiB  total_time    9.950 ms  wall/pass    7.968  gap  1.982 ms  dma window    9.945 ms (if ns)
+4 GiB  total_time   17.825 ms  wall/pass   15.855  gap  1.970 ms  dma window   17.821 ms (if ns)
+8 GiB  total_time   33.540 ms  wall/pass   31.614  gap  1.926 ms  dma window   33.536 ms (if ns)
+
+
+## 2. DMA throughput across the profiled window (ntff.json 'dma' records, binned by timestamp)
+2 GiB  span 9.945 ms, 589923 transfers, 2.149 GB
+   GB/s per 5% of the window: 0 0 0 0 225 275 275 275 275 275 274 273 273 272 273 273 274 273 273 262
+8 GiB  span 33.536 ms, 2359619 transfers, 8.596 GB
+   GB/s per 5% of the window: 0 210 275 273 274 273 274 273 273 274 274 273 273 273 272 273 274 274 271 270
+
+## 3. Every candidate NEFF that read >= half the plan (profiler.summary on the captured .ntff)
+--- 1 GiB (wall/pass 4.025 ms)
+   MODULE_12148182913673613368+  read  1.000 GiB  write  0.000 GiB  total   6.020  active   3.934 ms  vector   2.727 ms
+   MODULE_5173779429852894617+e  read  1.000 GiB  write  1.000 GiB  total   8.167  active   6.083 ms  vector   0.000 ms
+--- 2 GiB (wall/pass 7.968 ms)
+   MODULE_7715519028788069175+e  read  2.000 GiB  write  0.000 GiB  total   9.950  active   7.867 ms  vector   5.454 ms
+--- 4 GiB (wall/pass 15.855 ms)
+   MODULE_10974091716637412706+  read  4.000 GiB  write  0.000 GiB  total  17.825  active  15.746 ms  vector  10.907 ms
+--- 8 GiB (wall/pass 31.614 ms)
+   MODULE_13092126317212588024+  read  8.000 GiB  write  0.000 GiB  total  33.540  active  31.463 ms  vector  21.813 ms
+
+# Kernel graph only: GB/s over total_time 178.4 / 215.8 / 240.9 / 256.1;
+# over total_active_time 272.9 / 273.0 / 272.8 / 273.0; wall 266.7 / 269.5 / 270.9 / 271.7.
+# total_time - total_active_time = 2.09 / 2.08 / 2.08 / 2.08 ms.
+
+## 4. Harness after bandwidth_gbps divides by total_active_time and the analytic tolerance
+##    tightens to 15%. --duration 20 --repeat 3 each.
+##    PREDICTED: memory_read ~273 GB/s, startup ~2.08 ms; memory_write within ~3% of its 257 wall.
+=== memory_read ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    62.0% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 272.7675 to 273.0774, median 272.9379, cv 0.0006
+   Score 272.9379 neuron-profile | Detail: '' | cv 0.0006
+   Measurement {'profiler_time_basis': 'total_active_time', 'profiler_startup_s': 0.002082457, 'profiler_total_time_s': 0.033554576966, 'analytic_gbps': 271.7904233291761, 'profiler_plan_coverage': 1.0}
+=== memory_write ===
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    57.77% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 253.8821 to 254.5386, median 254.3129, cv 0.0013
+   Score 254.3129 neuron-profile | Detail: '' | cv 0.0013
+   Measurement {'profiler_time_basis': 'total_active_time', 'profiler_startup_s': 0.002076211, 'profiler_total_time_s': 0.018964725174, 'analytic_gbps': 257.24701519888674, 'profiler_plan_coverage': 1.0}
+

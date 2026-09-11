@@ -114,6 +114,73 @@ Clearly responsive. Two caveats:
 
 `energy_wh` cannot be derived from this without a unit definition.
 
+### `execution_summary.completed` is a tally per period
+
+**neuron-monitor's `execution_stats.execution_summary.completed` counts the
+executions in its sampling period. It is not a running total.** The
+AWS guide says only "executions completed successfully". Measured on
+trn1.2xlarge 2026-09-10: graph_replay, 60,000 replays, the monitor
+sampling every ~5 s through the compile and an idle tail:
+
+```
+completed:  0 ... 0, 6657, 15409, 15273, 15199, 7465, 0, 0     sum 60,003
+```
+
+It falls back to zero when the work stops, and the tallies sum to the
+replays run plus three setup graphs. Whole periods divided by their
+`period` give 3082, 3055 and 3040 per second, against the kernel's own
+3057.
+
+This suite read it as cumulative: its maximum as the run's total, and
+last minus first as a rate's numerator. The maximum is one period's
+tally, which is where "about four replays per NEFF execution" came from.
+Last minus first is the difference between two periods' tallies, which
+put graph_replay's declared Score anywhere from 729 to 1506, or nowhere.
+The same stats block's `error_summary` counts were already being summed,
+which is right for per-period tallies and inconsistent with treating
+`completed` as a total. That inconsistency sat in one function the whole
+time.
+
+### `effective_flops` is a rate per period, and the edge periods read low
+
+The AWS guide defines `effective_flops` as operations per second during
+the captured period, which is right. But the first and last periods of a
+run are only partly busy, so they report a fraction of the rate.
+Measured on trn1.2xlarge 2026-09-10, `tensor_virus` 8192³ for 30 s:
+
+```
+effective_flops (TFLOPS):  18.25, 72.34, 72.35, 71.02, 72.35, 72.57, 53.43
+utilisation (%):           25,    99,    99,    97,    99,    99.5,  73
+```
+
+The mean of all seven is 61.76. The mean of the five whole periods is
+72.13, against the kernel's own analytic 71.93. The declared Score was
+the first, and how low it read depended on where the monitor's 5-second
+grid fell against the run. That is the spread the repeats kept showing.
+The Score is now the mean over whole periods, and the all-sample mean
+is reported beside it (`mean_all_samples`).
+
+### `total_time` opens with an idle startup; divide by `total_active_time`
+
+A profiled execution's `total_time` starts about 2 ms before its first
+byte moves. Measured on trn1.2xlarge 2026-09-10, `memory_read`'s kernel
+graph at four sizes:
+
+| buffer | `total_time` | `total_active_time` | wall per pass (loop) |
+|---|--:|--:|--:|
+| 1 GiB | 6.020 ms | 3.934 ms | 4.025 ms |
+| 2 GiB | 9.950 | 7.867 | 7.968 |
+| 4 GiB | 17.825 | 15.746 | 15.855 |
+| 8 GiB | 33.540 | 31.463 | 31.614 |
+
+The difference is 2.08 ms at every size. The trace's DMA throughput reads
+0 across it, then a steady 273–275 GB/s. The kernel run back to back pays
+about 0.08 ms per pass, so the startup belongs to the one profiled
+execution. Over `total_time` the bandwidth depended on the buffer (178 to
+256 GB/s). Over `total_active_time`, the union of time any engine or DMA
+queue was busy, it's 273 at every size. `memory_write` shows the same
+2.08 ms.
+
 ## sysfs counters that stay zero
 
 `stats/other_info/` exposes `flop_count`, `inference_count`,

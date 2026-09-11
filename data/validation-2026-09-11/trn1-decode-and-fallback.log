@@ -1,0 +1,25 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. Rows read from the report JSON with a small
+# script (show_rows.py: Status, Score, Score Method, cv, Detail, the monitor's whole-period
+# effective_flops, and for llm_decode Score x 32 layers x decode_step_flops(4096, 2048)).
+
+## 1. llm_decode --duration 30 --repeat 3, the step now computing q, k and v for the new token
+##    and attending over cache + token. PREDICTED: ~17.4 tokens/s (12 h^2 weights per layer
+##    streamed instead of 10), stack check passing, implied TFLOPS near the monitor's.
+##    Before (2026-09-11 full pass): 20.60 tokens/s, implied 0.287 against monitor 0.232.
+llm_decode: Status PASS | Score 17.5282 | workload | cv 0.0001
+   Detail: "repeats agree to cv 0.0001 on a Score that one more completed unit would move by 0.001894 -- the repeats landed on the same integer, so this is the counter's resolution rather than the workload's stability"
+   monitor whole-period mean 0.2441 TFLOPS over 4 of 6 samples
+   implied 0.2447 TFLOPS (Score x 32 layers x decode_step_flops)
+
+## 2. tensor_virus --duration 5 before the fallback-detail change: one busy monitor period,
+##    no whole one, so no declared Score. PREDICTED (wrongly): the absence reason in Detail.
+##    It was empty -- the reason was only written when there was no analytic fallback.
+tensor_virus: Status PASS | Score 72.4455 | analytic (FLOPs issued / wall  | cv None
+   Detail: ''
+   monitor whole-period mean 0.0000 TFLOPS over 0 of 1 samples
+   Score Method (full): analytic (FLOPs issued / wall time); declared source is neuron-monitor effective_flops
+
+## 3. The same, after the change
+[PANTHEON-NEURON]    PASS (neuron-monitor reported no effective_flops, the kernel's analytic figure is published instead; the core was busy across 1 sampling period(s) and none of them throughout, so no period measures its rate -- run longer)
+[PANTHEON-NEURON]    63.49% of 95.0 TFLOPS across 1 of 2 core(s)
+tensor_virus: Status PASS | Score 60.3134 | analytic (FLOPs issued / wall  | cv None

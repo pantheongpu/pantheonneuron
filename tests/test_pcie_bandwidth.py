@@ -408,3 +408,34 @@ def test_the_kernel_reads_the_landing_buffer_back():
     code = sourcecheck.flat_function_code(pcie_bandwidth.run)
     assert "landing_value" in code
     assert "verify_transfer_arrived" in code
+
+
+def test_the_explained_asymmetry_is_named_as_explained():
+    """At the pinned 1 GiB, with both legs preallocated, the split is the
+    staging cliff the 2026-09-10 sweep measured -- and the row said to go
+    check the preallocation, on every run."""
+    message = pcie_bandwidth.verify_directions_are_balanced(
+        {"h2d": {"gbps": 6.5}, "d2h": {"gbps": 1.1}}, transfer_bytes=1 << 30)
+    assert "staging cliff" in message and "1024 MiB" in message
+    assert "not the link" in message
+    assert "preallocated" not in message
+
+
+def test_below_the_cliff_the_split_is_not_explained():
+    """A 4x split at 8 MiB is not what the sweep measured, so the guard
+    falls back to its general advice rather than claiming the known cause."""
+    message = pcie_bandwidth.verify_directions_are_balanced(
+        {"h2d": {"gbps": 6.5}, "d2h": {"gbps": 1.1}}, transfer_bytes=8 << 20)
+    assert "staging cliff" not in message and "link width" in message
+
+
+def test_a_slow_h2d_is_never_blamed_on_the_d2h_cliff():
+    message = pcie_bandwidth.verify_directions_are_balanced(
+        {"h2d": {"gbps": 1.0}, "d2h": {"gbps": 6.0}}, transfer_bytes=1 << 30)
+    assert "staging cliff" not in message
+
+
+def test_run_passes_the_transfer_size_to_the_guard():
+    import inspect
+    code = sourcecheck.code_only(inspect.getsource(pcie_bandwidth.run))
+    assert "transfer_bytes" in code

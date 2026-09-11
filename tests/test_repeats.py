@@ -225,29 +225,29 @@ def test_two_repeats_cannot_show_a_trend():
 
 # -- a thin monitor mean says so ---------------------------------------------
 
-def test_a_mean_over_too_few_samples_is_flagged():
-    """The declared formula is mean(effective_flops), and the monitor drops
-    samples taken while the workload compiles. A short run averages a
-    handful, and one caught mid-ramp moves it a long way.
+def test_a_mean_over_too_few_whole_periods_is_flagged():
+    """One whole period leaves nothing to check it against.
 
-    trn1.2xlarge 2026-09-10 at DURATION=10: tensor_virus repeated 17.74,
-    26.14, 26.13 TFLOPS. The low one is a mean over fewer good samples.
+    The old threshold of five was set against tensor_virus repeating 17.74,
+    26.14, 26.13 TFLOPS (trn1.2xlarge 2026-09-10, DURATION=10). That was a
+    partly busy edge period in the mean, not too few readings -- the mean
+    is now over whole periods, which agree to 2%.
     """
     thin = pantheon_neuron.thin_monitor_sample(
-        {"effective_flops": {"0": {"mean": 2e13, "samples": 2}}})
-    assert thin is not None and "2 sample(s)" in thin
+        {"effective_flops": {"0": {"mean": 2e13, "samples": 1}}})
+    assert thin is not None and "1 whole sampling period(s)" in thin
 
     assert pantheon_neuron.thin_monitor_sample(
-        {"effective_flops": {"0": {"mean": 2e13, "samples": 40}}}) is None
+        {"effective_flops": {"0": {"mean": 2e13, "samples": 2}}}) is None
 
 
 def test_the_worst_core_decides():
-    """One core starved of samples makes the mean over cores unstable too."""
+    """One core starved of whole periods makes the mean over cores unstable too."""
     mixed = pantheon_neuron.thin_monitor_sample({"effective_flops": {
         "0": {"mean": 2e13, "samples": 40},
         "1": {"mean": 2e13, "samples": 1},
     }})
-    assert mixed is not None and "1 sample(s)" in mixed
+    assert mixed is not None and "1 whole sampling period(s)" in mixed
 
 
 def test_no_flops_reported_is_not_a_thin_sample():

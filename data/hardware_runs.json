@@ -76,6 +76,25 @@
           ],
           "failed": [],
           "skipped": ["all_reduce", "p2p_thrasher"]
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/trn1-full-pass.log",
+          "note": "--test all --duration 30 in one process at 06ac77a: 24 PASS (baseline_metrics not listed), 0 FAIL, after the monitor and profiler aggregation changes -- tensor_virus 72.40 TFLOPS, graph_replay 3003.6 graph-steps/s with no counter disagreement, memory_read_agg 542.7 GB/s.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn",
+            "llm_decode", "llm_prefill", "memory_read",
+            "memory_read_agg", "memory_write",
+            "memory_write_agg", "moe_router", "omni_virus",
+            "pcie_bandwidth", "pulse_virus", "quantized_gemm",
+            "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": ["all_reduce", "p2p_thrasher"]
         }
       ]
     },
@@ -91,6 +110,14 @@
           "skipped": [
             "all_reduce", "p2p_thrasher", "transformer_train_step"
           ]
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/inf2-profile-startup.log",
+          "note": "memory_read 273.12 and memory_write 254.57 GB/s by neuron-profile over total_active_time, each with the same 2.07-2.09 ms idle startup trn1 shows; pcie_bandwidth 2.16 GB/s.",
+          "passed": ["memory_read", "memory_write", "pcie_bandwidth"],
+          "failed": [],
+          "skipped": []
         }
       ]
     }
