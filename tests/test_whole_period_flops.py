@@ -68,3 +68,80 @@ def test_a_run_with_no_whole_period_says_why(monkeypatch):
     workload = next(w for w in pantheon_neuron.registry.WORKLOADS if w.name == "tensor_virus")
     assert pantheon_neuron.monitor_score(workload, metrics) is None
     assert "run longer" in metrics["effective_flops_absent"]
+
+
+# -- utilisation, and the zeros around and inside a run ---------------------
+
+from neuron_monitor import whole_period_utilisation, whole_periods  # noqa: E402
+
+# The same probe run: 19 samples of compile, the busy span, a 2-sample tail.
+UTILISATION_SERIES = [0.0] * 19 + UTILISATION + [0.0, 0.0]
+
+
+def test_utilisation_is_the_whole_periods_not_the_compile():
+    """The published mean was over every sample, so tensor_virus reported
+    42.25% on the 2026-09-11 full pass for a core 97-99.5% busy in every
+    whole period it ran."""
+    summary = whole_period_utilisation(UTILISATION_SERIES)
+    assert summary["mean"] == pytest.approx(98.92, abs=0.01)
+    assert summary["samples"] == 5
+    assert summary["mean_all_samples"] < 30
+
+
+def test_the_compile_gap_after_a_setup_blip_is_not_the_run():
+    """memory_read's core 0 on trn1.2xlarge 2026-09-11: a setup blip, a
+    230 s compile, then the loop. First-to-last-nonzero read 11.55%."""
+    series = [0, 0, 1.5] + [0.0] * 46 + [35.3, 99.6, 99.6, 99.6, 98.3, 100.0, 66.8, 0, 0]
+    summary = whole_period_utilisation(series)
+    assert summary["mean"] == pytest.approx(99.42, abs=0.01)
+    assert summary["samples"] == 5
+
+
+def test_a_pause_splits_the_run_and_the_longest_stretch_is_measured():
+    """The stated trade-off, asserted so it stays visible."""
+    span, whole = whole_periods([0, 0, 30, 90, 0, 90, 90, 90, 40, 0])
+    assert span == [90, 90, 90, 40]
+    assert whole == [90, 90]
+
+
+def test_the_flops_mean_ignores_a_setup_blip_too():
+    readings = [0, 1e12, 0, 0, 0, 20e12, 72e12, 72e12, 72e12, 50e12, 0]
+    summary = whole_period_flops(readings)
+    assert summary["mean"] == pytest.approx(72e12)
+    assert summary["samples"] == 3 and summary["samples_all"] == 5
+
+
+def test_a_core_that_never_ran_has_no_flops_summary():
+    monitor = NeuronMonitor(mock=True)
+
+    def two_cores(tflops):
+        return {"neuron_runtime_data": [{"report": {"neuroncore_counters": {
+            "period": 5.0, "neuroncores_in_use": {
+                "0": {"effective_flops": tflops * TFLOPS, "neuroncore_utilization": 99.0},
+                "1": {"effective_flops": 0, "neuroncore_utilization": 0}}}}}]}
+    monitor._samples = [two_cores(v) for v in [0.0, *MEASURED, 0.0]]
+    monitor._sample_times = [float(i) for i in range(len(monitor._samples))]
+    metrics = monitor.aggregate()
+    assert set(metrics["effective_flops"]) == {"0"}
+    assert metrics["neuroncore_utilization"]["1"]["mean"] == 0.0
+
+
+def test_two_runtimes_give_one_reading_per_core_per_sample():
+    """memory_read_agg's workers, trn1.2xlarge 2026-09-11: each runtime
+    reports every core, the one it does not drive at 0. Appending both
+    left core 0 with no uninterrupted busy block."""
+    def worker_sample(u0, u1):
+        return {"neuron_runtime_data": [
+            {"pid": 5349, "report": {"neuroncore_counters": {"neuroncores_in_use": {
+                "0": {"neuroncore_utilization": u0}, "1": {"neuroncore_utilization": 0}}}}},
+            {"pid": 5350, "report": {"neuroncore_counters": {"neuroncores_in_use": {
+                "0": {"neuroncore_utilization": 0}, "1": {"neuroncore_utilization": u1}}}}},
+        ]}
+    measured = [(0, 0), (0, 0), (99.0, 8.8), (99.6, 99.4), (99.6, 100.0),
+                (100.0, 99.4), (65.6, 99.4), (0, 100.0), (0, 91.8), (0, 0)]
+    monitor = NeuronMonitor(mock=True)
+    monitor._samples = [worker_sample(a, b) for a, b in measured]
+    monitor._sample_times = [float(i) for i in range(len(measured))]
+    util = monitor.aggregate()["neuroncore_utilization"]
+    assert util["0"]["samples"] == 3 and util["0"]["mean"] == pytest.approx(99.73, abs=0.01)
+    assert util["1"]["samples"] == 5 and util["1"]["mean"] == pytest.approx(99.64, abs=0.01)

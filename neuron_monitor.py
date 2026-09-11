@@ -145,6 +145,57 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
     return summary
 
 
+def whole_periods(values: typing.Sequence[float]) -> typing.Tuple[list, list]:
+    """(busy block, whole periods) of one core's per-period readings.
+
+    The busy block is the **longest uninterrupted run of nonzero readings**;
+    the whole periods are that block without its first and last, which the
+    work only partly filled.
+
+    Longest block rather than first-to-last nonzero, measured on
+    trn1.2xlarge 2026-09-11: memory_read's core 0 read
+
+        1.5 (setup), 0 x 46 (a 230 s compile), 35.3, 99.6, 99.6, 99.6,
+        98.3, 100, 66.8 (the 30 s loop), 0, 0
+
+    First-to-last put the compile inside the span: 11.55%. Dropping every
+    zero and then the two ends let the setup blip take the "first" slot, so
+    the loop's partly busy first period stayed in: 88.7%. The longest block
+    is the loop, and its interior reads 99.4%.
+
+    The trade-off, stated rather than hidden: a workload that paused for a
+    whole sampling period mid-run would be measured over its longest
+    uninterrupted stretch. None does -- pulse_virus cycles every 2 s,
+    inside the monitor's ~5 s period.
+    """
+    best, current = [], []
+    for value in values:
+        if value > 0:
+            current.append(value)
+            if len(current) > len(best):
+                best = list(current)
+        else:
+            current = []
+    return best, best[1:-1]
+
+
+def whole_period_utilisation(values: typing.Sequence[float]) -> typing.Dict[str, typing.Any]:
+    """neuroncore_utilization over the periods the core was busy throughout.
+
+    Same rule as whole_period_flops. ``mean_all_samples`` is the old
+    figure -- every sample, compile included -- kept beside it so the
+    size of the difference stays visible.
+    """
+    summary: typing.Dict[str, typing.Any] = {
+        "peak": round(max(values), 2) if values else 0.0,
+        "mean_all_samples": round(statistics.fmean(values), 2) if values else 0.0,
+    }
+    _, whole = whole_periods(values)
+    summary["samples"] = len(whole)
+    summary["mean"] = round(statistics.fmean(whole), 2) if whole else 0.0
+    return summary
+
+
 def whole_period_flops(values: typing.Sequence[float]) -> typing.Dict[str, typing.Any]:
     """mean(effective_flops) over the periods the core was busy throughout.
 
@@ -166,19 +217,20 @@ def whole_period_flops(values: typing.Sequence[float]) -> typing.Dict[str, typin
     The same rule execution_rate applies to the completion tallies. The
     all-sample mean is kept beside it so the difference stays visible.
     """
+    span, whole = whole_periods(values)
     summary: typing.Dict[str, typing.Any] = {
-        "peak": int(max(values)),
-        "samples_all": len(values),
-        "mean_all_samples": int(statistics.fmean(values)),
+        "peak": int(max(values)) if values else 0,
+        # The busy span, edges included: what the Score used to average.
+        "samples_all": len(span),
+        "mean_all_samples": int(statistics.fmean(span)) if span else 0,
     }
-    whole = list(values[1:-1])
     # How many whole periods the mean is over.
     summary["samples"] = len(whole)
     if whole:
         summary["mean"] = int(statistics.fmean(whole))
     else:
         summary["absent"] = (
-            f"the core was busy across {len(values)} sampling period(s) and "
+            f"the core was busy across {len(span)} sampling period(s) and "
             "none of them throughout, so no period measures its rate -- run "
             "longer")
     return summary
@@ -443,6 +495,17 @@ class NeuronMonitor:
         completed_series: typing.List[typing.Tuple[int, int, typing.Any]] = []
 
         for index, sample in enumerate(self._samples):
+            # One reading per core per sample, the largest any runtime
+            # reported. Each process is its own runtime and each reports
+            # *every* core, the ones it does not drive at 0: on
+            # trn1.2xlarge 2026-09-11 memory_read_agg's two workers sent
+            # pid5349{0:99.6, 1:0} and pid5350{0:0, 1:99.4} in the same
+            # sample. Appending both interleaved a busy core's readings
+            # with zeros, so no uninterrupted busy block could form (0 and
+            # 1 whole periods for two 30 s loops), and the old all-sample
+            # mean halved.
+            sample_util: typing.Dict[str, float] = {}
+            sample_flops: typing.Dict[str, float] = {}
             for runtime in (sample.get("neuron_runtime_data") or []):
                 report = runtime.get("report") or {}
                 cores = (report.get("neuroncore_counters") or {}).get(
@@ -451,13 +514,19 @@ class NeuronMonitor:
                 for core_id, counters in cores.items():
                     value = counters.get("neuroncore_utilization")
                     if isinstance(value, (int, float)):
-                        utilisation[str(core_id)].append(float(value))
+                        sample_util[str(core_id)] = max(
+                            sample_util.get(str(core_id), 0.0), float(value))
                     # effective_flops is absent from the CloudWatch metric
                     # set and from sysfs (where flop_count stays 0), but
                     # neuron-monitor reports it per NeuronCore.
+                    # Zeros kept: trimming happens in whole_periods, which
+                    # needs to see an idle period *inside* the run to keep
+                    # it -- dropping every zero here would read a run that
+                    # paused as one that never did.
                     achieved = counters.get("effective_flops")
-                    if isinstance(achieved, (int, float)) and achieved > 0:
-                        flops[str(core_id)].append(float(achieved))
+                    if isinstance(achieved, (int, float)):
+                        sample_flops[str(core_id)] = max(
+                            sample_flops.get(str(core_id), 0.0), float(achieved))
 
                 used = (
                     (report.get("memory_used") or {})
@@ -499,6 +568,11 @@ class NeuronMonitor:
                     if isinstance(value, (int, float)):
                         sink.append(float(value))
 
+            for core_id, value in sample_util.items():
+                utilisation[core_id].append(value)
+            for core_id, value in sample_flops.items():
+                flops[core_id].append(value)
+
             hw = (sample.get("system_data") or {}).get("neuron_hw_counters") or {}
             # max() is right only if these are totals since driver load --
             # and then a device's past events are charged to this run. If
@@ -518,11 +592,13 @@ class NeuronMonitor:
             "samples": len(self._samples),
             "execution_errors": errors,
             "total_executions": executions,
+            # Over whole busy periods, like effective_flops. The mean was
+            # over every sample -- the compile's zeros included -- so on the
+            # 2026-09-11 full pass tensor_virus published 42.25% for a core
+            # 97-99.5% busy in every whole period it ran, and
+            # memory_read_agg 2.5%. That measured compile time.
             "neuroncore_utilization": {
-                core_id: {
-                    "mean": round(statistics.fmean(values), 2),
-                    "peak": round(max(values), 2),
-                }
+                core_id: whole_period_utilisation(values)
                 for core_id, values in sorted(utilisation.items())
             },
         }
@@ -531,10 +607,15 @@ class NeuronMonitor:
                 "mean": int(statistics.fmean(memory_bytes)),
                 "peak": max(memory_bytes),
             }
-        if flops:
+        # Only cores that retired a FLOP at all -- an idle core has no busy
+        # periods to average, and the zeros are kept only so whole_periods
+        # can see a pause inside a run.
+        busy_flops = {core_id: values for core_id, values in flops.items()
+                      if any(value > 0 for value in values)}
+        if busy_flops:
             summary["effective_flops"] = {
                 core_id: whole_period_flops(values)
-                for core_id, values in sorted(flops.items())
+                for core_id, values in sorted(busy_flops.items())
             }
             if not any("mean" in core for core in summary["effective_flops"].values()):
                 summary["effective_flops_absent"] = next(

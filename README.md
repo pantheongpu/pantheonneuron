@@ -919,6 +919,12 @@ uses both, and neuron-monitor answered it, trn1.2xlarge 2026-09-10:
 | both | `transformer_virus` | 24.35% | **0.0%** |
 | core 0 | `transformer_virus` | 29.85% | 0.0% |
 
+*The core-0 figures are means over every sample, compile included* —
+the utilisation mean was not taken over whole busy periods until
+2026-09-11, and a core busy 97–99.5% throughout its run published 42%.
+They show core 0 was used; they don't show how much. The zeros on core 1
+hold either way.
+
 Core 1 did nothing in any case, for the hand-written NKI kernel and the
 torch-lowered one alike: neither is sharded, and one XLA device is one
 NeuronCore. The prediction, written into the probe before it ran, was
