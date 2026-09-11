@@ -114,6 +114,33 @@ Clearly responsive. Two caveats:
 
 `energy_wh` cannot be derived from this without a unit definition.
 
+### `execution_summary.completed` is a tally per period
+
+**neuron-monitor's `execution_stats.execution_summary.completed` counts the
+executions in its sampling period. It is not a running total.** The
+AWS guide says only "executions completed successfully". Measured on
+trn1.2xlarge 2026-09-10: graph_replay, 60,000 replays, the monitor
+sampling every ~5 s through the compile and an idle tail:
+
+```
+completed:  0 ... 0, 6657, 15409, 15273, 15199, 7465, 0, 0     sum 60,003
+```
+
+It falls back to zero when the work stops, and the tallies sum to the
+replays run plus three setup graphs. Whole periods divided by their
+`period` give 3082, 3055 and 3040 per second, against the kernel's own
+3057.
+
+This suite read it as cumulative: its maximum as the run's total, and
+last minus first as a rate's numerator. The maximum is one period's
+tally, which is where "about four replays per NEFF execution" came from.
+Last minus first is the difference between two periods' tallies, which
+put graph_replay's declared Score anywhere from 729 to 1506, or nowhere.
+The same stats block's `error_summary` counts were already being summed,
+which is right for per-period tallies and inconsistent with treating
+`completed` as a total. That inconsistency sat in one function the whole
+time.
+
 ## sysfs counters that stay zero
 
 `stats/other_info/` exposes `flop_count`, `inference_count`,

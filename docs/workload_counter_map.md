@@ -54,7 +54,7 @@ Two cases deliberately produce no Score rather than a number:
 - **The counter is absent** — a mock run, telemetry disabled, or a kernel that never reached the Tensor Engine. The row records a PASS with no Score and says why.
 - **The workload failed** — telemetry keeps sampling through a failure, so without a status gate a FAIL row would carry whatever the monitor caught and read as a measurement.
 
-`graph_replay` is also neuron-monitor-sourced but is **not** on this path: its formula is `delta(completed) / period` in graph-steps/s. The gate matches on the declared counter, not on the source, so the FLOPS arithmetic cannot reach it.
+`graph_replay` is also neuron-monitor-sourced but is **not** on this path: its formula is `sum(completed) / sum(period)` over whole busy periods, in graph-steps/s. The gate matches on the declared counter, not on the source, so the FLOPS arithmetic cannot reach it.
 
 ## The declared profiler Score has never been produced by a run
 
@@ -120,7 +120,7 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `moe_router` | experts=8, top_k=2, hidden=4096, tokens=4096 |
 | `transformer_train_step` | hidden=4096, layers=4, batch=1, seq=2048, dtype=bf16 |
 | `allocation_fragmentation` | allocations=40000, size_min=4096, size_max=16777216 |
-| `graph_replay` | hidden=2048, replays=60000, dtype=bf16 |
+| `graph_replay` | hidden=2048, replays=200000, dtype=bf16 |
 | `rag_embedding` | dim=1024, batch=64, seq=128, layers=12, dtype=bf16 |
 | `vision_encoder` | resolution=224, patch=14, batch=64, layers=12, dtype=bf16 |
 

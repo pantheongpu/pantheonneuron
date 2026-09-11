@@ -1,9 +1,10 @@
 """Repeated replay of a compiled NEFF graph.
 
-Score: **graph-steps/s**, from ``delta(completed) / period`` as declared in
-the registry -- the monitor's execution counter, read by the orchestrator
-after sampling stops. Not ``effective_flops``: this workload is not asking
-how fast the engines are, it is asking how fast the runtime can dispatch.
+Score: **graph-steps/s**, from neuron-monitor's execution counter --
+``sum(completed) / sum(period)`` over the sampling periods the device was
+busy throughout, read by the orchestrator after sampling stops. Not
+``effective_flops``: this workload is not asking how fast the engines are,
+it is asking how fast the runtime can dispatch.
 
 That distinction is the whole point. A device can be perfectly healthy at
 arithmetic and still serve inference badly, because every request pays
@@ -13,82 +14,47 @@ than by the arithmetic inside it.
 
 The graph is deliberately trivial and deliberately *not* eliminable: a
 single small matmul whose result feeds the next iteration's input, so the
-runtime cannot prove the replays dead.
+runtime cannot prove the replays dead. The chain is a cyclic permutation,
+so its final value also says how many replays ran -- see ``run``.
 
-**It does batch them, and this docstring said otherwise for a fortnight.**
-Measured on trn1.2xlarge 2026-09-10, both counters from one run:
+**Every replay is its own execution, measured.** trn1.2xlarge 2026-09-10,
+the monitor sampling every ~5 s through the compile, the 60,000 replays
+and an idle tail, ``completed`` per sample:
 
-    replays submitted        60,000
-    executions completed     14,737   (neuron-monitor)
-    ratio                      4.07
+    0 ... 0, 6657, 15409, 15273, 15199, 7465, 0, 0      sum 60,003
 
-So roughly four replays reach the device as one NEFF execution. The chain
-prevents elimination; it does not prevent coalescing, and the claim that
-"the chain is what makes each replay a separate completion" was wrong.
+60,000 replays plus three setup graphs. The three whole periods read
+3082, 3055 and 3040 per second against the loop's own 3057.
 
-That the two figures differed by about four was visible from 2026-09-08
-(729.3 graph-steps/s from the counter) and 2026-09-10 (3051.2 from the
-kernel) -- but those were different runs, and two numbers from two runs
-can differ for any reason. Taking both from one run is what turned it
-from a suspicion into a measurement.
+**This docstring said the opposite for most of a day, and the error was
+in the reading, not the device.** It recorded "60,000 replays submitted,
+14,737 executions completed, ratio 4.07" and concluded the runtime batched
+about four replays per NEFF execution. ``completed`` is a tally per
+sampling period -- it falls back to zero when the work stops -- and
+neuron_monitor took its *maximum* as the run's total and *last minus
+first* as the rate's numerator. 14,737 was one period's count. The
+declared Score that came from last-minus-first -- 729.3, 1174.8, 1012 or
+1506 graph-steps/s on different runs, or nothing when the last sample
+was idle -- was the difference between two periods' tallies.
 
-**Neither figure is "graph steps" in the sense the unit implies.** The
-kernel counts what the loop asked for; the counter counts what the device
-finished; and a reader wanting dispatch cost needs to know which, because
-they differ by four. ``pantheon_neuron.override_disagreement`` puts the
-gap in the row rather than letting whichever figure wins be read as the
-answer.
+Both figures were from one run and they disagreed by four. Holding them
+side by side is what showed something was wrong; it took the idle tail,
+where a running total cannot fall and this counter did, to show which.
 
-**CONFIRMED**, trn1.2xlarge 2026-09-10 at --duration 30 --repeat 3. The
-prediction below was written before the run and is reproduced unchanged.
-The row came back:
+**The window.** This workload is bounded by ``replays`` as well as by
+``duration``. At the old pin of 60,000 the count bound first, at about
+20 seconds, and the harness run that verified the per-period reading had
+one whole ~5 s period to divide. The pin is now 200,000, past the default
+--duration, so the caller's duration sets the window. The orchestrator
+also waits for one idle period before stopping the monitor, since the
+last busy period's tally only arrives when it closes. Until then the
+row's execution total read 45,709 for 60,000 replays.
 
-    graph_replay  PASS  3040.1886 graph-steps/s  via analytic
-      measured a 3.3s window of a requested 30s, so this run was bounded
-      by its pinned problem rather than by --duration
-
-3.3 seconds against a predicted 3.3, the declared monitor Score absent,
-the analytic fallback published in its place. All three parts held.
-
-So the "variance" in this workload's declared Score was never variance in
-the device: it is a window whose length is inversely proportional to the
-rate being measured, crossing the monitor's sampling threshold in one
-direction on 2026-09-08 and the other on 2026-09-10.
-
-This workload is bounded by ``replays`` (pinned at 10,000) as well as by
-``duration``, and the count is reached first. **The measured window is
-therefore a function of the rate being measured**: at the 3051.2
-graph-steps/s seen on 2026-09-10 the window is 3.3 seconds, and at the
-729.3 seen on 2026-09-08 it is 13.7.
-
-That would explain the declared Score's variance without either counter
-being wrong. neuron-monitor samples on a period, drops samples taken
-while the workload compiles, and needs two carrying the counter to form a
-delta. A 13.7-second window supplies them; a 3.3-second one may not, and
-the row degrades to the analytic fallback -- which is exactly what
-happened on those two dates, in that order.
-
-It would also explain the cv 0.63 across repeats, for the same reason
-allocation_fragmentation scattered: a window of a few seconds is not a
-measurement, and here the window shortens precisely when the device is
-fast.
-
-**Prediction (before the run):** at ``--duration 30 --repeat 3``, this
-run will report a window near 3 seconds rather than 30, ``short_window``
-will fire, and the declared monitor Score will be absent or unstable. If
-the window comes back near 30 seconds the hypothesis is wrong and the
-replay count is not what bounds this.
-
-STATUS: VERIFIED ON HARDWARE as a workload, trn1.2xlarge 2026-09-08
-and 2026-09-10. What is **not** settled is its declared Score source: the
-monitor's execution counter produced a Score on 2026-09-08 (729.3
-graph-steps/s) and not on 2026-09-10, where the row degraded to the
-analytic fallback (3051.2 graph-steps/s via replays submitted / wall
-time). Those two numbers are four times apart and are not measurements of
-the same thing -- one counts what the device finished, the other what the
-loop asked for -- so neither should be quoted without its Score Method.
-The 2026-09-10 pass also flagged it irreproducible at cv 0.63.
+STATUS: VERIFIED ON HARDWARE, trn1.2xlarge 2026-09-08 and 2026-09-10.
+The declared Score source is settled: the per-period reading agrees with
+the kernel's clock to 0.1% on the measured run.
 """
+
 
 import time
 import typing
@@ -135,14 +101,25 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     torch_dtype = tiling.torch_dtype(str(problem.get("dtype", "bf16")))
 
     hidden = plan["hidden"]
-    weight = torch.ones((hidden, hidden), dtype=torch_dtype, device=device)
-    state = torch.ones((hidden, hidden), dtype=torch_dtype, device=device)
+    # A cyclic permutation, so the chain's value records how many replays
+    # ran. weight shifts columns right by one; starting from the identity,
+    # after n replays row r holds its single 1 at column (r + n) % hidden.
+    #
+    # Both operands were all ones until 2026-09-10. An all-ones chain grows
+    # by `hidden` per replay and bf16 overflows to inf within a dozen, so
+    # the read-back check -- "the chain has a value" -- was satisfied the
+    # same way by 12 executed replays and by 60,000. Every value here is 0
+    # or 1, exact in bf16, and each replay is still a full hidden^3 matmul:
+    # the Tensor Engine's cost does not depend on the data.
+    identity = torch.eye(hidden, dtype=torch.float32)
+    weight = torch.roll(identity, shifts=1, dims=1).to(torch_dtype).to(device)
+    state = identity.to(torch_dtype).to(device)
     xm.mark_step()
     xm.wait_device_ops()
 
     # Warm up so the compile is not inside the timed region, and warm up the
     # same shape the loop runs -- memory_read documents what a mismatched
-    # warm-up costs.
+    # warm-up costs. It is one replay of the chain, and the check counts it.
     state = torch.matmul(state, weight)
     xm.mark_step()
     xm.wait_device_ops()
@@ -152,9 +129,9 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     deadline = started + duration
 
     while replays < plan["replays"] and time.perf_counter() < deadline:
-        # Each replay consumes the previous result, so the runtime cannot
-        # coalesce them: the chain forces one completion per iteration,
-        # which is exactly what delta(completed) counts.
+        # Each replay consumes the previous result, so none can be proved
+        # dead. That does not stop the runtime batching them -- see the
+        # docstring: the chain prevents elimination, not coalescing.
         state = torch.matmul(state, weight)
         xm.mark_step()
         replays += 1
@@ -162,15 +139,16 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
 
-    # Reading the result back proves the chain actually executed rather than
-    # being queued and discarded. The value itself is unbounded -- an
-    # all-ones chain grows without limit -- so only its finiteness is
-    # meaningful, and bf16 saturates to inf quickly by design of the test.
-    replayed = None
+    # Every row must hold its 1 exactly where replays + WARMUP_REPLAYS
+    # shifts put it. A skipped or repeated replay moves it; a chain that
+    # never ran leaves nothing to read.
+    shift = chain_shift(replays, hidden)
     try:
-        replayed = float(state[0][0])
-    except Exception:  # materialisation failed; leave unverified
-        replayed = None
+        host = state.to("cpu").float()
+        expected = torch.roll(identity, shifts=shift, dims=1)
+        chain_exact = bool(torch.equal(host, expected))
+    except Exception:  # broad: materialisation failed; leave unverified
+        chain_exact = None
 
     return {
         "replays": replays,
@@ -179,31 +157,53 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "graph_steps_per_s": replays / elapsed if elapsed else 0.0,
         "score_method": "analytic",
         "analytic_basis": "replays submitted / wall time",
-        "warning": verify_replays_completed(replays, plan, elapsed, replayed),
+        "warning": verify_replays_completed(replays, plan, elapsed, chain_exact),
+        # A chain that ran the wrong number of replays, or none, means the
+        # rate counted replays that did not happen.
+        "score_invalid": chain_exact is not True,
+        "chain_shift": shift,
         "plan": plan,
     }
+
+
+# The warm-up is one replay of the same chain, and it shifts the state too.
+WARMUP_REPLAYS = 1
+
+
+def chain_shift(replays: int, hidden: int) -> int:
+    """Columns the identity has moved after the timed replays and warm-up."""
+    return (replays + WARMUP_REPLAYS) % hidden
 
 
 def verify_replays_completed(
     replays: int,
     plan: typing.Mapping[str, int],
     elapsed: float,
-    replayed: typing.Optional[float],
+    chain_exact: typing.Optional[bool],
 ) -> typing.Optional[str]:
-    """Check the replays were dispatched rather than merely counted.
+    """Check the replays were executed rather than merely counted.
 
     The loop counts submissions, and submissions are cheap: ``mark_step``
     queues and returns. If the device never ran the chain, the count still
     climbs and the rate still looks plausible -- the same failure that made
-    memory_read report 14,513 GB/s. Reading the chained result back is what
-    distinguishes them, since an unexecuted chain has no value to read.
+    memory_read report 14,513 GB/s.
+
+    ``chain_exact`` is whether the permutation chain landed where
+    ``replays`` shifts put it (None when it could not be read). This used
+    to be "could the result be read at all", which an all-ones chain that
+    had overflowed to inf satisfied whatever the device ran.
     """
     if replays == 0:
         return "no replays were submitted"
-    if replayed is None:
+    if chain_exact is None:
         return (
             "the replay chain could not be read back, so these steps were "
             "submitted but not shown to have executed"
+        )
+    if chain_exact is False:
+        return (
+            "the replay chain did not land where the submitted replays put "
+            "it, so the device did not execute each replay exactly once"
         )
     if elapsed <= 0:
         return "no time elapsed"

@@ -53,7 +53,7 @@ def test_bandwidth_workloads_do_not_use_the_monitor_path():
 def test_graph_replay_is_monitor_sourced_but_not_scored_in_flops():
     """It reads neuron-monitor too, but its formula and unit are different.
 
-    graph_replay declares delta(completed) / period in graph-steps/s. A gate
+    graph_replay declares sum(completed) / sum(period) in graph-steps/s. A gate
     on the source alone would hand it the FLOPS arithmetic and publish a
     TFLOPS magnitude under a graph-steps/s label. effective_flops is
     non-zero during a graph replay, so this would fire on real hardware
@@ -395,18 +395,18 @@ def test_graph_replay_is_told_about_the_counter_it_publishes():
     Score for a reason that has nothing to do with it.
     """
     metrics = {"effective_flops": {"0": {"samples": 3, "mean": 1.0}},
-               "execution_samples": 4}
+               "execution_samples_used": 1}
     message = pantheon_neuron.thin_monitor_sample(metrics, _graph_replay())
     assert message is not None
-    assert "completion counter" in message
+    assert "completion rate" in message
     assert "effective_flops" not in message
-    assert "4 sample(s)" in message
+    assert "1 whole sampling period(s)" in message
 
 
 def test_graph_replay_with_enough_counter_samples_is_quiet():
     """Even when effective_flops is thin -- which is not its Score."""
     metrics = {"effective_flops": {"0": {"samples": 1, "mean": 1.0}},
-               "execution_samples": 40}
+               "execution_samples_used": 3}
     assert pantheon_neuron.thin_monitor_sample(
         metrics, _graph_replay()) is None
 
@@ -420,7 +420,7 @@ def test_the_flops_path_still_applies_without_a_workload():
 
 def test_a_missing_counter_sample_count_is_not_thinness():
     assert pantheon_neuron.thin_monitor_sample(
-        {"execution_samples": None}, _graph_replay()) is None
+        {"execution_samples_used": None}, _graph_replay()) is None
     assert pantheon_neuron.thin_monitor_sample({}, _graph_replay()) is None
 
 
@@ -438,13 +438,13 @@ def test_the_thinness_advice_does_not_recommend_a_shorter_period():
     flops = pantheon_neuron.thin_monitor_sample(
         {"effective_flops": {"0": {"samples": 2, "mean": 1.0}}})
     counter = pantheon_neuron.thin_monitor_sample(
-        {"execution_samples": 2}, _graph_replay())
+        {"execution_samples_used": 1}, _graph_replay())
 
     for message in (flops, counter):
         assert message is not None
         assert "run longer" in message
         assert "shorter --monitor-period" not in message
-        assert "floors around 2s" in message
+    assert "floors around 2s" in flops
 
 
 def test_the_span_overhang_is_only_reported_for_a_rate():
@@ -467,10 +467,21 @@ def test_the_span_overhang_is_only_reported_for_a_rate():
 
 
 def test_the_gate_admits_graph_replay_and_excludes_the_compute_family():
-    """graph_replay's Score is delta(completed)/period -- a rate over
+    """graph_replay's Score is sum(completed)/sum(period) -- a rate over
     exactly the span this measures, so the overhang is real there."""
     assert pantheon_neuron._wants_execution_rate(_graph_replay())
     for name in ("tensor_virus", "pulse_virus", "omni_virus",
                  "int_virus", "transformer_virus"):
         workload = next(w for w in registry.WORKLOADS if w.name == name)
         assert not pantheon_neuron._wants_execution_rate(workload), name
+
+
+
+def test_the_rate_threshold_rests_on_the_measured_periods():
+    """Each whole period is a tally, not a reading: 3082, 3055 and 3040 per
+    second against the loop's 3057 on trn1.2xlarge 2026-09-10."""
+    periods, loop = (3082.1, 3054.6, 3040.0), 3057.1
+    assert max(abs(p - loop) / loop for p in periods) < 0.015
+    assert pantheon_neuron.MIN_RATE_PERIODS == 2
+    assert pantheon_neuron.thin_monitor_sample(
+        {"execution_samples_used": 2}, _graph_replay()) is None

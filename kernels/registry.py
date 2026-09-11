@@ -471,13 +471,25 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              # over a shorter window and is more likely to lose its
              # declared Score. 60,000 gives about 20 seconds at the
              # observed rate and would still give 13 at half of it.
-             problem={"hidden": 2048, "replays": 60000, "dtype": "bf16"},
+             #
+             # 200,000 since 2026-09-10, so that --duration bounds the
+             # window rather than the count. The completion counter is a
+             # tally per ~5 s sampling period, and the rate is taken over
+             # whole periods only; 60,000 replays is ~20 s, four periods,
+             # and on trn1.2xlarge it left one whole period to divide.
+             # 200,000 is ~65 s at the measured rate, past any default
+             # duration, so the window is whatever the caller asked for.
+             problem={"hidden": 2048, "replays": 200000, "dtype": "bf16"},
              score_source=ScoreSource(MONITOR,
                  counters=(
                      'execution_stats.execution_summary.completed',
                      'execution_stats.period',
                  ),
-                 formula='delta(completed) / period')),
+                 # completed is a tally per sampling period, not a running
+                 # total (trn1.2xlarge 2026-09-10: it falls to zero when the
+                 # work stops, and the tallies sum to the replays run). This
+                 # read delta(completed) / period until then.
+                 formula='sum(completed) / sum(period) over whole busy periods')),
 
     # -- ai_auxiliary ------------------------------------------------------
     Workload("rag_embedding", "ai_auxiliary",
