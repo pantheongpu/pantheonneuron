@@ -193,3 +193,40 @@ def test_the_two_counts_differ_exactly_when_the_run_paused():
     summary = execution_rate(_series(counts))
     assert summary["execution_active_periods"] == summary["execution_block_periods"] == 3
 
+
+# -- a second runtime on the device is not a second sampling period -------
+
+def _runtime(completed, period=1.0):
+    return {"report": {"execution_stats": {
+        "period": period, "execution_summary": {"completed": completed}}}}
+
+
+def _monitor(samples):
+    monitor = NeuronMonitor(mock=True)
+    monitor._samples = samples
+    monitor._sample_times = [float(i) for i in range(len(samples))]
+    return monitor
+
+
+def test_one_runtime_reports_its_own_rate():
+    samples = [{"neuron_runtime_data": [_runtime(c)]}
+               for c in (100, 1000, 1000, 1000, 100)]
+    assert _monitor(samples).aggregate()["executions_per_s"] == pytest.approx(1000.0)
+
+
+def test_a_second_runtime_does_not_halve_the_rate():
+    """neuron-monitor reports every runtime on the device -- a
+    neuron-profile capture, an aggregate's worker. The series took one
+    entry per runtime, so two runtimes put two entries at the same instant
+    and the rate was divided by two periods' worth of time for one
+    period's completions."""
+    samples = [{"neuron_runtime_data": [_runtime(c), _runtime(c)]}
+               for c in (100, 1000, 1000, 1000, 100)]
+    metrics = _monitor(samples).aggregate()
+    assert metrics["executions_per_s"] == pytest.approx(2000.0)
+    assert metrics["execution_samples"] == 5
+
+
+def test_the_summed_total_is_unchanged_by_the_regrouping():
+    samples = [{"neuron_runtime_data": [_runtime(7), _runtime(3)]}]
+    assert _monitor(samples).aggregate()["executions_total"] == 10

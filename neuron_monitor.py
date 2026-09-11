@@ -577,6 +577,8 @@ class NeuronMonitor:
             # mean halved.
             sample_util: typing.Dict[str, float] = {}
             sample_flops: typing.Dict[str, float] = {}
+            sample_completed: typing.Optional[int] = None
+            sample_period: typing.Optional[float] = None
             for runtime in (sample.get("neuron_runtime_data") or []):
                 report = runtime.get("report") or {}
                 period = (report.get("neuroncore_counters") or {}).get("period")
@@ -623,8 +625,17 @@ class NeuronMonitor:
                     # A count for this period, so the run's total is the
                     # sum -- see execution_rate for the measurement.
                     executions += int(completed)
-                    completed_series.append(
-                        (index, int(completed), stats.get("period")))
+                    # One series entry per sample, summed over runtimes --
+                    # the rule _completed_in uses and await_idle_period
+                    # waits on. This appended one entry per runtime, so a
+                    # second runtime on the device (a neuron-profile
+                    # capture, an aggregate's worker) put two entries at
+                    # the same instant: execution_rate then divided that
+                    # sample's completions by two periods' worth of time.
+                    sample_completed = (sample_completed or 0) + int(completed)
+                    if isinstance(stats.get("period"), (int, float)):
+                        sample_period = max(sample_period or 0.0,
+                                            float(stats["period"]))
                 for key in (
                     "completed_with_err",
                     "completed_with_num_err",
@@ -642,6 +653,8 @@ class NeuronMonitor:
                     if isinstance(value, (int, float)):
                         sink.append(float(value))
 
+            if sample_completed is not None:
+                completed_series.append((index, sample_completed, sample_period))
             for core_id, value in sample_util.items():
                 utilisation[core_id].append(value)
             for core_id, value in sample_flops.items():
