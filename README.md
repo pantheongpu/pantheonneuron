@@ -146,9 +146,22 @@ pinned response is an open decision.
 
 `all_reduce` and `p2p_thrasher` need two or more devices. `trn1.32xlarge` is
 the smallest instance with device-to-device NeuronLink and needs 128 vCPUs
-against a granted 64, so they are written against the documented
-`nccom-test` output rather than against observed output, and their tests are
-the only thing behind them until that quota lands.
+against a granted 64, so no NeuronLink figure exists and none is recorded.
+
+**Their command line had never run, and could not have.** Until 2026-09-11
+the kernel passed the operation as `-c all_reduce`; `-c` is nccom-test's
+`--check {random,all_ones}`, so argparse rejected it and both collectives
+would have exited 2 on the first multi-device part they met. It also passed
+one rank per *device*, where a rank is a NeuronCore: two devices would have
+run both ranks on device 0, a core-to-core figure under a NeuronLink name.
+The invocation is now the one the 2026-08-26 probe ran, and it has met
+hardware on the one-device path it can reach: on inf2.xlarge 2026-09-11 the
+module's own call returned 61.22 GB/s all_reduce busbw over a fully parsed
+1-8 MiB sweep and 66.09 GB/s sendrecv at 64 MiB, both between the two cores
+of one chip (`data/validation-2026-09-11/inf2-nccom-invocation.log`). Both
+now also claim every core (`cores: "all"`), so they run before this process's
+runtime holds any. Which rank pairs sendrecv forms across devices is still
+unobserved.
 
 ### What the 2026-09-08 findings were resolved into
 

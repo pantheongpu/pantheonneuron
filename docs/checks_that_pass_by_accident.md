@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-four of them, and they are collected
+would go. This repo has now produced twenty-five of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -520,6 +520,31 @@ the gap was explained instead of detected. The row now reports
 `sample_period_s`. **Before recording a limit of a tool, check that the
 tool received the argument you think you sent.**
 
+### 25. Seventeen tests, and none of them ran the command
+
+`kernels/collectives.py` had seventeen tests, all green, and a
+docstring that said why nothing else could be done: the workloads need
+two devices, and no part this account can rent has two. The tests
+parsed nccom-test's documented table, flagged sweeps that missed a
+regime, and counted rows the pattern dropped. None of them built the
+command line and handed it to nccom-test, because there was no
+NeuronLink to hand it to.
+
+But the command needed no NeuronLink. The 2026-08-26 probe had run
+nccom-test on one inf2 as `-r 2 ... --non-interactive all_reduce`, and
+its output was in the repo. The kernel passed `-c all_reduce`. `-c` is
+`--check {random,all_ones}`; run on inf2.xlarge 2026-09-11 it exits 2 on
+argparse before doing anything. The kernel also passed one rank per
+device where a rank is a NeuronCore, so a two-device part would have put
+both ranks on device 0 and measured the core-to-core link under a
+NeuronLink name. The docstring warned about exactly that figure.
+
+The workloads skip on one device, and that is correct. The **module**
+does not have to. Called directly with the one device, the fixed
+invocation returned 61.22 GB/s over a fully parsed sweep. **When the
+thing you cannot test is the measurement, test everything the
+measurement will pass through on its way. Most of it runs anywhere.**
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -540,4 +565,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-four above were found by reading what a passing check had filtered out.
+twenty-five above were found by reading what a passing check had filtered out.

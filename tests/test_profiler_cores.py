@@ -200,7 +200,9 @@ def test_reservation_cost_names_who_pays():
     from kernels import registry
 
     aggregate, billed = pantheon_neuron.reservation_cost(registry.resolve("all"))
-    assert set(aggregate) == {"memory_read_agg", "memory_write_agg"}
+    # The collectives too: nccom-test starts a worker on every core.
+    assert set(aggregate) == {"memory_read_agg", "memory_write_agg",
+                              "all_reduce", "p2p_thrasher"}
     assert set(billed) == {"memory_read", "memory_write"}
 
     # Every billed workload really does declare the profiler, and no

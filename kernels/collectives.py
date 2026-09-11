@@ -23,8 +23,12 @@ observed output. The 2026-08-26 probe did run `nccom-test` on a single
 inf2, where it reported 50.66 GB/s core-to-core -- which is *not* NeuronLink
 and must not be recorded as such.
 
-STATUS: UNTESTED ON HARDWARE, and unusually so: unlike every other kernel
-here, it cannot be tested until the quota lands.
+STATUS: UNTESTED ON HARDWARE as workloads: both skip on every part this
+account can rent, so nothing here has measured NeuronLink. What has met
+hardware is the command line and the parse: on inf2.xlarge 2026-09-11 ``run_all_reduce`` and ``run_p2p``, called
+with the one device, returned 61.22 GB/s (sweep fully parsed) and 66.09
+GB/s -- core-to-core. Before that the invocation passed ``-c <op>``, which
+nccom-test rejects (``-c`` is ``--check``), so neither could have run.
 """
 
 import os
@@ -137,22 +141,48 @@ def _run(args: typing.Sequence[str]) -> str:
     return completed.stdout
 
 
+def ranks_for(devices: typing.Sequence) -> int:
+    """One nccom-test rank per NeuronCore, across every device.
+
+    A rank is a worker on one NeuronCore, not a device -- the 2026-08-26
+    probe ran ``-r 2`` on a single inf2 and got two workers on its two
+    cores. This used to pass ``len(devices)``, so a two-device part would
+    have run two ranks, both on device 0: the core-to-core figure this
+    module's docstring warns must not be recorded as NeuronLink, recorded
+    as NeuronLink.
+    """
+    return sum(int(getattr(device, "neuroncores", 0)) for device in devices)
+
+
+def command(operation: str, ranks: int, bytes_min: int, bytes_max: int,
+            dtype: str, step_factor: typing.Optional[int] = None
+            ) -> typing.List[str]:
+    """nccom-test's arguments, in the form the 2026-08-26 probe ran.
+
+    The operation is positional (``nccom-test -r 2 -b 1M -e 8M -n 20
+    --non-interactive all_reduce``). It used to be passed as ``-c
+    all_reduce``, a spelling nothing here had run, which left the
+    invocation with no operation argument at all.
+    """
+    args = ["-r", str(ranks), "-b", str(bytes_min), "-e", str(bytes_max)]
+    if step_factor is not None:
+        args += ["-f", str(step_factor)]
+    args += ["-n", "20", "-d", dtype, "--non-interactive", operation]
+    return args
+
+
 def run_all_reduce(problem: typing.Mapping[str, typing.Any],
                    devices: typing.Sequence) -> dict:
     """Sweep all-reduce sizes and average the bus bandwidth."""
     bytes_min = int(problem["bytes_min"])
     bytes_max = int(problem["bytes_max"])
-    ranks = len(devices)
+    ranks = ranks_for(devices)
 
-    output = _run([
-        "-r", str(ranks),
-        "-b", str(bytes_min),
-        "-e", str(bytes_max),
-        "-f", "2",              # double the size each step
-        "-n", "20",
-        "-c", "all_reduce",
-        "-d", str(problem.get("dtype", "fp32")),
-    ])
+    output = _run(command(
+        "all_reduce", ranks, bytes_min, bytes_max,
+        str(problem.get("dtype", "fp32")),
+        step_factor=2,          # double the size each step
+    ))
     rows = parse_busbw(output)
     if not rows:
         raise CollectivesUnavailable(
@@ -174,18 +204,17 @@ def run_all_reduce(problem: typing.Mapping[str, typing.Any],
 
 def run_p2p(problem: typing.Mapping[str, typing.Any],
             devices: typing.Sequence) -> dict:
-    """Send between devices at one large size and report bus bandwidth."""
-    size = int(problem["bytes"])
-    ranks = len(devices)
+    """Send between ranks at one large size and report bus bandwidth.
 
-    output = _run([
-        "-r", str(ranks),
-        "-b", str(size),
-        "-e", str(size),
-        "-n", "20",
-        "-c", "sendrecv",
-        "-d", str(problem.get("dtype", "fp32")),
-    ])
+    Every core is a rank, as for all_reduce. Which rank pairs nccom-test's
+    sendrecv forms -- and so how many of them cross a device boundary --
+    has not been observed on a multi-device part, and nothing here pins it.
+    """
+    size = int(problem["bytes"])
+    ranks = ranks_for(devices)
+
+    output = _run(command(
+        "sendrecv", ranks, size, size, str(problem.get("dtype", "fp32"))))
     rows = parse_busbw(output)
     if not rows:
         raise CollectivesUnavailable(

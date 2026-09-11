@@ -252,11 +252,15 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                  formula='sum(hbm_write_bytes over cores) / total_active_time / 1e9')),
 
     # -- interconnect ------------------------------------------------------
+    # `cores: "all"` on both collectives: nccom-test starts one worker per
+    # NeuronCore in processes of its own, so like the aggregates they must
+    # run before this process's runtime holds any core, and before the
+    # profiler reservation hides one (run_order, reservation_point).
     Workload("all_reduce", "interconnect",
              "All-reduce collective over NeuronLink.", _COLLECTIVE, min_devices=2,
              unit="GB/s",
              problem={"op": "all_reduce", "bytes_min": 1 << 20, "bytes_max": 8 << 20,
-                      "dtype": "fp32"},
+                      "dtype": "fp32", "cores": "all"},
              score_source=ScoreSource(NCCOM,
                  counters=(
                      'busbw',
@@ -266,7 +270,8 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              "Sustained device-to-device traffic over NeuronLink.",
              _COLLECTIVE, min_devices=2,
              unit="GB/s",
-             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32"},
+             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32",
+                      "cores": "all"},
              score_source=ScoreSource(NCCOM,
                  counters=(
                      'busbw',
