@@ -104,6 +104,17 @@ MOVING = 512                        # N per matmul call
 # the load is not the only term -- narrowing the moving tile to fit more
 # accumulators in half the PSUM cost more than its wider loads bought, so
 # the matmul instruction's own size matters as well.
+#
+# **What limits it now, measured the same day.** neuron-profile on the
+# 8192^3 graph: the Tensor Engine is active 0.867 of total_time -- 13.84 ms
+# of a 13.88 ms active window, busy 99.7% of the time the kernel runs --
+# while delivering 79.4 TFLOPS in that window, 84% of peak. 139,285 TE
+# instructions for 65,536 matmuls: ~2.1 each, a stationary load per
+# multiply. A variant reusing each stationary tile for two moving tiles
+# (4 x 2 accumulators, full PSUM) ran 77.03 against 78.08 and still issued
+# 2.07 per matmul -- the compiler reloads the stationary regardless. So in
+# this formulation the kernel is Tensor-Engine-bound, and the remaining
+# 16% is the per-matmul weight load NKI's matmul always issues.
 COALESCE_ROWS = 8
 
 # Which tiling the kernel uses. Both compute the same product -- both

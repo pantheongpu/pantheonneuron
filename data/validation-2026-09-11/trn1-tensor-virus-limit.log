@@ -1,0 +1,16 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. What limits tensor_virus at COALESCE_ROWS 8?
+# 1. probe_tv_engines.py: run() at 8192^3 on core 0, profile of the kernel graph on core 1.
+#    PREDICTED: tensor near 1.0 of the active window if TE-bound; DMA near 1.0 if load-bound.
+=== tensor_virus engine profile ===
+run: 78.08 TFLOPS, tiling coalesced, row-tiles wrong 0
+profile: tensor_engine=0.8672340895092379  dma=0.8564570218978407  vector_engine=2.4834788073706156e-05  gpsimd_engine=0.027997319373761875  tensor_engine_instruction_count=139285  total_time=0.015962125339  total_active_time=0.013881084632
+
+#    tensor 0.867 x total_time 15.96 ms = 13.84 ms of a 13.88 ms active window: 99.7% busy.
+#    65,536 matmuls per pass (64 x 16 x 64): 139,285 / 65,536 = 2.13 instructions each.
+
+# 2. probe_stationary.py: each stationary tile reused for two moving tiles (4 x 2 accumulators,
+#    full PSUM), checked with tensor_virus's row-distinct operands. PREDICTED: < ~1.6 instructions
+#    per matmul and a gain if the compiler elides the repeated stationary load; ~2.1 and none if not.
+run: 77.03 TFLOPS  corners 1.0  row-tiles wrong 0/64  warning None
+profile: tensor=0.8512204000949136 dma=0.7670137690742743 TE instructions 135485 = 2.07 per matmul; active 0.014179314328
+
