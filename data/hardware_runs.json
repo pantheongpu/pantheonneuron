@@ -95,6 +95,25 @@
           ],
           "failed": [],
           "skipped": ["all_reduce", "p2p_thrasher"]
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/trn1-full-pass-pr10.log",
+          "note": "--test all --duration 30 in one process at 3ea9663: 24 PASS (baseline_metrics not listed), 0 FAIL -- tensor_virus 78.67 TFLOPS at COALESCE_ROWS 8, memory_write_agg 537.32 GB/s with 8192-wide stores, both aggregates behind the start barrier.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn",
+            "llm_decode", "llm_prefill", "memory_read",
+            "memory_read_agg", "memory_write",
+            "memory_write_agg", "moe_router", "omni_virus",
+            "pcie_bandwidth", "pulse_virus", "quantized_gemm",
+            "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": ["all_reduce", "p2p_thrasher"]
         }
       ]
     },
