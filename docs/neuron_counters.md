@@ -141,6 +141,23 @@ which is right for per-period tallies and inconsistent with treating
 `completed` as a total. That inconsistency sat in one function the whole
 time.
 
+**A sample carries one `neuron_runtime_data` block per runtime on the
+device, and the tally is per runtime.** The device's count for a period is
+their sum. Measured on trn1.2xlarge 2026-09-11, `memory_read`'s 342
+samples were 310 with one runtime and 32 with two -- the second being the
+`neuron-profile` capture running beside the harness. A reader taking one
+block per sample sees a fraction of the device; a rate built from one
+entry per block divides one period's completions by two periods' worth of
+time (`neuron_monitor.execution_rate`).
+
+**The ~5 s periods above are what the harness was receiving, not what
+neuron-monitor floors at.** The config asked for `"1.0s"`, which the tool
+ignores in favour of its 5 s default; `"1s"` delivers 1 s. Since
+2026-09-11 the period goes out in whole seconds and every row records the
+period its samples carried (`sample_period_s`). A pulsed workload is
+sampled over whole pulse cycles instead, since a sample covering half a
+cycle reads the duty of wherever it fell.
+
 ### `effective_flops` is a rate per period, and the edge periods read low
 
 The AWS guide defines `effective_flops` as operations per second during
