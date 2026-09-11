@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-five of them, and they are collected
+would go. This repo has now produced twenty-six of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -557,6 +557,31 @@ invocation returned 61.22 GB/s over a fully parsed sweep. **When the
 thing you cannot test is the measurement, test everything the
 measurement will pass through on its way. Most of it runs anywhere.**
 
+### 26. The isolation held on the run that checked it
+
+The profiler finds memory_read's graph by searching the compile directory,
+and the directory was meant to hold only that kernel's graphs: memory_read
+pointed `NEURON_COMPILE_CACHE_URL` at it. The full pass that checked this
+found the graph at candidate 6 of 7, coverage 1.0. That looked like the
+isolation working.
+
+It was the isolation not yet having failed. The variable was set with
+`setdefault` and never unset, at a fixed path. Every workload after
+memory_read in the same process compiled into the directory, and the
+directory outlived the process. The next run on that machine, `--test
+memory_read --repeat 3`, searched 16 candidates newest first, never
+reached its own graph, and published the analytic fallback. By then the
+directory held 63 NEFFs. The pass that verified the search had run
+before its own later workloads filled the directory.
+
+The second quantity was the candidate count: 7, then 16, for the same
+kernel on the same machine. A search space that grows with every run is
+not isolated. The compiler turned out to read the variable at every
+compile, so each memory kernel now sets it to a directory of its own
+only while it runs. The next process searched 3 candidates, then 3 again.
+**A check that passes on a clean machine has only tested the clean
+machine. Run it twice.**
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -577,4 +602,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-five above were found by reading what a passing check had filtered out.
+twenty-six above were found by reading what a passing check had filtered out.

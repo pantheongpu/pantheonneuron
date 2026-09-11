@@ -110,18 +110,22 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
         before_loop: typing.Optional[typing.Callable[[], None]] = None) -> dict:
     """Execute the streaming write and return timing plus byte accounting."""
     nki_backend.require_toolchain()
+    workdir = cores.kernel_workdir("memory_write")
+    # Compile into the directory the profiler will search, and only while
+    # this kernel runs; see cores.compile_cache.
+    with cores.compile_cache(workdir):
+        return _run(problem, duration, before_loop, workdir)
 
+
+def _run(problem: typing.Mapping[str, typing.Any], duration: int,
+         before_loop: typing.Optional[typing.Callable[[], None]],
+         workdir: str) -> dict:
     import torch_xla.core.xla_model as xm  # type: ignore
 
     plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]),
                      free=STORE_FREE_ELEMENTS)
     rows = plan["tiles"] * PARTITION
     _, _, kernel = _build_kernel(rows)
-
-    workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
-    os.makedirs(workdir, exist_ok=True)
-    # Compile into the directory the profiler searches; see kernels/cores.py.
-    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     import torch  # type: ignore

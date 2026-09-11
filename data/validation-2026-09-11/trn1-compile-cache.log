@@ -1,0 +1,78 @@
+The profiler's compile directory, and when the compiler reads its cache variable --
+trn1.2xlarge 2026-09-11.
+
+What went wrong. memory_read and memory_write set NEURON_COMPILE_CACHE_URL with
+os.environ.setdefault to a fixed /tmp/pantheon_ccwork and never unset it. Every
+workload after memory_read in the same process then compiled into the directory
+the profiler searches, and the directory outlived the process. After one full pass
+it held 63 NEFFs; the next `--test memory_read --repeat 3` searched 16 candidates,
+newest first, never reached its own graph and fell back to the analytic Score
+(trn1-repeat-and-order.log). The full pass itself had found the graph at candidate
+6 of 7, because it ran before its own later workloads had filled the directory.
+
+1. Is the variable read per compile or once per process? (cache_env_probe.py:
+   four graphs of shapes no cache has seen, the variable changed between them)
+
+    graph 0, env unset             -> /var/tmp/neuron-compile-cache: 1 new NEFF
+    graph 1, env -> /tmp/ccprobe_a -> /tmp/ccprobe_a
+    graph 2, env -> /tmp/ccprobe_b -> /tmp/ccprobe_b: 1 new NEFF
+    graph 3, env -> /tmp/ccprobe_a -> /tmp/ccprobe_a: 2 new NEFFs (graphs 1 and 3)
+
+   Per compile. So a kernel can own the variable for exactly as long as it runs.
+
+    find /tmp/pantheon_ccwork -name '*.neff' | wc -l   ->   63
+
+2. The fix, run: each memory kernel compiles into /tmp/pantheon_ccwork/<kernel>,
+   set only inside cores.compile_cache and removed after (an explicit setting is
+   still left alone).
+
+   Run on the trn1 that had the 63-NEFF shared directory, with fresh per-kernel ones
+   (cache_checks.sh). "old shared top level" counts NEFFs in the old shared root only;
+   its root count rises because the per-kernel roots sit at the same find depth.
+
+    === before
+      /tmp/pantheon_ccwork/memory_read: 0 NEFF(s)
+      /tmp/pantheon_ccwork/memory_write: 0 NEFF(s)
+      old shared top level: 1 cache root(s), 63 NEFF(s) (untouched)
+    === --test memory --duration 10
+    [PANTHEON-NEURON] 1 device(s) [trn1], 4 workload(s)
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.68% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    60.98% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.02% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.36% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_210104.json
+      memory_read_agg: PASS Score=543.1027 method=workload repeats=None period=1.0
+      memory_write_agg: PASS Score=536.9285 method=workload repeats=None period=1.0
+      memory_read: PASS Score=273.0323 method=neuron-profile repeats=None period=1.0
+        profile: {'profiler_candidates_tried': 2, 'profiler_candidates_available': 3, 'profiler_plan_coverage': 1.0}
+      memory_write: PASS Score=274.5253 method=neuron-profile repeats=None period=1.0
+        profile: {'profiler_candidates_tried': 3, 'profiler_candidates_available': 4, 'profiler_plan_coverage': 1.0}
+      /tmp/pantheon_ccwork/memory_read: 3 NEFF(s)
+      /tmp/pantheon_ccwork/memory_write: 4 NEFF(s)
+      old shared top level: 3 cache root(s), 63 NEFF(s) (untouched)
+    === --test memory_read --duration 10 --repeat 3
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.98% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON]    3 repeats: 272.7257 to 272.8975, median 272.8682, cv 0.0003
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_211533.json
+      memory_read: PASS Score=272.8682 method=neuron-profile repeats={'attempted': 3, 'scored': 3, 'min': 272.7257, 'max': 272.8975, 'median': 272.8682, 'stdev': 0.0919, 'cv': 0.0003, 'trend': 'falling'} period=1.0
+        profile: {'profiler_candidates_tried': 2, 'profiler_candidates_available': 3, 'profiler_plan_coverage': 1.0}
+      /tmp/pantheon_ccwork/memory_read: 3 NEFF(s)
+      /tmp/pantheon_ccwork/memory_write: 4 NEFF(s)
+      old shared top level: 3 cache root(s), 63 NEFF(s) (untouched)
+
+   memory_write ran after memory_read in the same process and its graphs went to its own
+   directory (memory_read's held 3 before and after). A second process reached
+   neuron-profile on all three repeats at candidate 2 of 3, and neither directory grew.

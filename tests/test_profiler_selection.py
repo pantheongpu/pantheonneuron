@@ -507,18 +507,56 @@ def test_the_bandwidth_kernels_point_the_compiler_at_that_directory():
     assert cores.COMPILE_CACHE == "NEURON_COMPILE_CACHE_URL"
     for module in (memory_read, memory_write):
         code = sourcecheck.function_code(module.run)
-        assert "os . environ . setdefault ( cores . COMPILE_CACHE , workdir )" in code
+        assert "with cores . compile_cache ( workdir )" in code
+        assert "setdefault" not in code
 
 
-def test_an_explicit_compile_cache_is_not_overridden(monkeypatch):
-    """setdefault, not assignment: someone who pinned it is answering a
-    question we should not overrule."""
-    import sourcecheck
-    from kernels import memory_read
+def test_the_compile_cache_is_set_only_while_the_kernel_runs(monkeypatch, tmp_path):
+    """It was setdefault and never unset, so every later workload in the
+    process compiled into the profiler's directory: 63 NEFFs after one full
+    pass on trn1.2xlarge 2026-09-11, and the next memory_read ran out of
+    search budget before reaching its own graph."""
+    from kernels import cores
 
-    code = sourcecheck.function_code(memory_read.run)
-    assert "setdefault" in code
-    assert "os . environ [ cores . COMPILE_CACHE ] =" not in code
+    monkeypatch.delenv(cores.COMPILE_CACHE, raising=False)
+    with cores.compile_cache(str(tmp_path)) as used:
+        assert used == str(tmp_path)
+        assert os.environ[cores.COMPILE_CACHE] == str(tmp_path)
+    assert cores.COMPILE_CACHE not in os.environ
+
+
+def test_it_is_unset_even_when_the_kernel_raises(monkeypatch, tmp_path):
+    from kernels import cores
+
+    monkeypatch.delenv(cores.COMPILE_CACHE, raising=False)
+    with pytest.raises(RuntimeError):
+        with cores.compile_cache(str(tmp_path)):
+            raise RuntimeError("compile failed")
+    assert cores.COMPILE_CACHE not in os.environ
+
+
+def test_an_explicit_compile_cache_is_not_overridden(monkeypatch, tmp_path):
+    """Someone who pinned it is answering a question we should not
+    overrule -- and it is theirs to keep after the block, too."""
+    from kernels import cores
+
+    monkeypatch.setenv(cores.COMPILE_CACHE, "/their/cache")
+    with cores.compile_cache(str(tmp_path)) as used:
+        assert used == "/their/cache"
+    assert os.environ[cores.COMPILE_CACHE] == "/their/cache"
+
+
+def test_each_kernel_gets_a_directory_of_its_own(monkeypatch, tmp_path):
+    """One per kernel, so it holds that kernel's graphs across runs and
+    still gives a later run its compile-cache hits."""
+    from kernels import cores
+
+    monkeypatch.setenv(cores.WORKDIR, str(tmp_path))
+    read = cores.kernel_workdir("memory_read")
+    write = cores.kernel_workdir("memory_write")
+    assert read != write
+    assert os.path.isdir(read) and os.path.isdir(write)
+    assert os.path.dirname(read) == str(tmp_path)
 
 
 # -- the bound was one-sided ------------------------------------------------

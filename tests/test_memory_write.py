@@ -169,7 +169,7 @@ def test_stores_are_planned_8192_wide_and_reads_keep_their_width():
     assert memory_write.STORE_FREE_ELEMENTS == 8192
     assert write_plan["actual_bytes"] == problem["bytes"]
     assert memory_read.tile_plan(8 << 30, "bf16")["free"] == tiling.FREE_ELEMENTS == 2048
-    code = sourcecheck.flat_function_code(memory_write.run)
+    code = sourcecheck.flat_function_code(memory_write._run)
     assert "free = STORE_FREE_ELEMENTS" in code
 
 

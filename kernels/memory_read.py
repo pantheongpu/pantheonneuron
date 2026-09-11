@@ -132,20 +132,21 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
     ``hbm_read_bytes``, and the caller is responsible for reading it.
     """
     nki_backend.require_toolchain()
+    workdir = cores.kernel_workdir("memory_read")
+    # Compile into the directory the profiler will search, and only while
+    # this kernel runs; see cores.compile_cache.
+    with cores.compile_cache(workdir):
+        return _run(problem, duration, before_loop, workdir)
 
+
+def _run(problem: typing.Mapping[str, typing.Any], duration: int,
+         before_loop: typing.Optional[typing.Callable[[], None]],
+         workdir: str) -> dict:
     import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
     plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]))
     _, _nl, kernel = _build_kernel()
-
-    # torch_neuronx deletes its compiler workdir unless told otherwise, and
-    # neuron-profile capture needs the NEFF that lives there.
-    workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
-    os.makedirs(workdir, exist_ok=True)
-    # Compile into the same directory the profiler will search, so it holds
-    # this run's graphs and nothing else. See kernels/cores.py.
-    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,

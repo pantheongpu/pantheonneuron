@@ -420,7 +420,7 @@ def test_workers_are_launched_behind_the_barrier():
 def test_both_kernels_bracket_their_loop_and_take_the_hook():
     from kernels import memory_read, memory_write
     for module in (memory_read, memory_write):
-        code = sourcecheck.flat_function_code(module.run)
+        code = sourcecheck.flat_function_code(module._run)
         hook = code.index("before_loop ( )")
         assert hook < code.index("loop_started_at = time . time ( )") < code.index(
             "started = time . perf_counter ( )"), module.__name__
