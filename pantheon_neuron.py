@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import platform
+import re
 import statistics
 import sys
 import time
@@ -529,6 +530,22 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
 
     scores = [r["Score"] for r in rows
               if isinstance(r.get("Score"), (int, float))]
+    if scores and row["Status"] == "PASS":
+        # The row is the repeat that produced the median, whole -- its
+        # Detail, Telemetry and Duration as well as its Score. It was the
+        # last repeat, with columns patched to the median one by one
+        # (Measurement, then Peak and Percent Of Peak), and the rest left
+        # describing a different execution. An even count has no median
+        # repeat, and the row stays the last one's apart from Measurement,
+        # which is withheld (_median_provenance).
+        base = _median_row(rows, statistics.median(scores))
+        if base is not None:
+            row = dict(base)
+        # Every repeat's warnings, not the base's alone. A warning raised by
+        # repeat 1 and not repeat 3 was dropped with the last-repeat row: a
+        # device shortfall, a consumer-bound read, a thin sample. Only a
+        # failure propagated from the other repeats.
+        row["Detail"] = _repeat_details(rows, base)
     row["Repeats"] = _spread(scores, len(rows))
     if scores and row["Status"] == "PASS":
         published = statistics.median(scores)
@@ -562,6 +579,40 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
                 row["Detail"] = "; ".join(
                     filter(None, [row.get("Detail"), quantised]))
     return row
+
+
+def _repeat_details(rows, base=None) -> str:
+    """Every distinct Detail across repeats, attributed when not all had it.
+
+    Sentences are matched with their numbers masked, since the same warning
+    carries each repeat's own figures (a sample count, a timestamp in a
+    captured error). A warning every repeat raised is stated once, in the
+    base repeat's words; one only some raised says which, so a reader can
+    tell a warning about the workload from one about a single execution.
+    """
+    order: typing.List[str] = []
+    text: typing.Dict[str, str] = {}
+    seen: typing.Dict[str, typing.List[int]] = {}
+    for number, candidate in enumerate(rows, start=1):
+        for part in filter(None, (candidate.get("Detail") or "").split("; ")):
+            key = re.sub(r"\d+(\.\d+)?", "#", part)
+            if key not in seen:
+                seen[key] = []
+                order.append(key)
+                text[key] = part
+            if candidate is base:
+                text[key] = part
+            if number not in seen[key]:
+                seen[key].append(number)
+    parts = []
+    for key in order:
+        which = seen[key]
+        if len(which) == len(rows):
+            parts.append(text[key])
+        else:
+            listed = ", ".join(str(n) for n in which)
+            parts.append(f"{text[key]} [repeat {listed} of {len(rows)}]")
+    return "; ".join(parts)
 
 
 def _median_row(rows, published):
