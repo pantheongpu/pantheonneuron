@@ -342,6 +342,13 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             "Telemetry": {"samples": 0},
         }
 
+    # _LAST_RUN keeps the previous execution of this workload until the
+    # kernel replaces it, and a kernel that returns no figure of its own
+    # never does. These two are written here rather than by a kernel, so
+    # clear them first: a row must not carry an earlier repeat's ratio.
+    for stale in ("kernel_figure", "declared_over_kernel"):
+        (_LAST_RUN.get(workload.name) or {}).pop(stale, None)
+
     monitor = neuron_monitor.NeuronMonitor(
         period_seconds=monitor_period_for(workload, monitor_period))
     telemetry_started = monitor.start([device.index for device in devices])
@@ -453,6 +460,21 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
                     (_LAST_RUN.get(workload.name) or {}).get("elapsed_s"))
                 if overhang:
                     detail = "; ".join(filter(None, [detail, overhang]))
+            # Keep the figure the declared Score replaced, and the ratio
+            # between them, on every row rather than only when they differ
+            # by the factor of 1.5 that warns. The pair is the second
+            # quantity for a monitor Score, and reading it across a pass is
+            # what showed pulse_virus was being sampled wrong: on
+            # trn1.2xlarge 2026-09-11 tensor_virus, int_virus and
+            # transformer_virus sat within 0.2% of their kernels while
+            # pulse_virus sat at 0.963, and 0.963 is not a warning-sized
+            # number. (omni_virus reads 1.12 for a stated reason: its
+            # kernel counts only the two matmuls of its chain.)
+            if isinstance(score, (int, float)) and score > 0:
+                _LAST_RUN.setdefault(workload.name, {}).update({
+                    "kernel_figure": round(score, 4),
+                    "declared_over_kernel": round(declared / score, 4),
+                })
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
@@ -1375,6 +1397,10 @@ _PROVENANCE_KEYS = (
     # memory_*_agg: whether every worker reached the start barrier, so the
     # timed loops began together.
     "barrier_all_ready",
+    # What the kernel counted before the declared Score replaced it, and
+    # the ratio between them. See _measure_once.
+    "kernel_figure",
+    "declared_over_kernel",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,

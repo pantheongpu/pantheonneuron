@@ -512,3 +512,46 @@ def test_every_pinned_pulse_period_is_whole_seconds():
         pulse = (workload.problem or {}).get("period_s")
         if pulse is not None:
             assert pulse == int(pulse), workload.name
+
+
+# -- the figure the declared Score replaced ---------------------------------
+
+def _row_with_monitor_score(monkeypatch, kernel_figure, monitor_flops):
+    """Run one workload whose kernel counted `kernel_figure` while the
+    monitor reports `monitor_flops`, and return the row."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: kernel_figure)
+    monkeypatch.setattr(
+        pantheon_neuron.neuron_monitor.NeuronMonitor, "stop",
+        lambda self: {"samples": 4, "effective_flops": {
+            "0": {"samples": 3, "mean": monitor_flops}}})
+    workload = next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+    row = pantheon_neuron.run_workload(workload, TRN1, 0.02, 0.01)
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+    return row
+
+
+def test_the_row_keeps_the_figure_the_monitor_replaced(monkeypatch):
+    """The pair is the second quantity for a monitor Score. Reading it
+    across a pass is what showed pulse_virus was sampled wrong -- 0.963
+    where every other compute row sat within 0.2% of its kernel, and
+    0.963 is far below the 1.5x that warns."""
+    row = _row_with_monitor_score(monkeypatch, 40.0, 38.0e12)
+    assert row["Score"] == 38.0
+    assert row["Measurement"]["kernel_figure"] == 40.0
+    assert row["Measurement"]["declared_over_kernel"] == 0.95
+
+
+def test_agreement_is_recorded_too_not_just_disagreement(monkeypatch):
+    row = _row_with_monitor_score(monkeypatch, 77.74, 77.59e12)
+    assert row["Measurement"]["declared_over_kernel"] == 0.9981
+    assert not row["Detail"], "agreement is recorded, not complained about"
+
+
+def test_a_kernel_with_no_figure_of_its_own_records_no_ratio(monkeypatch):
+    """A workload whose _execute returns None has nothing to divide -- and
+    must not inherit the ratio of the run before it, which _LAST_RUN keeps
+    until a kernel replaces it."""
+    row = _row_with_monitor_score(monkeypatch, None, 50.0e12)
+    assert row["Score"] == 50.0
+    assert "declared_over_kernel" not in (row["Measurement"] or {})

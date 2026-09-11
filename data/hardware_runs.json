@@ -154,6 +154,26 @@
           "skipped": [
             "all_reduce", "p2p_thrasher"
           ]
+        },
+        {
+          "date": "2026-09-11",
+          "evidence": "data/validation-2026-09-11/trn1-monitor-vs-kernel.log",
+          "note": "--test all --duration 30 at 5c3d36e, with the execution-rate fixes (longest busy block, one completion entry per sample): 24 PASS (baseline_metrics not listed), 0 FAIL. The same instance then ran --test core with the row recording the kernel figure each monitor Score replaced: tensor_virus 0.9958 of its kernel, int_virus 0.9996, pulse_virus 1.0001, transformer_virus 0.9997, omni_virus 1.122 (its kernel counts only the chain's two matmuls). Counter-rate evidence: trn1-execution-rate.log.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher"
+          ]
         }
       ]
     },
