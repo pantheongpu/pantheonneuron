@@ -289,8 +289,10 @@ history: 2 of 4, on both parts.**
 *Correction, 2026-09-10 later:* both profiler figures above divided by
 `total_time`, which opens with a 2.08 ms idle startup that the workload's
 back-to-back executions don't pay. Over `total_active_time` the same
-kernels read **272.94** and **254.31** GB/s, within 0.4% and 1.1% of the
-wall clock. See `kernels/profiler.bandwidth_gbps`.
+kernels read **272.94** and **254.31** GB/s on trn1.2xlarge and **273.12**
+and **254.57** on inf2.xlarge, with the same 2.07–2.09 ms startup on both
+parts and each within 1.1% of its wall clock. The parts still agree; they
+had agreed on a figure 6–11% low. See `kernels/profiler.bandwidth_gbps`.
 
 `memory_read`'s 256.17 GB/s cross-checks against the 264 GB/s wall-clock
 figure measured on this part in August, which is what

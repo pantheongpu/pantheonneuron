@@ -211,7 +211,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "landing_value": landing_value,
         "warning": "; ".join(part for part in (
             verify_transfer_arrived(landing_value, plan["directions"]),
-            verify_directions_are_balanced(per_direction),
+            verify_directions_are_balanced(per_direction,
+                                           transfer_bytes=plan["bytes"]),
         ) if part) or None,
         "plan": plan,
     }
@@ -268,9 +269,15 @@ def verify_transfer_arrived(
     return None
 
 
+# Largest d2h transfer measured on the fast side of the staging cliff: the
+# 2026-09-10 size sweep held ~2.9 GB/s through 16 MiB and 0.88 by 64 MiB.
+D2H_FAST_UP_TO = 16 << 20
+
+
 def verify_directions_are_balanced(
     per_direction: typing.Mapping[str, typing.Mapping[str, float]],
     ratio_floor: float = 0.25,
+    transfer_bytes: typing.Optional[int] = None,
 ) -> typing.Optional[str]:
     """Flag a link that is far slower one way than the other.
 
@@ -294,6 +301,19 @@ def verify_directions_are_balanced(
         return "no bytes moved in either direction"
     if slowest < fastest * ratio_floor:
         slow_name = min(rates, key=rates.get)
+        # The explained case says so. With both legs preallocated -- which
+        # run() now always does -- the harness-first advice below sent every
+        # reader to re-check a cause fixed on 2026-09-08, on every run, while
+        # the measured cause went unnamed.
+        if (slow_name == "d2h" and isinstance(transfer_bytes, int)
+                and transfer_bytes > D2H_FAST_UP_TO):
+            return (
+                f"d2h ran at {slowest:.1f} GB/s against {fastest:.1f} the "
+                f"other way at {transfer_bytes / (1 << 20):.0f} MiB per "
+                "transfer -- past the staging cliff a size sweep measured on "
+                "trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB "
+                "and ~1 GB/s past 64 MiB: a transfer-size effect, not the link"
+            )
         return (
             f"{slow_name} ran at {slowest:.1f} GB/s against {fastest:.1f} the "
             "other way -- before reading this as a link property, check that "
