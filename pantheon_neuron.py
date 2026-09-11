@@ -392,21 +392,31 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             thin = thin_monitor_sample(metrics, workload)
             if thin:
                 detail = "; ".join(filter(None, [detail, thin]))
-        elif score is None and (_wants_monitor_score(workload)
-                                or _wants_execution_rate(workload)):
+        elif _wants_monitor_score(workload) or _wants_execution_rate(workload):
             counter = ("effective_flops" if _wants_monitor_score(workload)
                        else "execution rate")
-            # neuron_monitor.execution_rate says which of the three reasons
-            # it was -- no samples, one sample, or a counter that never
-            # advanced. Those need different responses and the generic
-            # message covered all three: graph_replay degraded on
-            # 2026-09-10 and the row said only that the rate was absent.
+            # neuron_monitor says which of its reasons it was -- no samples,
+            # no whole period, a counter that never moved. Those need
+            # different responses and a generic message covered all of
+            # them: graph_replay degraded on 2026-09-10 and the row said
+            # only that the rate was absent.
             because = metrics.get("execution_rate_absent"
                                   if _wants_execution_rate(workload)
                                   else "effective_flops_absent")
-            detail = detail or "; ".join(filter(None, [
-                f"neuron-monitor reported no {counter}, so this run has "
-                "no Score from its declared source",
+            # Said whether or not the kernel's own figure takes the Score's
+            # place. It was said only when there was no fallback, so a
+            # 5-second tensor_virus on trn1.2xlarge 2026-09-11 published
+            # its analytic 72.45 with an empty Detail: the Score Method
+            # recorded the fallback, and nothing recorded why ("run
+            # longer"). memory_read's profiler fallback always said.
+            consequence = ("the kernel's analytic figure is published instead"
+                           if score is not None else
+                           "so this run has no Score from its declared source")
+            # Appended, not substituted for an empty detail: it was
+            # `detail or ...`, so any earlier note dropped this sentence.
+            detail = "; ".join(filter(None, [
+                detail,
+                f"neuron-monitor reported no {counter}, {consequence}",
                 because,
             ]))
 

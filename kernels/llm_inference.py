@@ -137,13 +137,27 @@ def run_decode(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
             # prefill's were quadratic. That is luck, not a property worth
             # relying on.
             normed = transformer_ops.rms_norm(state)
+            # All three projections, as a real decode step computes them.
+            # Until 2026-09-11 only q was: attention ran against the cache
+            # alone, so the step read 10 h^2 weights per layer where a
+            # decode reads 12, while decode_step_flops counted all four
+            # projections. The kernel was lighter than the work it claimed,
+            # and the implied_tflops beside it heavier -- one discrepancy
+            # showing up as two.
             q = torch.matmul(normed, params["q"])
-            # Attention against the cached context rather than against the
-            # single token: linear in context, which is the shape decode
-            # actually has and prefill does not.
-            scores = torch.matmul(q, cache_k[layer].transpose(-1, -2))
-            probs = torch.softmax(scores.float(), dim=-1).to(state.dtype)
-            attended = torch.matmul(probs, cache_v[layer])
+            k_new = torch.matmul(normed, params["k"])
+            v_new = torch.matmul(normed, params["v"])
+            # Attention over the cached context and the new token: linear
+            # in context, the shape decode has and prefill does not. The new
+            # token's score and value are combined with the cache's rather
+            # than concatenated onto it, which would copy the whole cache
+            # every step -- a cost kv_cache_churn measures, not this.
+            cached = torch.matmul(q, cache_k[layer].transpose(-1, -2))
+            fresh = (q * k_new).sum(dim=-1, keepdim=True)
+            probs = torch.softmax(torch.cat([cached, fresh], dim=-1).float(),
+                                  dim=-1).to(state.dtype)
+            attended = (torch.matmul(probs[..., :context], cache_v[layer])
+                        + probs[..., context:] * v_new)
             state = state + torch.matmul(attended, params["o"])
             expanded = torch.matmul(transformer_ops.rms_norm(state),
                                     params["w1"])
