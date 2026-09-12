@@ -174,6 +174,17 @@
           "skipped": [
             "all_reduce", "p2p_thrasher"
           ]
+        },
+        {
+          "date": "2026-09-12",
+          "evidence": "data/validation-2026-09-12/trn1-declared-sources.log",
+          "note": "Targeted, not a full pass: --test memory --duration 20 and --test kv_cache_churn --duration 15, verifying the deep-dive batch. The aggregates report the source they declare (workload) at 543.78 and 537.39 GB/s, recomputable from the bytes_moved and elapsed_s their rows now carry; memory_read (272.90) and memory_write (274.08) still reach neuron-profile, since the orchestrator reserves them a core; kv_cache_churn 97373 cache-updates/s with its declared counters in the row. Also on this instance: data/validation-2026-09-12/trn1-checks-that-verified-the-warmup.log.",
+          "passed": [
+            "kv_cache_churn", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg"
+          ],
+          "failed": [],
+          "skipped": []
         }
       ]
     },
