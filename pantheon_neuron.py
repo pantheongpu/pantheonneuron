@@ -1397,6 +1397,12 @@ _PROVENANCE_KEYS = (
     # memory_*_agg: whether every worker reached the start barrier, so the
     # timed loops began together.
     "barrier_all_ready",
+    # kv_cache_churn: how many of the ring's slots the measured loop was
+    # supposed to write, and how many held a written entry afterwards. The
+    # check acts on these; the row has to show them.
+    "ring_slots_expected",
+    "ring_readings_checked",
+    "ring_readings_landed",
     # What the kernel counted before the declared Score replaced it, and
     # the ratio between them. See _measure_once.
     "kernel_figure",

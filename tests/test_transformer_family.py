@@ -1595,13 +1595,21 @@ def test_a_nan_loss_still_invalidates_and_is_reported_first():
     assert paired["warning"].index("NaN") < paired["warning"].index("unchanged")
 
 
-def test_the_train_step_samples_a_parameter_before_and_after():
+def test_the_train_step_samples_a_parameter_across_the_measured_steps():
+    """`before` is taken after the warm-up, so the pair spans the run.
+
+    It used to be taken ahead of the warm-up, on the reasoning that a later
+    sample would miss the first update. That update is the warm-up's, and
+    the warm-up is not what the Score counts: with `before` ahead of it,
+    "the model moved" was satisfied by a single step nobody measured, and a
+    run whose own steps moved nothing would have passed on it.
+    """
     code = sourcecheck.function_code(transformer_compute.run_train_step)
     assert 'sampled = params [ 0 ] [ "w2" ]' in code
     assert '"parameter_moved"' in code
-    # Sampled before the warm-up step, or the first update would be missed.
-    assert code.index("before = transformer_ops . read_back") < code.index(
-        "warm = one_step ( )")
+    assert code.index("warm = one_step ( )") < code.index(
+        "before = transformer_ops . read_back") < code.index(
+        "deadline = started + duration")
 
 
 # -- a cache write that could not be seen ------------------------------------
@@ -1624,23 +1632,61 @@ def test_the_cache_and_the_entry_are_different_values():
     assert "entry = torch . ones (" not in code
 
 
-def test_a_cache_still_holding_its_own_fill_invalidates_the_score():
+def test_the_cache_is_put_back_before_the_clock_starts():
+    """Otherwise the landing check verifies the warm-up, not the run.
+
+    The warm-up writes every ring slot to compile it, so every slot held
+    ENTRY_FILL before the timed loop began: the check read a written value
+    whatever the loop did, and a loop whose stores were elided passed it.
+    """
     code = sourcecheck.function_code(llm_inference.run_cache_churn)
-    assert "observed == CACHE_FILL" in code
+    reset = code.index("cache_k . fill_ ( CACHE_FILL )")
+    warm_up = code.index("for write in writers :")
+    assert warm_up < reset < code.index("deadline = started + duration"), \
+        "the cache must be put back after the warm-up and before the loop"
+    assert "cache_v . fill_ ( CACHE_FILL )" in code, "both caches"
+
+
+def test_every_slot_the_loop_wrote_is_checked_not_just_the_first():
+    """A single element lives in slot 0. A loop that wrote one slot every
+    step reads the same there as one that churned the whole ring."""
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
+    assert "for slot in range ( min ( steps , slots ) )" in code
+    assert "for cache in ( cache_k , cache_v )" in code
+
+
+def test_a_slot_still_holding_the_cache_fill_invalidates_the_score():
+    message = llm_inference.verify_ring_landed(
+        [True, True, False, True], expected=4, steps=9,
+        cache_fill=1.0, entry_fill=2.0)
+    assert message and "1 of 4 ring slot(s) still read 1" in message
+    code = sourcecheck.function_code(llm_inference.run_cache_churn)
     assert '"score_invalid" ] = True' in code
-    assert "wrote nothing the device kept" in code
+
+
+def test_a_ring_that_landed_everywhere_says_nothing():
+    assert llm_inference.verify_ring_landed(
+        [True] * 16, expected=8, steps=40, cache_fill=1.0, entry_fill=2.0) is None
+
+
+def test_an_unreadable_slot_is_unverified_not_a_pass():
+    message = llm_inference.verify_ring_landed(
+        [True, None], expected=2, steps=5, cache_fill=1.0, entry_fill=2.0)
+    assert message and "could not be read back" in message
+
+
+def test_a_run_that_wrote_no_slot_says_so():
+    message = llm_inference.verify_ring_landed(
+        [], expected=0, steps=0, cache_fill=1.0, entry_fill=2.0)
+    assert message and "wrote nothing" in message
 
 
 def test_the_write_check_does_not_replace_a_nan_message():
     """Replacing it would trade the more serious finding for the more
     specific one."""
     code = sourcecheck.function_code(llm_inference.run_cache_churn)
-    marker = code.index("observed == CACHE_FILL")
+    marker = code.index("missed = verify_ring_landed")
     after = code[marker:marker + 400]
-    # The existing message has to be an input to the new one. Matching the
-    # separator literal is what the first version did -- and it looked for
-    # `" ; " . join`, spacing the tokenizer does not insert inside a string
-    # literal. A check about what the code does, not how it is spaced.
     assert ". join (" in after, "the message is assigned, not joined"
     assert 'result . get ( "warning" )' in after, (
         "the existing message is not an input to the joined one")
@@ -1650,7 +1696,7 @@ def test_the_bandwidth_warning_still_yields_to_it():
     """A run that wrote nothing should not also be lectured about
     bandwidth -- the bytes it reports were never written."""
     code = sourcecheck.function_code(llm_inference.run_cache_churn)
-    assert code.index("observed == CACHE_FILL") < code.index(
+    assert code.index("missed = verify_ring_landed") < code.index(
         "verify_memory_bound ( bytes_per_s )")
 
 

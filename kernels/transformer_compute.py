@@ -142,7 +142,6 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     # the forward, the backward and the step all execute either way, and
     # the loss is a function of parameters that may never have moved.
     sampled = params[0]["w2"]
-    before = transformer_ops.read_back(sampled)
 
     def one_step():
         optimiser.zero_grad()
@@ -162,6 +161,14 @@ def run_train_step(problem: typing.Mapping[str, typing.Any], duration: int) -> d
     warm = one_step()
     xm.wait_device_ops()
     del warm
+
+    # Sampled after the warm-up, not before it. The warm-up is a full
+    # step -- forward, backward, optimiser -- so a `before` taken ahead of
+    # it made "the model moved" a statement about the warm-up as much as
+    # about the measured run, and a run whose own steps moved nothing
+    # would have passed on the warm-up's update alone. The pair now spans
+    # exactly the steps the Score counts.
+    before = transformer_ops.read_back(sampled)
 
     sink = None
     steps = 0

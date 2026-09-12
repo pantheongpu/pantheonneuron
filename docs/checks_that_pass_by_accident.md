@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-seven of them, and they are collected
+would go. This repo has now produced twenty-eight of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -612,6 +612,33 @@ fixture now uses the recorded name, the parser reads it with the old
 spelling as a fallback, and a test reads the probe file to confirm the two
 still agree.
 
+### 28. The warm-up had already satisfied the check
+
+`kv_cache_churn` exists to establish that a KV cache write reaches the
+device -- the workload that found XLA has no in-place update, after the
+`index_copy_` version cost 455 ms to move 32 MiB. Its guard read one cache
+element and failed if it still held `CACHE_FILL`, the value the cache was
+created with, since a landed write leaves `ENTRY_FILL`.
+
+The loop before it compiles each ring slot by writing it. So every slot
+held `ENTRY_FILL` before the clock started, and the element the guard reads
+was written by the warm-up whatever the timed loop did. A loop whose stores
+the compiler elided would have read `ENTRY_FILL` and passed. The guard was
+a statement about the warm-up.
+
+`transformer_train_step` had the same shape from the other end: it sampled
+the parameter *before* its warm-up step -- a full forward, backward and
+optimiser step -- so "the model moved" could be satisfied by an update
+nobody measured.
+
+Both now bracket the measured run: the cache is put back to `CACHE_FILL`
+after the slots compile, and the parameter is sampled after the warm-up.
+The cache check also reads every slot the loop should have written rather
+than one element, since a single element lives in slot 0 and a loop that
+wrote only slot 0 reads the same there as one that churned the ring.
+**A check whose reference state is set by the warm-up is a check on the
+warm-up.**
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -632,4 +659,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-seven above were found by reading what a passing check had filtered out.
+twenty-eight above were found by reading what a passing check had filtered out.

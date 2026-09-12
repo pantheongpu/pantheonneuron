@@ -1,0 +1,68 @@
+Three checks that were not checking the measured run, and the telemetry field no
+report ever carried -- trn1.2xlarge, 2026-09-12 (UTC).
+
+1. kv_cache_churn's landing check. It read one cache element and failed only if
+   that element still held CACHE_FILL. The loop that compiles each ring slot
+   writes every slot first, so the element held ENTRY_FILL before the clock
+   started: the check passed whatever the timed loop did. The cache is now put
+   back to CACHE_FILL after the slots compile, and every slot the loop should
+   have written is read afterwards, in both caches.
+
+2. transformer_train_step sampled its parameter before the warm-up, which is a
+   full forward/backward/optimiser step, so "the model moved" could be
+   satisfied by an update nobody measured. It is now sampled after the warm-up.
+
+3. neuron_monitor read memory_used.neuron_runtime_used_bytes.device. Hardware
+   writes neuron_device (data/probe-2026-08-26/07-neuron-monitor-schema.txt),
+   so device_memory_used_bytes was absent from every report the suite has
+   written -- and the schema test's fixture carried the probe's own number
+   under the parser's key, so it passed.
+
+--test kv_cache_churn --duration 20, after the reset and the per-slot check:
+
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> kv_cache_churn
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260912_002615.json
+      Score 97172.0693 cache-updates/s | status PASS | Detail: ''
+      ring: {'ring_slots_expected': 8, 'ring_readings_checked': 16, 'ring_readings_landed': 16}
+      cache_element 2.0 | device memory {'mean': 725060983, 'peak': 942579278}
+
+    All 16 readings (8 ring slots x 2 caches) hold the written entry, and the rate is
+    unchanged by the reset: 97172 against 97138 and 97249 cache-updates/s on earlier runs.
+
+--test transformer_train_step --duration 20, sampling after the warm-up:
+
+    === --test transformer_train_step --duration 20
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> transformer_train_step
+    [PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no chan
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260912_001038.json
+      transformer_train_step: PASS Score=3.646 train-steps/s
+        device_memory_used_bytes: {'mean': 2703233116, 'peak': 10638432928}
+        {'parameter_before': 6.103515625e-05, 'parameter_after': 6.103515625e-05, 'parameter_moved': False}
+        Detail: the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and the model never updates. The Score still measures what a training step costs; it does not measure tr
+    Same verdict as before the change (the parameter does not move at this learning
+    rate in bf16), now stated about the steps the Score counts. 3.646 train-steps/s.
+
+--test tensor_virus --duration 15, for the device memory field and the ratio:
+
+    === --test tensor_virus --duration 15
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    82.79% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260912_001417.json
+      tensor_virus: PASS Score=78.649 TFLOPS
+        device_memory_used_bytes: {'mean': 417525279, 'peak': 918373548}
+        {'kernel_figure': 78.0657, 'declared_over_kernel': 1.0075}
+
+device_memory_used_bytes appears for the first time in every one of these rows:
+    kv_cache_churn          mean 725060983   peak 942579278
+    transformer_train_step  mean 2703233116  peak 10638432928
+    tensor_virus            mean 417525279   peak 918373548
+The training workload holding ten times what the matmul holds is the shape a reader
+would expect, and is the first evidence any of this was being reported at all.
