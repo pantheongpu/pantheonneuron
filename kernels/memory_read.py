@@ -274,8 +274,9 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
     if not os.environ.get(cores.RESERVED_CORE):
         result["warning"] = (
             "no core was reserved for neuron-profile, so the Score is the "
-            "analytic figure; run this workload in a selection that leaves "
-            "the profiler a core"
+            "analytic figure; run a selection that leaves the profiler a "
+            f"core, or set {cores.RESERVED_CORE} to one this process does "
+            "not hold"
         )
         return result
 

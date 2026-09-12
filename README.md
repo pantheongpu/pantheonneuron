@@ -57,8 +57,11 @@ part with 2+ devices, and this account's Trn quota is 64 vCPU against the
 
 The last full passes were **23 PASS, 0 FAIL** on trn1.2xlarge, 2026-09-08
 and 2026-09-10, and **24 PASS, 0 FAIL** (all but the two two-device
-workloads) three times on 2026-09-11, the last at every change described
-below.
+workloads) five times on 2026-09-11, the last at every change described
+below. inf2.xlarge had its first full pass the same day: **23 PASS,
+0 FAIL**, with three skips (the two two-device workloads and the training
+step, which Inferentia has no capability for). Every one is recorded in
+`data/hardware_runs.json` with the log that proves it.
 
 **Scores from a declared hardware source: 7 or 8 of 23**, and which it is
 varies between runs of the same code. That is not a rounding detail — it is
