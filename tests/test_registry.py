@@ -110,3 +110,13 @@ def test_aggregate_memory_workloads_need_multicore():
     single_core = [NeuronDevice(0, "inf2", "v2", 1, 1, False)]
     assert not _get("memory_read_agg").runnable_on(single_core)
     assert _get("memory_read").runnable_on(single_core)
+
+
+def test_the_test_flag_help_names_every_suite():
+    """It named four of the eight, so --test accepted suites --help gave a
+    reader no way to discover -- eight of the twenty-six workloads."""
+    import pantheon_neuron
+
+    help_text = pantheon_neuron.build_parser().format_help()
+    for suite in registry.SUITES:
+        assert suite in help_text, suite

@@ -1800,7 +1800,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--test",
         default="all",
-        help="Workload name, suite (baseline, core, memory, interconnect), or 'all'",
+        # Built from the registry rather than listed here. Four of the
+        # eight suites were named -- inference, training, runtime and
+        # ai_auxiliary were not -- so --help described a smaller suite than
+        # --test accepts, and eight of the twenty-six workloads sat in a
+        # suite a reader had no way to discover.
+        help=("Workload name, suite (" + ", ".join(registry.SUITES) +
+              "), or 'all'"),
     )
     parser.add_argument(
         "--duration", type=int, default=30, help="Seconds per workload (default: 30)"
