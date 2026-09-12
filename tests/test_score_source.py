@@ -235,7 +235,7 @@ def test_an_internal_score_can_be_recomputed_from_its_row():
         if source is None or source.source != registry.INTERNAL:
             continue
         # A result carrying exactly what the declaration names.
-        result = {counter: 1 for counter in source.counters}
+        result = dict.fromkeys(source.counters, 1)
         pantheon_neuron._LAST_RUN[workload.name] = result
         try:
             provenance = pantheon_neuron._provenance(workload) or {}
