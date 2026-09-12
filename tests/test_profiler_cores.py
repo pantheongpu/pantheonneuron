@@ -219,3 +219,31 @@ def test_a_selection_without_aggregates_is_charged_nothing():
     single = [w for w in registry.WORKLOADS
               if w.name in ("memory_read", "memory_write")]
     assert pantheon_neuron.reservation_cost(single) == ([], [])
+
+
+# -- a capture nobody could have satisfied -----------------------------------
+
+def test_the_bandwidth_kernels_skip_the_capture_without_a_reserved_core():
+    """neuron-profile replays the NEFF and needs a core of its own. Without
+    a reservation this process holds every core it can see, so the capture
+    cannot succeed -- it spent a subprocess per candidate NEFF to arrive at
+    "Logical Neuron Core(s) not available", and put that in the row."""
+    import sourcecheck
+    from kernels import memory_read, memory_write
+
+    for module in (memory_read, memory_write):
+        code = sourcecheck.function_code(module._run)
+        gate = code.index("os . environ . get ( cores . RESERVED_CORE )")
+        assert gate < code.index("_profile ( workdir"), module.__name__
+        assert "no core was reserved for neuron-profile" in code, module.__name__
+
+
+def test_an_aggregate_worker_is_never_handed_a_reserved_core():
+    """Its environment is inherited, so a reservation made earlier in the
+    orchestrator would otherwise reach a worker that cannot use it."""
+    import sourcecheck
+    from kernels import memory_agg
+
+    code = sourcecheck.function_code(memory_agg.run)
+    assert "environment . pop ( core_planning . RESERVED_CORE , None )" in code
+    assert "environment [ core_planning . VISIBLE_CORES ] = str ( core )" in code

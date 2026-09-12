@@ -148,6 +148,13 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
             # Each worker sees exactly one core, so the runtime cannot hand
             # two of them the same one.
             environment[core_planning.VISIBLE_CORES] = str(core)
+            # And no reserved core: the worker holds the only core it can
+            # see, so a capture inside it cannot find a free one. The
+            # environment is inherited, so an orchestrator that had already
+            # reserved would otherwise hand the worker a core it does not
+            # have -- and the kernel would spend a subprocess per candidate
+            # NEFF discovering that.
+            environment.pop(core_planning.RESERVED_CORE, None)
             # Separate compiler workdirs: concurrent workers writing NEFFs
             # into one directory would race, and find_neff would then pick
             # another worker's graph.

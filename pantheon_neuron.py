@@ -1428,6 +1428,10 @@ _PROVENANCE_KEYS = (
     # one after another.
     "concurrent_window_s",
     "worker_span_s",
+    # memory_*_agg: the numerator its declared formula sums, and how many
+    # workers it summed, so the Score can be recomputed from the row.
+    "bytes_moved",
+    "cores_reporting",
     # fused_attention, moe_router, rag_embedding and vision_encoder report
     # a tile, token or vector rate, which nothing can check. implied_tflops
     # can be held against the ~26 this kernel family reaches on a dense
@@ -1512,8 +1516,19 @@ def _provenance(workload) -> typing.Optional[dict]:
     run = _LAST_RUN.get(workload.name)
     if not run:
         return None
-    found = {key: run[key] for key in _PROVENANCE_KEYS
-             if run.get(key) is not None}
+    # The counters the registry declares, then the curated extras. A
+    # declaration is the row's promise that the Score can be recomputed
+    # from it, and eleven workloads' numerators never reached the row --
+    # `cache_updates`, `routed_tokens`, `steps_completed` and the rest --
+    # so a reader could check the rate against nothing at all. Taking them
+    # from the declaration rather than a hand-kept list is what stops the
+    # next workload arriving without them. Counters that name a monitor or
+    # profile path ('neuroncore_counters.*.effective_flops') are not kernel
+    # keys and simply do not match.
+    declared = tuple(getattr(workload.score_source, "counters", None) or ())
+    keys = _PROVENANCE_KEYS + tuple(
+        key for key in declared if key not in _PROVENANCE_KEYS)
+    found = {key: run[key] for key in keys if run.get(key) is not None}
     return found or None
 
 

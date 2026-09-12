@@ -263,6 +263,22 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
         result["warning"] = elided
         return result
 
+    # neuron-profile replays the NEFF, so it needs a NeuronCore of its own,
+    # and it only has one when the orchestrator reserved it (RESERVED_CORE,
+    # which profiler._environment pins the capture to). Without that, this
+    # process holds every core it can see and the capture cannot succeed --
+    # which is the aggregates' case by construction: each worker is given
+    # exactly one core and holds it. Attempting anyway spent a subprocess
+    # per candidate to arrive at "Logical Neuron Core(s) not available" and
+    # put that in every worker's warning.
+    if not os.environ.get(cores.RESERVED_CORE):
+        result["warning"] = (
+            "no core was reserved for neuron-profile, so the Score is the "
+            "analytic figure; run this workload in a selection that leaves "
+            "the profiler a core"
+        )
+        return result
+
     # The declared Score source. A failure here degrades to the analytic
     # figure rather than aborting the run -- but the row records which was
     # used, so a provisional number is never mistaken for the real one.

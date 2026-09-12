@@ -144,6 +144,16 @@ def _prose():
         "so every selection reaches the declared source. The console names "
         "where the reservation lands.",
         "",
+        "**The aggregates themselves never reach neuron-profile, and no "
+        "longer claim to.** A capture replays the NEFF and needs a "
+        "NeuronCore of its own; an aggregate gives every core to a worker "
+        "and each worker holds the one core it can see. They are counted by "
+        "the kernel — summed bytes over the longest worker's loop — which "
+        "is what their rows have always reported. The single-core "
+        "`memory_read` and `memory_write` keep the profiler, and the "
+        "kernels now skip a capture attempt entirely unless a core was "
+        "reserved for it.",
+        "",
         "## Where the comparison does not hold",
         "",
         _not_comparable(),

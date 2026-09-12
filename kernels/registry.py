@@ -223,18 +223,28 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'total_active_time',
                  ),
                  formula='hbm_write_bytes / total_active_time / 1e9')),
+    # **INTERNAL, not PROFILER, and the difference is structural.**
+    # neuron-profile replays the NEFF and so needs a NeuronCore of its own.
+    # An aggregate gives every core to a worker -- that is what `cores:
+    # "all"` means -- and each worker holds the one core it can see, so no
+    # capture inside a worker can ever find a free core. Declaring
+    # neuron-profile here promised a source the run cannot reach: the rows
+    # read "Score Method: workload" against a registry saying
+    # neuron-profile, with nothing connecting the two, and every worker
+    # spent a subprocess per candidate NEFF arriving at "Logical Neuron
+    # Core(s) not available". The single-core memory_read and memory_write
+    # keep the profiler; it is the aggregate that cannot have it.
     Workload("memory_read_agg", "memory",
              "Aggregate HBM read bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
              problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"},
-             score_source=ScoreSource(PROFILER,
+             score_source=ScoreSource(INTERNAL,
                  counters=(
-                     'hbm_read_bytes',
-                     'total_time',
-                     'total_active_time',
+                     'bytes_requested',
+                     'elapsed_s',
                  ),
-                 formula='sum(hbm_read_bytes over cores) / total_active_time / 1e9')),
+                 formula='sum(bytes_requested over cores) / max(elapsed_s over cores) / 1e9')),
     # 4 GiB per core, for the same residency reason as memory_write: each
     # worker allocates its own destination on its own core, so the pin is
     # per-core and the arithmetic is identical.
@@ -243,13 +253,12 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
              problem={"bytes": 4 << 30, "dtype": "bf16", "cores": "all"},
-             score_source=ScoreSource(PROFILER,
+             score_source=ScoreSource(INTERNAL,
                  counters=(
-                     'hbm_write_bytes',
-                     'total_time',
-                     'total_active_time',
+                     'bytes_written',
+                     'elapsed_s',
                  ),
-                 formula='sum(hbm_write_bytes over cores) / total_active_time / 1e9')),
+                 formula='sum(bytes_written over cores) / max(elapsed_s over cores) / 1e9')),
 
     # -- interconnect ------------------------------------------------------
     # `cores: "all"` on both collectives: nccom-test starts one worker per

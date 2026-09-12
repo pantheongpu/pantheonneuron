@@ -20,8 +20,8 @@ Instance columns show whether the capability gate admits the workload —
 | `omni_virus` | core | TFLOPS | monitor | — | ✅ | ✅ | ✅ | ✅ |
 | `memory_read` | memory | GB/s | profile | **56.58** | ✅ | ✅ | ✅ | ✅ |
 | `memory_write` | memory | GB/s | profile | **0.1094** | ✅ | ✅ | ✅ | ✅ |
-| `memory_read_agg` | memory | GB/s | profile | — | ✅ | ✅ | ✅ | ✅ |
-| `memory_write_agg` | memory | GB/s | profile | — | ✅ | ✅ | ✅ | ✅ |
+| `memory_read_agg` | memory | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `memory_write_agg` | memory | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
 | `all_reduce` | interconnect | GB/s | nccom | **50.66** | — | ✅ | — | ✅ |
 | `p2p_thrasher` | interconnect | GB/s | nccom | — | — | ✅ | — | ✅ |
 | `pcie_bandwidth` | interconnect | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
@@ -70,6 +70,8 @@ So the fallback is not a rare degradation, it is the only path these Scores have
 The Neuron runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation, so the workload/profiler split is fixed for a whole run and cannot be renegotiated per workload. `memory_read_agg` and `memory_write_agg` declare `cores: "all"`, and holding a core back from them would report the aggregate of all-but-one core under a name that says otherwise. Until 2026-09-11 their presence turned the reservation off for the entire run, so `--test all` and `--test memory` could not reach the profiler for `memory_read` or `memory_write`.
 
 They now run first, in their own worker processes, and the reservation is made after them (`pantheon_neuron.reservation_point`), so every selection reaches the declared source. The console names where the reservation lands.
+
+**The aggregates themselves never reach neuron-profile, and no longer claim to.** A capture replays the NEFF and needs a NeuronCore of its own; an aggregate gives every core to a worker and each worker holds the one core it can see. They are counted by the kernel — summed bytes over the longest worker's loop — which is what their rows have always reported. The single-core `memory_read` and `memory_write` keep the profiler, and the kernels now skip a capture attempt entirely unless a core was reserved for it.
 
 ## Where the comparison does not hold
 
@@ -135,8 +137,8 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `omni_virus` | `neuroncore_counters.*.effective_flops`<br>`tensor_engine_active_time_percent`<br>`vector_engine_active_time_percent`<br>`scalar_engine_active_time_percent`<br>`gpsimd_engine_active_time_percent` |
 | `memory_read` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
 | `memory_write` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
-| `memory_read_agg` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
-| `memory_write_agg` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_read_agg` | `bytes_requested`<br>`elapsed_s` |
+| `memory_write_agg` | `bytes_written`<br>`elapsed_s` |
 | `all_reduce` | `busbw` |
 | `p2p_thrasher` | `busbw` |
 | `pcie_bandwidth` | `bytes_transferred`<br>`elapsed_s` |

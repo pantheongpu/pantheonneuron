@@ -255,6 +255,16 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
         result["warning"] = elided
         return result
 
+    # Only when a core was reserved for it; see memory_read for why an
+    # aggregate's worker can never satisfy a capture.
+    if not os.environ.get(cores.RESERVED_CORE):
+        result["warning"] = (
+            "no core was reserved for neuron-profile, so the Score is the "
+            "analytic figure; run this workload in a selection that leaves "
+            "the profiler a core"
+        )
+        return result
+
     try:
         result.update(_profile(workdir, compile_started, plan["actual_bytes"]))
     except profiler.ProfilerUnavailable as error:
