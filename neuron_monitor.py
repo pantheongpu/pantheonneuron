@@ -521,11 +521,21 @@ class NeuronMonitor:
                                     },
                                     "memory_used": {
                                         "neuron_runtime_used_bytes": {
-                                            "device": 8 * 1024**3
+                                            # The name hardware uses. The
+                                            # mock emitted "device", which
+                                            # is what let the parser read
+                                            # the wrong key unnoticed.
+                                            "neuron_device": 8 * 1024**3
                                         }
                                     },
                                     "execution_stats": {
                                         "error_summary": {"generic": 0},
+                                        # total_executions, which nothing
+                                        # reads: the mock must not
+                                        # synthesise execution_summary
+                                        # .completed, or a mock run would
+                                        # publish a fabricated rate. See
+                                        # test_mock_mode_invents_no_score.
                                         "total_executions": tick * 100,
                                     },
                                 }
@@ -604,10 +614,19 @@ class NeuronMonitor:
                         sample_flops[str(core_id)] = max(
                             sample_flops.get(str(core_id), 0.0), float(achieved))
 
-                used = (
+                # "neuron_device", as the 2026-08-26 schema probe recorded
+                # it, with the old spelling kept for any runtime that uses
+                # it. This read "device" alone, which no sample carries, so
+                # device_memory_used_bytes was absent from every report the
+                # suite has ever written -- while mock runs filled it in,
+                # because the mock emitted the key the parser wanted.
+                runtime_bytes = (
                     (report.get("memory_used") or {})
                     .get("neuron_runtime_used_bytes") or {}
-                ).get("device")
+                )
+                used = runtime_bytes.get("neuron_device")
+                if not isinstance(used, (int, float)):
+                    used = runtime_bytes.get("device")
                 if isinstance(used, (int, float)):
                     memory_bytes.append(int(used))
 

@@ -10,6 +10,7 @@ test instead of silently zeroing a counter in every report.
 """
 
 import json
+import pathlib
 
 import neuron_monitor
 
@@ -53,7 +54,12 @@ REAL_SAMPLE = {
                 "memory_used": {
                     "neuron_runtime_used_bytes": {
                         "host": 1166249984,
-                        "device": 141649980,
+                        # As data/probe-2026-08-26/07-neuron-monitor-schema.txt
+                        # records it. This fixture said "device", the name the
+                        # parser read -- the same number under a key the
+                        # hardware does not use, so the test proved the parser
+                        # handled a sample it had been reshaped to fit.
+                        "neuron_device": 141649980,
                     }
                 },
                 "execution_stats": {
@@ -169,3 +175,81 @@ def test_ecc_and_execution_failures_are_surfaced():
     metrics = _aggregate(bad)
     assert metrics["ecc_events_total"] == 3
     assert metrics["execution_errors"] == 3  # 1 hardware + 2 timed_out
+
+
+# -- the device memory field, which no report ever carried -------------------
+
+def test_the_real_sample_yields_device_memory():
+    """It never did. The parser read `neuron_runtime_used_bytes.device`,
+    hardware writes `neuron_device`, and nothing asserted the field came
+    out -- so device_memory_used_bytes was absent from every report the
+    suite has written, while mock runs filled it in because the mock
+    emitted the key the parser wanted."""
+    metrics = _aggregate(REAL_SAMPLE)
+    assert metrics["device_memory_used_bytes"]["peak"] == 141649980
+
+
+def test_the_older_spelling_still_parses():
+    """Kept as a fallback: a runtime that writes `device` is not wrong,
+    it is just not what these parts write."""
+    monitor = neuron_monitor.NeuronMonitor()
+    monitor._samples = [{"neuron_runtime_data": [{"report": {"memory_used": {
+        "neuron_runtime_used_bytes": {"device": 4242}}}}]}]
+    assert monitor.aggregate()["device_memory_used_bytes"]["peak"] == 4242
+
+
+def test_the_fixture_uses_the_name_the_probe_recorded():
+    """The fixture is only evidence if it matches the capture it came from.
+
+    This one held the probe's number under the parser's key, which is how
+    a renamed field passed for the life of the suite.
+    """
+    probe = pathlib.Path("data/probe-2026-08-26/07-neuron-monitor-schema.txt")
+    text = probe.read_text(encoding="utf-8")
+    assert "neuron_runtime_used_bytes.neuron_device" in text, (
+        "the probe no longer records this field; re-read it before trusting "
+        "the fixture")
+    used = REAL_SAMPLE["neuron_runtime_data"][0]["report"]["memory_used"]
+    assert "neuron_device" in used["neuron_runtime_used_bytes"]
+
+
+# -- every path the aggregator reads, against the capture --------------------
+
+# The dotted paths neuron_monitor.aggregate walks, in the spelling the
+# 2026-08-26 schema probe recorded. Keeping the list here rather than
+# deriving it is the point: a rename in the parser has to be reflected
+# against the capture by hand, which is the step that was skipped when
+# `neuron_device` became `device` and stayed wrong for the life of the
+# suite.
+MONITOR_PATHS = (
+    "neuron_runtime_data[].report.neuroncore_counters.period",
+    "neuron_runtime_data[].report.neuroncore_counters.neuroncores_in_use.0.effective_flops",
+    "neuron_runtime_data[].report.neuroncore_counters.neuroncores_in_use.0.neuroncore_utilization",
+    "execution_stats.period",
+    "execution_stats.execution_summary.completed",
+    "execution_stats.execution_summary.completed_with_err",
+    "execution_stats.execution_summary.failed_to_queue",
+    "execution_stats.execution_summary.incorrect_input",
+    "latency_stats.device_latency.p50",
+    "latency_stats.device_latency.p99",
+    "memory_used.neuron_runtime_used_bytes.neuron_device",
+    "system_data.neuron_hw_counters.neuron_devices[].mem_ecc_corrected",
+    "system_data.neuron_hw_counters.neuron_devices[].sram_ecc_uncorrected",
+)
+
+
+def test_every_path_the_aggregator_reads_is_in_the_capture():
+    probe = pathlib.Path(
+        "data/probe-2026-08-26/07-neuron-monitor-schema.txt"
+    ).read_text(encoding="utf-8")
+    missing = [path for path in MONITOR_PATHS if path not in probe]
+    assert not missing, (
+        f"paths the parser reads that the capture does not record: {missing}")
+
+
+def test_the_listed_paths_are_the_ones_the_parser_uses():
+    """The list is only a check if the parser really reads these names."""
+    source = pathlib.Path("neuron_monitor.py").read_text(encoding="utf-8")
+    for path in MONITOR_PATHS:
+        leaf = path.rsplit(".", 1)[-1]
+        assert f'"{leaf}"' in source, f"{leaf} is listed but never read"

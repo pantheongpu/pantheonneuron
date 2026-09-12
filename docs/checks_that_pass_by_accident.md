@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-six of them, and they are collected
+would go. This repo has now produced twenty-seven of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -582,6 +582,36 @@ only while it runs. The next process searched 3 candidates, then 3 again.
 **A check that passes on a clean machine has only tested the clean
 machine. Run it twice.**
 
+### 27. The fixture was edited to match the parser
+
+`tests/test_real_hardware_schema.py` exists for one reason: to hold the
+aggregator against a sample neuron-monitor really produced, so a field the
+code reads but hardware does not write cannot pass review. Its sample
+carried
+
+    "neuron_runtime_used_bytes": {"host": 1166249984, "device": 141649980}
+
+and `data/probe-2026-08-26/07-neuron-monitor-schema.txt`, the capture it
+was transcribed from, records that same number as
+
+    memory_used.neuron_runtime_used_bytes.neuron_device = 141649980
+
+The key had been renamed to the one the parser reads. So the test proved
+the parser handled a sample it had been reshaped to fit, and
+`device_memory_used_bytes` was absent from every report the suite has ever
+written -- while every mock run filled it in, because the mock emitted
+`device` too. Three artifacts agreeing with each other and none of them
+with the device.
+
+Nothing asserted the field came out, either: the schema test checked
+scrubbing, utilisation, flops and error counts, and never this. An absent
+key in a telemetry dict looks exactly like a part that does not report it.
+
+**A fixture is evidence only if it matches the capture it came from.** The
+fixture now uses the recorded name, the parser reads it with the old
+spelling as a fallback, and a test reads the probe file to confirm the two
+still agree.
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -602,4 +632,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-six above were found by reading what a passing check had filtered out.
+twenty-seven above were found by reading what a passing check had filtered out.
