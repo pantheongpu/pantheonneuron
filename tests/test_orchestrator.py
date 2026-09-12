@@ -358,3 +358,34 @@ def test_main_reserves_inside_the_loop_at_that_point():
     assert "reserve_at = reservation_point ( workloads )" in code
     assert code.index("for position , workload in enumerate ( workloads )") < code.index(
         "reserve_profiler_core ( devices , workloads [ position : ] )")
+
+
+# -- arguments that measure nothing ------------------------------------------
+
+def test_a_duration_of_zero_is_refused():
+    """Every kernel's deadline would already have passed, so each loop runs
+    no iterations and reports a rate of zero over no time -- and
+    short_window, which exists to say the duration did not bound the run,
+    returns early for a requested zero."""
+    for argv in (["--duration", "0"], ["--duration", "-5"],
+                 ["--repeat", "0"]):
+        with pytest.raises(SystemExit):
+            pantheon_neuron.build_parser().parse_args(argv)
+
+
+def test_a_normal_duration_still_parses():
+    args = pantheon_neuron.build_parser().parse_args(["--duration", "30",
+                                                      "--repeat", "3"])
+    assert args.duration == 30 and args.repeat == 3
+
+
+def test_a_score_of_zero_fails_the_row(mock_env, monkeypatch):
+    """Every Score here is a rate. Zero of them is not a slow run, it is a
+    run that counted nothing -- and it published as a PASS with 0.0, which
+    reads as a measured figure."""
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 0.0)
+    row = pantheon_neuron.run_workload(
+        _workload("tensor_virus"), TRN1, duration=0.02, monitor_period=0.01)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "zero TFLOPS" in row["Detail"]

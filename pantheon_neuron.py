@@ -555,6 +555,18 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         detail = "; ".join(filter(None, [
             detail, "the Score was not a finite number"]))
 
+    # Every Score here is a rate: things counted over the time they took.
+    # Zero of them is not a slow run, it is a run that counted nothing -- a
+    # loop that never executed, a counter that never moved. It passed as a
+    # PASS with a published 0.0, which reads as a measured figure.
+    if (isinstance(score, (int, float)) and not isinstance(score, bool)
+            and score == 0 and status == "PASS"):
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [
+            detail,
+            f"the Score was zero {workload.unit or 'units'}: nothing was "
+            "counted, so this is not a measurement of anything"]))
+
     _peak_share = peak_share(workload, devices, metrics)
     beyond = beyond_the_ceiling(score, _peak_share, workload.unit)
     if beyond and status == "PASS":
@@ -1789,6 +1801,26 @@ def _execute_bandwidth(workload, duration: int, module) -> float:
 
 # --- CLI --------------------------------------------------------------------
 
+def _positive(value: str) -> int:
+    """A whole number of seconds or repeats, at least one.
+
+    `type=int` accepted 0 and negatives. `--duration 0` gave every kernel a
+    deadline already past, so each loop ran no iterations and reported a
+    rate of zero over no time -- and the short-window check, which exists
+    to say when the duration did not bound the run, returns early for a
+    requested duration of zero.
+    """
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a whole number") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError(
+            f"must be at least 1, got {number}")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pantheon-neuron",
@@ -1809,7 +1841,8 @@ def build_parser() -> argparse.ArgumentParser:
               "), or 'all'"),
     )
     parser.add_argument(
-        "--duration", type=int, default=30, help="Seconds per workload (default: 30)"
+        "--duration", type=_positive, default=30,
+        help="Seconds per workload (default: 30)"
     )
     parser.add_argument(
         "--device", default="all", help="'all', or a leading run of device indices (0 or 0,1)"
@@ -1828,7 +1861,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--repeat",
-        type=int,
+        type=_positive,
         default=1,
         help="Run each workload this many times and report the spread "
              "(default: 1). A single sample cannot show that a Score is "
