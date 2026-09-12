@@ -1451,6 +1451,11 @@ _PROVENANCE_KEYS = (
     # The counters the declared formula divides, so a Score can be
     # recomputed from the report rather than trusted.
     "allocation_events",
+    # allocation_fragmentation: one retained block, read back. The Score
+    # counts allocation calls, and a call that allocated nothing counts the
+    # same.
+    "retained_blocks",
+    "retained_element",
     "hbm_read_bytes",
     "hbm_write_bytes",
     "profiler_total_time_s",
