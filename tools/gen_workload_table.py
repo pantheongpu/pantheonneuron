@@ -228,7 +228,12 @@ def render() -> str:
         "hardware rather than reporting a silent PASS. See the README for "
         "which kernels have actually run on a device.",
         "",
-        "| Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |",
+        # "Measured" was the header, which is the one word this column is
+        # not: it holds what a counter read during the 2026-08-26 schema
+        # probe under a trivial matmul, so tensor_virus showed 0.8756
+        # TFLOPS beside a workload that runs at 78. The caveat under the
+        # table said so; the table itself did not.
+        "| Workload | Suite | Unit | Score | Probe read | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |",
         "|---|---|---|---|--:|:--:|:--:|:--:|:--:|",
     ]
     indicative = _indicative()
@@ -249,7 +254,7 @@ def render() -> str:
 
     out += [
         "",
-        "**Measured** applies each workload's declared formula to the counters "
+        "**Probe read** applies each workload's declared formula to the counters "
         "actually read during the probe. Only five workloads have one, because "
         "only their counters were captured. These are **not Scores** — no "
         "kernel ran, and the load was an untuned matmul at 0.0049% MFU rather "
@@ -306,7 +311,7 @@ def render() -> str:
 
     out += [
         "",
-        "## Measured values",
+        "## What the probe read",
         "",
         "`data/baselines.json` records what each counter actually read during "
         "the probes. **Those are observations, not benchmark results** — the "

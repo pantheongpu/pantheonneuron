@@ -10,7 +10,7 @@ Do not hand-edit.
 Instance columns show whether the capability gate admits the workload —
 **not** whether its kernel has met hardware. Every workload in the registry has an implementation (26 of 26); a name absent from `pantheon_neuron.IMPLEMENTED` raises `NotImplementedError` on hardware rather than reporting a silent PASS. See the README for which kernels have actually run on a device.
 
-| Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
+| Workload | Suite | Unit | Score | Probe read | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
 |---|---|---|---|--:|:--:|:--:|:--:|:--:|
 | `baseline_metrics` | baseline | — | — | — | ✅ | ✅ | ✅ | ✅ |
 | `tensor_virus` | core | TFLOPS | monitor | **0.8756** | ✅ | ✅ | ✅ | ✅ |
@@ -39,7 +39,7 @@ Instance columns show whether the capability gate admits the workload —
 | `rag_embedding` | ai_auxiliary | embedding-vectors/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
 | `vision_encoder` | ai_auxiliary | image-tiles/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
 
-**Measured** applies each workload's declared formula to the counters actually read during the probe. Only five workloads have one, because only their counters were captured. These are **not Scores** — no kernel ran, and the load was an untuned matmul at 0.0049% MFU rather than the pinned problem each workload declares. A real Score will differ by orders of magnitude.
+**Probe read** applies each workload's declared formula to the counters actually read during the probe. Only five workloads have one, because only their counters were captured. These are **not Scores** — no kernel ran, and the load was an untuned matmul at 0.0049% MFU rather than the pinned problem each workload declares. A real Score will differ by orders of magnitude.
 
 A `—` in an instance column means the capability gate skips it: `all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and `transformer_train_step` needs a Trainium part.
 
@@ -180,6 +180,6 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `tlb_avalanche` | No exposed TLB behaviour to target. |
 | `voltage` | No equivalent voltage-rail control exposed by the Neuron driver. |
 
-## Measured values
+## What the probe read
 
 `data/baselines.json` records what each counter actually read during the probes. **Those are observations, not benchmark results** — the probe load was an untuned matmul at 0.0049% MFU. They prove each counter is readable and catch plumbing regressions; they are not Inferentia2's throughput.
