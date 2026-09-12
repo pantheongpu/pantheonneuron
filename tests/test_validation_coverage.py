@@ -230,9 +230,8 @@ CALLED_ONLY_BY_TESTS = {
     # The workload whose entire premise is per-engine behaviour is scored
     # by the reader that cannot see any engine. Reaching those counters
     # needs a profiler capture of omni_virus's own NEFF, which needs a
-    # reserved core, which is off for any selection containing a
-    # cores: "all" workload. That is a real piece of work, not an
-    # oversight, and it is not done.
+    # reserved core. The core is available; the capture is not written.
+    # That is a real piece of work, not an oversight, and it is not done.
     "engine_activity",
 }
 
@@ -336,7 +335,8 @@ def test_the_accident_catalogue_numbering_matches_its_own_count():
              14: "fourteen", 15: "fifteen", 16: "sixteen",
              17: "seventeen", 18: "eighteen", 19: "nineteen",
              20: "twenty", 21: "twenty-one", 22: "twenty-two",
-             23: "twenty-three", 24: "twenty-four", 25: "twenty-five"}
+             23: "twenty-three", 24: "twenty-four", 25: "twenty-five",
+             26: "twenty-six", 27: "twenty-seven", 28: "twenty-eight"}
     total = words.get(len(numbered))
     assert total, f"add {len(numbered)} to the words map"
     assert f"produced {total} of them" in doc, (

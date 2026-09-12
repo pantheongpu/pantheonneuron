@@ -65,10 +65,52 @@ def test_inferentia_does_not_claim_training_capability():
 def test_select_by_index():
     devices = [NeuronDevice(i, "trn1", "v2", 2, 1, True) for i in range(4)]
     assert [d.index for d in neuron_device.select(devices, "all")] == [0, 1, 2, 3]
-    assert [d.index for d in neuron_device.select(devices, "0,2")] == [0, 2]
+    assert [d.index for d in neuron_device.select(devices, "0,1")] == [0, 1]
+    assert [d.index for d in neuron_device.select(devices, "0")] == [0]
+
+
+def test_a_selection_that_is_not_a_leading_run_is_refused():
+    """Cores are numbered from device 0 and nothing pins the runtime to the
+    selection, so "0,2" would measure devices 0 and 1 under the label 0,2,
+    and "1" would measure device 0."""
+    devices = [NeuronDevice(i, "trn1", "v2", 2, 1, True) for i in range(4)]
+    for spec in ("0,2", "1", "2,3"):
+        with pytest.raises(neuron_device.NeuronUnavailable,
+                           match="not the first"):
+            neuron_device.select(devices, spec)
 
 
 def test_select_rejects_absent_device():
     devices = [NeuronDevice(0, "trn1", "v2", 2, 1, True)]
     with pytest.raises(neuron_device.NeuronUnavailable, match="not present"):
         neuron_device.select(devices, "0,7")
+
+
+# -- fields that can legitimately be zero ------------------------------------
+
+def test_device_zero_keeps_its_reported_index():
+    """`entry.get("neuron_device") or position` reads a reported 0 as
+    absent. It agrees with the position when neuron-ls lists devices in
+    order -- the only output this has seen -- and disagrees the moment one
+    does not."""
+    payload = [
+        {"neuron_device": 1, "nc_count": 2, "memory_size": 1},
+        {"neuron_device": 0, "nc_count": 2, "memory_size": 1},
+    ]
+    devices = neuron_device._parse_neuron_ls(payload)
+    assert [d.index for d in devices] == [1, 0]
+
+
+def test_a_device_reporting_no_cores_is_refused():
+    """Falling back to the table's default would report a part that is not
+    there, and every per-core figure would divide by the wrong count."""
+    payload = [{"neuron_device": 0, "nc_count": 0, "memory_size": 1}]
+    with pytest.raises(neuron_device.NeuronUnavailable, match="no cores"):
+        neuron_device._parse_neuron_ls(payload)
+
+
+def test_the_reported_core_count_and_memory_are_used_as_given():
+    payload = [{"neuron_device": 0, "nc_count": 2, "memory_size": 34359738368}]
+    device, = neuron_device._parse_neuron_ls(payload)
+    assert device.neuroncores == 2
+    assert device.hbm_bytes == 34359738368

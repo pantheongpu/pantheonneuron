@@ -119,6 +119,24 @@ def test_execution_errors_flip_a_pass_to_fail(mock_env, monkeypatch):
     )
     assert row["Status"] == "FAIL"
     assert "execution error" in row["Detail"]
+    # Every other path to FAIL drops the Score; this one published it.
+    assert row["Score"] is None
+    assert row["Percent Of Peak"] is None
+
+
+def test_a_repeat_failed_by_execution_errors_is_not_in_the_spread(mock_env, monkeypatch):
+    """Its Score was kept, so it joined the repeats' spread and could be
+    published as the median of a row that failed."""
+    stops = iter([{"samples": 3, "execution_errors": 1},
+                  {"samples": 3}, {"samples": 3}])
+    monkeypatch.setattr(pantheon_neuron.neuron_monitor.NeuronMonitor,
+                        "stop", lambda self: next(stops))
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 5.0)
+    row = pantheon_neuron.run_workload(
+        _workload("tensor_virus"), TRN1, duration=0.02, monitor_period=0.01,
+        repeat=3)
+    assert row["Status"] == "FAIL"
+    assert row["Repeats"]["scored"] == 2
 
 
 def test_report_is_written_atomically(mock_env, tmp_path, monkeypatch):
@@ -213,7 +231,7 @@ def test_a_kernel_that_reports_bounded_by_is_not_told_twice():
     guard compared the two message texts for equality, which was never
     the question being asked.
     """
-    code = sourcecheck.function_code(pantheon_neuron._measure_once)
+    code = sourcecheck.function_code(pantheon_neuron._measure_started)
     assert '"bounded_by" not in run_result' in code
 
 
@@ -307,4 +325,96 @@ def test_a_selection_without_aggregates_keeps_registry_order():
 def test_main_runs_the_ordered_selection():
     code = sourcecheck.flat_function_code(pantheon_neuron.main)
     assert code.index("workloads = run_order ( workloads )") < code.index(
-        "for workload in workloads")
+        "for position , workload in enumerate ( workloads )")
+
+
+# -- the profiler's core, reserved once the aggregates are done --------------
+
+def test_the_reservation_waits_for_the_aggregates():
+    """--test all used to turn the reservation off for the whole run, so
+    memory_read and memory_write always fell back to analytic."""
+    ordered = pantheon_neuron.run_order(registry.resolve("all"))
+    at = pantheon_neuron.reservation_point(ordered)
+    names = [w.name for w in ordered]
+    assert names.index("memory_read_agg") < at and names.index("memory_write_agg") < at
+    # From there on nothing declares cores: all, so the reservation holds.
+    aggregate, _ = pantheon_neuron.reservation_cost(ordered[at:])
+    assert aggregate == []
+    assert "memory_read" in names[at:] and "memory_write" in names[at:]
+
+
+def test_without_aggregates_the_reservation_comes_first():
+    ordered = pantheon_neuron.run_order(registry.resolve("core"))
+    assert pantheon_neuron.reservation_point(ordered) == 0
+
+
+def test_a_selection_of_only_aggregates_reserves_nothing():
+    ordered = [w for w in registry.WORKLOADS if (w.problem or {}).get("cores") == "all"]
+    assert ordered and pantheon_neuron.reservation_point(ordered) is None
+
+
+def test_main_reserves_inside_the_loop_at_that_point():
+    code = sourcecheck.flat_function_code(pantheon_neuron.main)
+    assert "reserve_at = reservation_point ( workloads )" in code
+    assert code.index("for position , workload in enumerate ( workloads )") < code.index(
+        "reserve_profiler_core ( devices , workloads [ position : ] )")
+
+
+# -- arguments that measure nothing ------------------------------------------
+
+def test_a_duration_of_zero_is_refused():
+    """Every kernel's deadline would already have passed, so each loop runs
+    no iterations and reports a rate of zero over no time -- and
+    short_window, which exists to say the duration did not bound the run,
+    returns early for a requested zero."""
+    for argv in (["--duration", "0"], ["--duration", "-5"],
+                 ["--repeat", "0"]):
+        with pytest.raises(SystemExit):
+            pantheon_neuron.build_parser().parse_args(argv)
+
+
+def test_a_normal_duration_still_parses():
+    args = pantheon_neuron.build_parser().parse_args(["--duration", "30",
+                                                      "--repeat", "3"])
+    assert args.duration == 30 and args.repeat == 3
+
+
+def test_a_score_of_zero_fails_the_row(mock_env, monkeypatch):
+    """Every Score here is a rate. Zero of them is not a slow run, it is a
+    run that counted nothing -- and it published as a PASS with 0.0, which
+    reads as a measured figure."""
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 0.0)
+    row = pantheon_neuron.run_workload(
+        _workload("tensor_virus"), TRN1, duration=0.02, monitor_period=0.01)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "zero TFLOPS" in row["Detail"]
+
+
+def test_the_monitor_is_released_even_when_the_row_cannot_be_built(monkeypatch):
+    """The workload's own failure becomes a row, but anything raised while
+    building that row left neuron-monitor sampling and its config on disk,
+    one more leaked per row after it."""
+    released = []
+
+    class _Stub:
+        def __init__(self, period_seconds=1.0, mock=False):
+            pass
+
+        def start(self, device_indices):
+            return True
+
+        def stop(self):
+            return {"samples": 1}
+
+        def shutdown(self):
+            released.append(True)
+
+    monkeypatch.setattr(pantheon_neuron.neuron_monitor, "NeuronMonitor", _Stub)
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 1.0)
+    monkeypatch.setattr(pantheon_neuron, "peak_share",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        pantheon_neuron._measure_once(_workload("tensor_virus"), TRN1, 0.02, 0.01)
+    assert released == [True], "the monitor was left running"

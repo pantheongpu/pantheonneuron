@@ -240,7 +240,7 @@ def test_the_profile_records_both_engines():
 def test_run_checks_the_consumer_only_for_an_attributed_profile():
     """A diverged profile may be another graph's, so its engine counters
     say nothing about this kernel."""
-    code = sourcecheck.flat_function_code(memory_read.run)
+    code = sourcecheck.flat_function_code(memory_read._run)
     assert code.index("divergence = verify_against_analytic") < code.index(
         "verify_consumer_not_binding")
 
@@ -256,7 +256,7 @@ def test_an_unattributed_profile_takes_its_engine_counters_with_it():
     """Two 8 GiB kernels, one compile workdir: the selector held the other
     kernel's NEFF, the Score fell back to analytic, and the row still
     carried vector 0.97 from the foreign graph."""
-    code = sourcecheck.flat_function_code(memory_read.run)
+    code = sourcecheck.flat_function_code(memory_read._run)
     branch = code[code.index("if _touched_the_whole_plan"):]
     branch = branch[:branch.index("return result")]
     assert 'result [ "consumer_engine_active" ] = None' in branch

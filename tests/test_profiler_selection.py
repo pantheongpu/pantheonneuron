@@ -507,18 +507,56 @@ def test_the_bandwidth_kernels_point_the_compiler_at_that_directory():
     assert cores.COMPILE_CACHE == "NEURON_COMPILE_CACHE_URL"
     for module in (memory_read, memory_write):
         code = sourcecheck.function_code(module.run)
-        assert "os . environ . setdefault ( cores . COMPILE_CACHE , workdir )" in code
+        assert "with cores . compile_cache ( workdir )" in code
+        assert "setdefault" not in code
 
 
-def test_an_explicit_compile_cache_is_not_overridden(monkeypatch):
-    """setdefault, not assignment: someone who pinned it is answering a
-    question we should not overrule."""
-    import sourcecheck
-    from kernels import memory_read
+def test_the_compile_cache_is_set_only_while_the_kernel_runs(monkeypatch, tmp_path):
+    """It was setdefault and never unset, so every later workload in the
+    process compiled into the profiler's directory: 63 NEFFs after one full
+    pass on trn1.2xlarge 2026-09-11, and the next memory_read ran out of
+    search budget before reaching its own graph."""
+    from kernels import cores
 
-    code = sourcecheck.function_code(memory_read.run)
-    assert "setdefault" in code
-    assert "os . environ [ cores . COMPILE_CACHE ] =" not in code
+    monkeypatch.delenv(cores.COMPILE_CACHE, raising=False)
+    with cores.compile_cache(str(tmp_path)) as used:
+        assert used == str(tmp_path)
+        assert os.environ[cores.COMPILE_CACHE] == str(tmp_path)
+    assert cores.COMPILE_CACHE not in os.environ
+
+
+def test_it_is_unset_even_when_the_kernel_raises(monkeypatch, tmp_path):
+    from kernels import cores
+
+    monkeypatch.delenv(cores.COMPILE_CACHE, raising=False)
+    with pytest.raises(RuntimeError):
+        with cores.compile_cache(str(tmp_path)):
+            raise RuntimeError("compile failed")
+    assert cores.COMPILE_CACHE not in os.environ
+
+
+def test_an_explicit_compile_cache_is_not_overridden(monkeypatch, tmp_path):
+    """Someone who pinned it is answering a question we should not
+    overrule -- and it is theirs to keep after the block, too."""
+    from kernels import cores
+
+    monkeypatch.setenv(cores.COMPILE_CACHE, "/their/cache")
+    with cores.compile_cache(str(tmp_path)) as used:
+        assert used == "/their/cache"
+    assert os.environ[cores.COMPILE_CACHE] == "/their/cache"
+
+
+def test_each_kernel_gets_a_directory_of_its_own(monkeypatch, tmp_path):
+    """One per kernel, so it holds that kernel's graphs across runs and
+    still gives a later run its compile-cache hits."""
+    from kernels import cores
+
+    monkeypatch.setenv(cores.WORKDIR, str(tmp_path))
+    read = cores.kernel_workdir("memory_read")
+    write = cores.kernel_workdir("memory_write")
+    assert read != write
+    assert os.path.isdir(read) and os.path.isdir(write)
+    assert os.path.dirname(read) == str(tmp_path)
 
 
 # -- the bound was one-sided ------------------------------------------------
@@ -601,3 +639,46 @@ def test_the_ceiling_clears_every_coverage_ever_observed():
     planned = 1 << 30
     assert profiler.verify_profile_covers_plan(
         _counters(int(planned * observed)), "read", planned) is None
+
+
+# -- a copy covers the plan too ---------------------------------------------
+
+def test_a_copy_graph_is_passed_over_for_the_kernel(monkeypatch):
+    """trn1.2xlarge 2026-09-10 at 1 GiB: a buffer-copy graph read 1 GiB and
+    wrote 1 GiB beside memory_read's kernel, which read 1 GiB and wrote
+    nothing. Coverage alone gave both 1.0 and took whichever came first."""
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/copy.neff": {"hbm_read_bytes": planned, "hbm_write_bytes": planned,
+                           "total_time": 0.008167},
+        "/tmp/kernel.neff": {"hbm_read_bytes": planned, "hbm_write_bytes": 512,
+                             "total_time": 0.006020},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+    found = profiler.select_by_plan(
+        ["/tmp/copy.neff", "/tmp/kernel.neff"], "/tmp/s.ntff", "read", planned)
+    assert found["neff"] == "/tmp/kernel.neff"
+    assert fake.captured == ["/tmp/copy.neff", "/tmp/kernel.neff"]
+
+
+def test_the_write_kernels_own_source_read_is_not_mistaken_for_a_copy(monkeypatch):
+    """memory_write reads one 2 MiB tile per pass of a 4 GiB plan."""
+    planned = 4 << 30
+    fake = _FakeCaptures({
+        "/tmp/kernel.neff": {"hbm_write_bytes": planned, "hbm_read_bytes": 2 << 20,
+                             "total_time": 0.019},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+    found = profiler.select_by_plan(["/tmp/kernel.neff"], "/tmp/s.ntff", "write", planned)
+    assert found["neff"] == "/tmp/kernel.neff"
+
+
+def test_only_copies_means_no_selection_and_says_why(monkeypatch):
+    planned = 1 << 30
+    fake = _FakeCaptures({
+        "/tmp/copy.neff": {"hbm_read_bytes": planned, "hbm_write_bytes": planned,
+                           "total_time": 0.008},
+    })
+    monkeypatch.setattr(profiler, "read_counters", fake)
+    with pytest.raises(profiler.ProfilerUnavailable, match="a copy, not this kernel"):
+        profiler.select_by_plan(["/tmp/copy.neff"], "/tmp/s.ntff", "read", planned)

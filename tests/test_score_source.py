@@ -85,12 +85,25 @@ def test_internal_sources_measure_against_elapsed_time():
         assert any("elapsed" in c for c in source.counters), workload.name
 
 
-def test_bandwidth_workloads_use_the_profiler():
+def test_the_single_core_bandwidth_workloads_use_the_profiler():
     """HBM byte counters exist only in neuron-profile, not neuron-monitor."""
-    for name in ("memory_read", "memory_write", "memory_read_agg", "memory_write_agg"):
+    for name in ("memory_read", "memory_write"):
         workload = next(w for w in registry.WORKLOADS if w.name == name)
         assert workload.score_source.source == registry.PROFILER, name
         assert any("hbm" in c for c in workload.score_source.counters), name
+
+
+def test_the_aggregates_declare_the_source_they_can_actually_reach():
+    """neuron-profile replays the NEFF and needs a core of its own. An
+    aggregate gives every core to a worker and each worker holds the one it
+    can see, so no capture inside a worker can find a free core -- the
+    declaration was a promise the run could not keep, and the rows said
+    "workload" against a registry saying neuron-profile."""
+    for name in ("memory_read_agg", "memory_write_agg"):
+        workload = next(w for w in registry.WORKLOADS if w.name == name)
+        assert workload.score_source.source == registry.INTERNAL, name
+        assert not any("hbm" in c for c in workload.score_source.counters), name
+        assert workload.problem["cores"] == "all", name
 
 
 def test_flops_workloads_use_the_monitor():
@@ -169,3 +182,69 @@ def test_trainium_counter_set_differs_from_inferentia():
     trn = _baselines()["trainium"]
     assert trn["measurements"]["profiler_counter_count"]["value"] == 90
     assert "throttle_active_nc0_time_ns" in trn["absent_on_trainium"]
+
+
+# -- a declared counter that no kernel returns -------------------------------
+
+def test_every_internal_counter_is_a_key_its_kernel_returns():
+    """A source declaration is a contract: the counters it names are the
+    ones the row can be recomputed from, so each has to be something the
+    kernel actually puts in its result.
+
+    The aggregates declared neuron-profile's hbm_read_bytes/total_active_time
+    until 2026-09-12, counters no worker could ever produce -- a capture
+    needs a free core and an aggregate gives every core to a worker. The
+    rows read "Score Method: workload" the whole time, and nothing held the
+    two against each other.
+    """
+    import pathlib
+
+    from test_hardware_status import OWNERS
+
+    owner = {name: module for module, names in OWNERS.items()
+             for name in names if module}
+    missing = []
+    checked = 0
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if source is None or source.source != registry.INTERNAL:
+            continue
+        module = owner.get(workload.name)
+        if module is None:          # implemented in the orchestrator
+            continue
+        code = pathlib.Path("kernels", module).read_text(encoding="utf-8")
+        for counter in source.counters:
+            checked += 1
+            if f'"{counter}"' not in code:
+                missing.append(f"{workload.name}: {counter} not in {module}")
+    assert not missing, missing
+    # A loop over an empty selection asserts nothing; this one covers every
+    # kernel-counted workload in the registry.
+    assert checked >= 25, f"only {checked} counters checked"
+
+
+def test_an_internal_score_can_be_recomputed_from_its_row():
+    """The declared counters are the row's promise: given them, a reader
+    reproduces the Score without trusting it. They have to reach the row,
+    which means each is either a provenance key or a column of its own."""
+    import pantheon_neuron
+
+    missing, checked = [], 0
+    for workload in registry.WORKLOADS:
+        source = workload.score_source
+        if source is None or source.source != registry.INTERNAL:
+            continue
+        # A result carrying exactly what the declaration names.
+        result = dict.fromkeys(source.counters, 1)
+        pantheon_neuron._LAST_RUN[workload.name] = result
+        try:
+            provenance = pantheon_neuron._provenance(workload) or {}
+        finally:
+            pantheon_neuron._LAST_RUN.pop(workload.name, None)
+        for counter in source.counters:
+            checked += 1
+            if counter not in provenance:
+                missing.append(f"{workload.name}: {counter}")
+    assert not missing, (
+        f"declared counters that never reach a row: {missing}")
+    assert checked >= 25, f"only {checked} counters checked"

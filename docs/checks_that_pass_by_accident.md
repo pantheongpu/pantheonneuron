@@ -4,7 +4,7 @@ A failing check is a good day. It says what is wrong and where.
 
 A check that passes for a reason unrelated to what it asserts is worse
 than no check at all, because it also occupies the space where a real one
-would go. This repo has now produced twenty-three of them, and they are collected
+would go. This repo has now produced twenty-eight of them, and they are collected
 here because they rhyme — the same three or four shapes keep recurring,
 and knowing the shapes is the only defence.
 
@@ -496,6 +496,149 @@ check rejects the copy graph. **When a check needs a wide margin, find
 out what is using the margin.** A bias absorbed into a tolerance does
 not go away. It becomes the check's blind spot.
 
+### 24. The tool's limit was the argument we passed it
+
+The harness asked neuron-monitor for a sample every second, and got one
+every five. It measured that, found it consistent across requests
+(0.2 s, 1.0 s, 5.0 s all came back slow), and recorded it as a property
+of the tool: "neuron-monitor floors around two seconds and does not
+deliver the requested rate at or below one." The finding went into a
+comment, both thinness warnings, and a test that required every warning
+to repeat it.
+
+The request was `f"{period}s"`, and the default period is the float 1.0,
+so it went out as `"1.0s"`. neuron-monitor accepts whole seconds only and
+ignores anything else in favour of its 5 s default. Measured with the
+harness's own config on inf2.xlarge 2026-09-11: `"1.0s"` delivered 5.0 s
+periods, `"1s"` delivered 1.0 s. The 2026-08-26 schema probe had written
+`"1s"` and been receiving one-second samples the whole time. Its output
+was in the repo.
+
+Every sample carries its own `period` field, so the second quantity was
+available all along: requested 1, delivered 5. Nothing compared them, so
+the gap was explained instead of detected. The row now reports
+`sample_period_s`. **Before recording a limit of a tool, check that the
+tool received the argument you think you sent.**
+
+The fix moved a check that had depended on the wrong argument. The busy
+block that monitor Scores are averaged over ends at a zero reading, and
+its docstring said no workload pauses long enough to produce one, since
+pulse_virus "cycles every 2 s, inside the monitor's ~5 s period". At an
+honoured 1 s, each sample covered half a cycle and the readings beat
+against the pulse (68.13, 14.31, 52.74, 16.49 ...). The Score came out
+3-4% under the kernel's own FLOPs over the same run (38.76 against 40.02),
+and a sample falling wholly in an idle half would have split the block.
+Sampled over whole 2 s cycles, every period read 40.67-40.69, and the
+Score landed within 0.03% of the kernel's figure (1.5% on a second run,
+where the 2.07 s cycle slid against the 2 s window).
+
+### 25. Seventeen tests, and none of them ran the command
+
+`kernels/collectives.py` had seventeen tests, all green, and a
+docstring that said why nothing else could be done: the workloads need
+two devices, and no part this account can rent has two. The tests
+parsed nccom-test's documented table, flagged sweeps that missed a
+regime, and counted rows the pattern dropped. None of them built the
+command line and handed it to nccom-test, because there was no
+NeuronLink to hand it to.
+
+But the command needed no NeuronLink. The 2026-08-26 probe had run
+nccom-test on one inf2 as `-r 2 ... --non-interactive all_reduce`, and
+its output was in the repo. The kernel passed `-c all_reduce`. `-c` is
+`--check {random,all_ones}`; run on inf2.xlarge 2026-09-11 it exits 2 on
+argparse before doing anything. The kernel also passed one rank per
+device where a rank is a NeuronCore, so a two-device part would have put
+both ranks on device 0 and measured the core-to-core link under a
+NeuronLink name. The docstring warned about exactly that figure.
+
+The workloads skip on one device, and that is correct. The **module**
+does not have to. Called directly with the one device, the fixed
+invocation returned 61.22 GB/s over a fully parsed sweep. **When the
+thing you cannot test is the measurement, test everything the
+measurement will pass through on its way. Most of it runs anywhere.**
+
+### 26. The isolation held on the run that checked it
+
+The profiler finds memory_read's graph by searching the compile directory,
+and the directory was meant to hold only that kernel's graphs: memory_read
+pointed `NEURON_COMPILE_CACHE_URL` at it. The full pass that checked this
+found the graph at candidate 6 of 7, coverage 1.0. That looked like the
+isolation working.
+
+It was the isolation not yet having failed. The variable was set with
+`setdefault` and never unset, at a fixed path. Every workload after
+memory_read in the same process compiled into the directory, and the
+directory outlived the process. The next run on that machine, `--test
+memory_read --repeat 3`, searched 16 candidates newest first, never
+reached its own graph, and published the analytic fallback. By then the
+directory held 63 NEFFs. The pass that verified the search had run
+before its own later workloads filled the directory.
+
+The second quantity was the candidate count: 7, then 16, for the same
+kernel on the same machine. A search space that grows with every run is
+not isolated. The compiler turned out to read the variable at every
+compile, so each memory kernel now sets it to a directory of its own
+only while it runs. The next process searched 3 candidates, then 3 again.
+**A check that passes on a clean machine has only tested the clean
+machine. Run it twice.**
+
+### 27. The fixture was edited to match the parser
+
+`tests/test_real_hardware_schema.py` exists for one reason: to hold the
+aggregator against a sample neuron-monitor really produced, so a field the
+code reads but hardware does not write cannot pass review. Its sample
+carried
+
+    "neuron_runtime_used_bytes": {"host": 1166249984, "device": 141649980}
+
+and `data/probe-2026-08-26/07-neuron-monitor-schema.txt`, the capture it
+was transcribed from, records that same number as
+
+    memory_used.neuron_runtime_used_bytes.neuron_device = 141649980
+
+The key had been renamed to the one the parser reads. So the test proved
+the parser handled a sample it had been reshaped to fit, and
+`device_memory_used_bytes` was absent from every report the suite has ever
+written -- while every mock run filled it in, because the mock emitted
+`device` too. Three artifacts agreeing with each other and none of them
+with the device.
+
+Nothing asserted the field came out, either: the schema test checked
+scrubbing, utilisation, flops and error counts, and never this. An absent
+key in a telemetry dict looks exactly like a part that does not report it.
+
+**A fixture is evidence only if it matches the capture it came from.** The
+fixture now uses the recorded name, the parser reads it with the old
+spelling as a fallback, and a test reads the probe file to confirm the two
+still agree.
+
+### 28. The warm-up had already satisfied the check
+
+`kv_cache_churn` exists to establish that a KV cache write reaches the
+device -- the workload that found XLA has no in-place update, after the
+`index_copy_` version cost 455 ms to move 32 MiB. Its guard read one cache
+element and failed if it still held `CACHE_FILL`, the value the cache was
+created with, since a landed write leaves `ENTRY_FILL`.
+
+The loop before it compiles each ring slot by writing it. So every slot
+held `ENTRY_FILL` before the clock started, and the element the guard reads
+was written by the warm-up whatever the timed loop did. A loop whose stores
+the compiler elided would have read `ENTRY_FILL` and passed. The guard was
+a statement about the warm-up.
+
+`transformer_train_step` had the same shape from the other end: it sampled
+the parameter *before* its warm-up step -- a full forward, backward and
+optimiser step -- so "the model moved" could be satisfied by an update
+nobody measured.
+
+Both now bracket the measured run: the cache is put back to `CACHE_FILL`
+after the slots compile, and the parameter is sampled after the warm-up.
+The cache check also reads every slot the loop should have written rather
+than one element, since a single element lives in slot 0 and a loop that
+wrote only slot 0 reads the same there as one that churned the ring.
+**A check whose reference state is set by the warm-up is a check on the
+warm-up.**
+
 ## The defence
 
 Nothing here was caught by a linter or by a careful reading. Every one was
@@ -516,4 +659,4 @@ defects, and for the same reason. **A number on its own cannot be wrong.**
 
 The corollary is uncomfortable and worth stating plainly: a green test run
 is evidence about the checks that exist, not about the code. Six of the
-twenty-three above were found by reading what a passing check had filtered out.
+twenty-eight above were found by reading what a passing check had filtered out.

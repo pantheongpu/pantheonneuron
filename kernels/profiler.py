@@ -284,6 +284,23 @@ def read_counters(neff_path: str, session_path: str) -> typing.Dict[str, typing.
     return summary(neff_path, session_path)
 
 
+# See select_by_plan: the fraction of the plan a candidate may move in the
+# opposite direction and still be the one-directional kernel.
+OPPOSITE_TRAFFIC_MAX = 0.1
+
+
+def opposite_traffic(counters: typing.Mapping[str, typing.Any],
+                     direction: str,
+                     expected_bytes: int) -> typing.Optional[float]:
+    """Bytes moved against the plan's direction, as a fraction of the plan.
+    None when the profile does not report them or there is no plan."""
+    key = {"read": "hbm_write_bytes", "write": "hbm_read_bytes"}[direction]
+    moved = counters.get(key)
+    if not isinstance(moved, (int, float)) or expected_bytes <= 0:
+        return None
+    return moved / expected_bytes
+
+
 def plan_coverage(counters: typing.Mapping[str, typing.Any],
                   direction: str,
                   expected_bytes: int) -> typing.Optional[float]:
@@ -429,6 +446,21 @@ def select_by_plan(candidates: typing.Sequence[str],
             attempts.append(f"{os.path.basename(neff)}: {error}")
             continue
 
+        # A graph that also moves the plan's bytes the *other* way is a
+        # copy, not this kernel, however exactly it covers the plan. On
+        # trn1.2xlarge 2026-09-10 a buffer-copy graph read 1 GiB and wrote
+        # 1 GiB beside memory_read's 1 GiB kernel: coverage 1.0, and taken
+        # if it came first. The kernels' own opposite traffic is a tile or
+        # a result -- memory_write reads 2 MiB of a 4 GiB plan, memory_read
+        # writes 512 bytes -- so a tenth of the plan cleanly separates them.
+        crossed = opposite_traffic(counters, direction, expected_bytes)
+        if crossed is not None and crossed > OPPOSITE_TRAFFIC_MAX:
+            attempts.append(
+                f"{os.path.basename(neff)}: covered {coverage:.4g} of the plan "
+                f"but moved {crossed:.3g}x it the other way -- a copy, not "
+                "this kernel")
+            continue
+
         found = {
             "counters": counters,
             "neff": neff,
@@ -503,6 +535,13 @@ def bandwidth_gbps(counters: typing.Mapping[str, typing.Any],
     the pinned size. Over total_active_time it reads 272.9, 273.0, 272.8
     and 273.0, within 0.5-2.3% above the wall clock, as a rate without the
     loop's per-pass overhead should be.
+
+    **It is right for wide transfers, not universally.** A 512-wide store
+    kernel read 229.0 GB/s over active time against 69.4 by the wall clock
+    (trn1.2xlarge 2026-09-11): with 16,384 small stores per pass, the loop
+    pays ~21 ms per execution that the profile does not count as active.
+    The analytic cross-check is what catches that -- at 15% it would refuse
+    this profile and publish the wall-clock figure.
 
     total_active_time is the union of time any engine or DMA queue was
     busy, so it excludes only time in which nothing ran. A kernel stalled

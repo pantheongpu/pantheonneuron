@@ -10,6 +10,7 @@ import pytest
 
 import pantheon_neuron
 from kernels import collectives, registry
+from neuron_device import NeuronDevice
 
 
 SAMPLE = """
@@ -168,3 +169,41 @@ def test_a_header_only_output_is_not_a_dropped_row():
     header = "#      size    count   type   time   algbw   busbw\n"
     assert collectives.unparsed_rows(header) == 0
     assert collectives.verify_sweep_was_fully_parsed(header) is None
+
+
+# -- the invocation --------------------------------------------------------
+
+def test_a_rank_is_a_core_not_a_device():
+    """The 2026-08-26 probe's -r 2 was two workers on one inf2's two cores.
+    len(devices) would have put a two-device part's two ranks on device 0."""
+    two_devices = [NeuronDevice(i, "trn1", "v2", 2, 32 * 1024**3, True)
+                   for i in range(2)]
+    assert collectives.ranks_for(two_devices) == 4
+    assert collectives.ranks_for(two_devices[:1]) == 2
+
+
+def test_the_operation_is_positional_as_the_probe_ran_it():
+    args = collectives.command("all_reduce", 2, 1 << 20, 8 << 20, "fp32",
+                               step_factor=2)
+    assert args[-1] == "all_reduce"
+    assert "--non-interactive" in args
+    assert "-c" not in args
+    assert args[args.index("-r") + 1] == "2"
+    assert args[args.index("-f") + 1] == "2"
+
+
+def test_sendrecv_is_one_size():
+    args = collectives.command("sendrecv", 4, 1 << 26, 1 << 26, "fp32")
+    assert args[-1] == "sendrecv"
+    assert args[args.index("-b") + 1] == args[args.index("-e") + 1]
+    assert "-f" not in args
+
+
+def test_collectives_run_before_this_process_holds_a_core():
+    """nccom-test's workers need cores this process's runtime would hold,
+    and the reservation would hide one of them."""
+    chosen = [w for w in registry.WORKLOADS
+              if w.name in ("tensor_virus", "all_reduce", "p2p_thrasher")]
+    ordered = pantheon_neuron.run_order(chosen)
+    assert [w.name for w in ordered][:2] == ["all_reduce", "p2p_thrasher"]
+    assert pantheon_neuron.reservation_point(ordered) == 2

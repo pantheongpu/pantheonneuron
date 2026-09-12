@@ -335,6 +335,52 @@ def verify_memory_bound(bytes_per_s: float,
     return None
 
 
+def _slot_landed(cache, index: int, entry_fill: float) -> typing.Optional[bool]:
+    """Whether the element at ``index`` of layer 0 holds a written entry.
+
+    None when it could not be read, which is reported as unverified rather
+    than as a pass.
+    """
+    try:
+        return bool(float(cache[0, index, 0]) == entry_fill)
+    except Exception:  # materialisation failed; leave unverified
+        return None
+
+
+def verify_ring_landed(landed, expected: int, steps: int,
+                       cache_fill: float, entry_fill: float
+                       ) -> typing.Optional[str]:
+    """Say so when the ring's writes did not reach the cache.
+
+    ``landed`` is one reading per (cache, slot) the run should have
+    written, True where that slot holds ``entry_fill``.
+
+    This used to read a single element of cache_k and fail only if it still
+    held ``cache_fill``. Every slot had just been written by the warm-up
+    that compiles them, so that element held ``entry_fill`` before the
+    clock started: the check passed whatever the timed loop did, and a loop
+    whose stores were elided would have passed it too. It now reads the
+    slots the measured loop was supposed to write, after the cache has been
+    put back to ``cache_fill``.
+    """
+    if not landed:
+        return f"{steps} step(s) wrote no slot, so the ring wrote nothing"
+    unreadable = sum(1 for value in landed if value is None)
+    if unreadable:
+        return (
+            f"{unreadable} of {len(landed)} ring slot(s) could not be read "
+            "back, so the writes are unverified"
+        )
+    missing = sum(1 for value in landed if not value)
+    if not missing:
+        return None
+    return (
+        f"{missing} of {len(landed)} ring slot(s) still read {cache_fill:g} "
+        f"after {steps} steps, where a landed write leaves {entry_fill:g} "
+        f"-- the ring wrote less than the {expected} slot(s) it counted"
+    )
+
+
 def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     """Append K and V across every layer; count the entries, not the arithmetic."""
     nki_backend.require_toolchain()
@@ -408,6 +454,17 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
         xm.mark_step()
     xm.wait_device_ops()
 
+    # **Then put the cache back, or the landing check verifies the warm-up.**
+    # The check below fails when a slot still reads CACHE_FILL, and the
+    # warm-up above has just written ENTRY_FILL into every one -- so they
+    # read ENTRY_FILL however little the timed loop landed, and a loop whose
+    # stores were elided would have passed. Resetting here is what makes the
+    # values afterwards a statement about the measured run.
+    cache_k.fill_(CACHE_FILL)
+    cache_v.fill_(CACHE_FILL)
+    xm.mark_step()
+    xm.wait_device_ops()
+
     updates = 0
     step = 0
     started = time.perf_counter()
@@ -422,6 +479,13 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
 
     observed = transformer_ops.read_back(cache_k)
     steps = step
+    # One reading per ring slot the loop should have written, in both
+    # caches. A single element lives in slot 0 and says nothing about the
+    # other seven: a loop that wrote one slot every step, or landed only
+    # its first write, reads the same there as one that churned the ring.
+    landed = [_slot_landed(cache, slot * tokens, ENTRY_FILL)
+              for cache in (cache_k, cache_v)
+              for slot in range(min(steps, slots))]
     bytes_written = steps * plan["bytes_per_step"]
     bytes_per_s = bytes_written / elapsed if elapsed else 0.0
 
@@ -439,23 +503,23 @@ def run_cache_churn(problem: typing.Mapping[str, typing.Any], duration: int) -> 
         "cache_fill": CACHE_FILL,
         "entry_fill": ENTRY_FILL,
         "cache_element": observed,
+        # The ring slots the measured loop should have written, and the
+        # readings taken to check them -- one per slot per cache, so twice
+        # the slot count. Landed against checked is the comparison.
+        "ring_slots_expected": min(steps, slots),
+        "ring_readings_checked": len(landed),
+        "ring_readings_landed": sum(1 for value in landed if value),
         **transformer_ops.output_check(observed, "cache"),
     }
 
-    # Slot 0 is written on the first step and on every `slots`-th step
-    # after, and read_back samples element zero, so a completed run must
-    # find the entry's value there. Finding the cache's own fill means the
-    # writes never reached it.
-    if observed is not None and observed == CACHE_FILL:
+    missed = verify_ring_landed(landed, min(steps, slots), steps,
+                                CACHE_FILL, ENTRY_FILL)
+    if missed:
         # Joined, not assigned. output_check may already have said the
         # cache was NaN, and replacing that message would trade the more
         # serious finding for the more specific one.
         result["warning"] = "; ".join(part for part in (
-            result.get("warning"),
-            f"the cache still reads {CACHE_FILL:g} after {steps} steps, "
-            f"where a landed write leaves {ENTRY_FILL:g} -- the ring "
-            "wrote nothing the device kept",
-        ) if part)
+            result.get("warning"), missed) if part)
         result["score_invalid"] = True
 
     # An unreadable or NaN cache still fails the row; a dispatch-bound run

@@ -53,6 +53,47 @@ _HOST_IDENTIFIER_FIELDS = frozenset(
 _DEFAULT_PERIOD_SECONDS = 1.0
 
 
+def period_string(seconds: float) -> str:
+    """The period as neuron-monitor will honour it: whole seconds, at least 1.
+
+    **It ignores anything else and falls back to its 5-second default.**
+    Measured with this module's own config on inf2.xlarge 2026-09-11, the
+    period each sample reported:
+
+        "1.0s"   5.0 s   (3 samples in 16 s)    <- what this module sent
+        "1s"     1.0 s   (13 samples in 16 s)
+        "0.5s"   5.0 s
+        "5.0s"   5.0 s
+        "500ms"  no samples at all
+
+    This built the string as f"{seconds}s", so the default of 1.0 went out
+    as "1.0s" and every run since sampled five times more coarsely than it
+    asked. The suite recorded the result as a property of the tool --
+    "neuron-monitor floors around two seconds whatever --monitor-period
+    asks for" -- while the 2026-08-26 schema probe, which wrote "1s", had
+    been receiving 1.0 s periods all along.
+    """
+    return f"{max(1, round(seconds))}s"
+
+
+def _longest_busy_block(counts: typing.Sequence[float]) -> typing.List[int]:
+    """Indices of the longest uninterrupted run of nonzero readings.
+
+    The index-level form of what whole_periods does with values, for a
+    series whose readings are counts rather than rates.
+    """
+    best: typing.List[int] = []
+    current: typing.List[int] = []
+    for index, count in enumerate(counts):
+        if count > 0:
+            current.append(index)
+            if len(current) > len(best):
+                best = list(current)
+        else:
+            current = []
+    return best
+
+
 def _scrub(sample: dict) -> dict:
     """Remove host identifiers from one neuron-monitor sample, recursively."""
     if not isinstance(sample, dict):
@@ -93,11 +134,24 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
     replays per NEFF execution" graph_replay documented came from the same
     misreading -- one period's 14,737 set against the run's 60,000.
 
-    The rate is taken over the **interior** of the active run: the first
-    and last periods with completions are only partly busy (6657 and 7465
-    above, against ~15,300 for a full one), and including them dilutes
-    the rate by the idle part of each. Interior periods are wholly inside
-    the execution, so their completions over their periods is the rate.
+    The rate is taken over the **interior of the longest uninterrupted run
+    of busy periods**: the first and last periods with completions are only
+    partly busy (6657 and 7465 above, against ~15,300 for a full one), and
+    including them dilutes the rate by the idle part of each. Interior
+    periods are wholly inside the execution, so their completions over
+    their periods is the rate.
+
+    Longest run rather than first-to-last busy, which is what this did
+    until 2026-09-11. Setup work completes before the timed loop and a
+    compile sits between them, so a run can read
+
+        3 (setup), 0 x 46 (compile), 6657, 15409, 15273, 15199, 7465, 0
+
+    and first-to-last hands the "first" slot to the setup blip, leaving
+    the loop's partly busy 6657 inside the average. That is the same
+    defect whole_periods was fixed for on the flops and utilisation
+    series, where it moved memory_read's utilisation from 88.7% to 99.4%,
+    and the two series now follow the same rule.
 
     When there is nothing to measure it says which nothing it is:
 
@@ -125,11 +179,16 @@ def execution_rate(series: typing.Sequence[typing.Tuple[int, int, float]],
             "so the device completed nothing measurable")
         return summary
 
+    block = _longest_busy_block(
+        [count for _, count, _ in series])
     active = [i for i, (_, count, _) in enumerate(series) if count > 0]
-    interior = [series[i] for i in active[1:-1]]
+    interior = [series[i] for i in block[1:-1]]
     usable = [(count, period) for _, count, period in interior
               if isinstance(period, (int, float)) and period > 0]
     summary["execution_active_periods"] = len(active)
+    # The block the rate comes from, beside the total busy count: the two
+    # differing is a run that paused, and says so rather than hiding it.
+    summary["execution_block_periods"] = len(block)
     summary["execution_samples_used"] = len(usable)
     if not usable:
         summary["execution_rate_absent"] = (
@@ -165,8 +224,11 @@ def whole_periods(values: typing.Sequence[float]) -> typing.Tuple[list, list]:
 
     The trade-off, stated rather than hidden: a workload that paused for a
     whole sampling period mid-run would be measured over its longest
-    uninterrupted stretch. None does -- pulse_virus cycles every 2 s,
-    inside the monitor's ~5 s period.
+    uninterrupted stretch. This used to say none does because pulse_virus
+    cycles every 2 s "inside the monitor's ~5 s period" -- a period that
+    was 5 s only because the config was ignored. At the honoured 1 s its
+    idle halves can fill a period, so the orchestrator samples it over
+    whole cycles instead (pantheon_neuron.monitor_period_for).
     """
     best, current = [], []
     for value in values:
@@ -284,6 +346,14 @@ class NeuronMonitor:
             self._thread.start()
             return True
 
+        honoured = period_string(self.period_seconds)
+        if float(honoured[:-1]) != self.period_seconds:
+            self._warn_once(
+                "period",
+                f"neuron-monitor honours whole seconds only; sampling every "
+                f"{honoured} rather than {self.period_seconds}s.",
+            )
+
         binary = shutil.which("neuron-monitor")
         if binary is None:
             self._warn_once(
@@ -294,7 +364,7 @@ class NeuronMonitor:
 
         config = json.dumps(
             {
-                "period": f"{self.period_seconds}s",
+                "period": period_string(self.period_seconds),
                 "neuron_runtimes": [
                     {
                         "tag_filter": ".*",
@@ -386,6 +456,17 @@ class NeuronMonitor:
 
     def stop(self) -> dict:
         """Stop sampling and return the aggregated, scrubbed metrics."""
+        self.shutdown()
+        return self.aggregate()
+
+    def shutdown(self) -> None:
+        """Stop sampling and release everything, without aggregating.
+
+        Split from ``stop`` so a caller can guarantee the teardown in a
+        finally without paying for a second aggregation -- and without a
+        test double for ``stop`` seeing a call it did not expect.
+        Idempotent: a second call finds nothing left to release.
+        """
         self._stop.set()
         if self._process is not None:
             self._process.terminate()
@@ -409,7 +490,6 @@ class NeuronMonitor:
             except OSError:
                 pass
             self._stderr = None
-        return self.aggregate()
 
     # -- sampling ----------------------------------------------------------
 
@@ -451,11 +531,21 @@ class NeuronMonitor:
                                     },
                                     "memory_used": {
                                         "neuron_runtime_used_bytes": {
-                                            "device": 8 * 1024**3
+                                            # The name hardware uses. The
+                                            # mock emitted "device", which
+                                            # is what let the parser read
+                                            # the wrong key unnoticed.
+                                            "neuron_device": 8 * 1024**3
                                         }
                                     },
                                     "execution_stats": {
                                         "error_summary": {"generic": 0},
+                                        # total_executions, which nothing
+                                        # reads: the mock must not
+                                        # synthesise execution_summary
+                                        # .completed, or a mock run would
+                                        # publish a fabricated rate. See
+                                        # test_mock_mode_invents_no_score.
                                         "total_executions": tick * 100,
                                     },
                                 }
@@ -493,6 +583,7 @@ class NeuronMonitor:
         }
 
         completed_series: typing.List[typing.Tuple[int, int, typing.Any]] = []
+        periods: typing.List[float] = []
 
         for index, sample in enumerate(self._samples):
             # One reading per core per sample, the largest any runtime
@@ -506,8 +597,13 @@ class NeuronMonitor:
             # mean halved.
             sample_util: typing.Dict[str, float] = {}
             sample_flops: typing.Dict[str, float] = {}
+            sample_completed: typing.Optional[int] = None
+            sample_period: typing.Optional[float] = None
             for runtime in (sample.get("neuron_runtime_data") or []):
                 report = runtime.get("report") or {}
+                period = (report.get("neuroncore_counters") or {}).get("period")
+                if isinstance(period, (int, float)) and period > 0.5:
+                    periods.append(float(period))
                 cores = (report.get("neuroncore_counters") or {}).get(
                     "neuroncores_in_use"
                 ) or {}
@@ -528,10 +624,19 @@ class NeuronMonitor:
                         sample_flops[str(core_id)] = max(
                             sample_flops.get(str(core_id), 0.0), float(achieved))
 
-                used = (
+                # "neuron_device", as the 2026-08-26 schema probe recorded
+                # it, with the old spelling kept for any runtime that uses
+                # it. This read "device" alone, which no sample carries, so
+                # device_memory_used_bytes was absent from every report the
+                # suite has ever written -- while mock runs filled it in,
+                # because the mock emitted the key the parser wanted.
+                runtime_bytes = (
                     (report.get("memory_used") or {})
                     .get("neuron_runtime_used_bytes") or {}
-                ).get("device")
+                )
+                used = runtime_bytes.get("neuron_device")
+                if not isinstance(used, (int, float)):
+                    used = runtime_bytes.get("device")
                 if isinstance(used, (int, float)):
                     memory_bytes.append(int(used))
 
@@ -549,8 +654,17 @@ class NeuronMonitor:
                     # A count for this period, so the run's total is the
                     # sum -- see execution_rate for the measurement.
                     executions += int(completed)
-                    completed_series.append(
-                        (index, int(completed), stats.get("period")))
+                    # One series entry per sample, summed over runtimes --
+                    # the rule _completed_in uses and await_idle_period
+                    # waits on. This appended one entry per runtime, so a
+                    # second runtime on the device (a neuron-profile
+                    # capture, an aggregate's worker) put two entries at
+                    # the same instant: execution_rate then divided that
+                    # sample's completions by two periods' worth of time.
+                    sample_completed = (sample_completed or 0) + int(completed)
+                    if isinstance(stats.get("period"), (int, float)):
+                        sample_period = max(sample_period or 0.0,
+                                            float(stats["period"]))
                 for key in (
                     "completed_with_err",
                     "completed_with_num_err",
@@ -568,6 +682,8 @@ class NeuronMonitor:
                     if isinstance(value, (int, float)):
                         sink.append(float(value))
 
+            if sample_completed is not None:
+                completed_series.append((index, sample_completed, sample_period))
             for core_id, value in sample_util.items():
                 utilisation[core_id].append(value)
             for core_id, value in sample_flops.items():
@@ -590,6 +706,11 @@ class NeuronMonitor:
 
         summary = {
             "samples": len(self._samples),
+            # The period the monitor actually delivered, from the samples'
+            # own `period` field -- the second quantity that would have
+            # shown "1.0s" being ignored (requested 1, delivered 5).
+            "sample_period_s": (round(statistics.median(periods), 3)
+                                if periods else None),
             "execution_errors": errors,
             "total_executions": executions,
             # Over whole busy periods, like effective_flops. The mean was

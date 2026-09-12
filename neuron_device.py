@@ -187,6 +187,19 @@ def _arch_from_instance_type() -> typing.Optional[str]:
     return _normalise_arch(hint) if hint else None
 
 
+def _first_present(entry: typing.Mapping, keys: typing.Sequence[str], fallback):
+    """The first key present with a non-None value, else ``fallback``.
+
+    Not ``a or b``: every field this reads can legitimately be 0, and 0 is
+    falsy.
+    """
+    for key in keys:
+        value = entry.get(key)
+        if value is not None:
+            return value
+    return fallback
+
+
 def _parse_neuron_ls(payload) -> typing.List[NeuronDevice]:
     if isinstance(payload, dict):
         entries = payload.get("neuron_devices") or payload.get("devices") or []
@@ -199,7 +212,13 @@ def _parse_neuron_ls(payload) -> typing.List[NeuronDevice]:
     for position, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
-        index = entry.get("neuron_device") or entry.get("nd_index") or position
+        # `or` would read a reported index of 0 as absent and fall through
+        # to the entry's position. They agree when neuron-ls lists devices
+        # in order, which is the only output this has seen -- but a payload
+        # listing device 1 first would give device 0 the index 1, and every
+        # later check (which devices were selected, what the report says
+        # ran) would name the wrong one.
+        index = _first_present(entry, ("neuron_device", "nd_index"), position)
         raw_arch = (
             entry.get("neuron_device_type")
             or entry.get("device_type")
@@ -215,8 +234,16 @@ def _parse_neuron_ls(payload) -> typing.List[NeuronDevice]:
         version, default_cores, trains = _ARCH_TABLE.get(
             arch, (NEURONCORE_V2, 2, False)
         )
-        cores = entry.get("nc_count") or entry.get("neuroncore_count") or default_cores
-        hbm = entry.get("memory_size") or entry.get("hbm_size") or 32 * 1024**3
+        cores = _first_present(
+            entry, ("nc_count", "neuroncore_count"), default_cores)
+        hbm = _first_present(entry, ("memory_size", "hbm_size"), 32 * 1024**3)
+        if int(cores) < 1:
+            raise NeuronUnavailable(
+                f"neuron-ls reports device {index} with {cores} NeuronCores. "
+                "A device with no cores cannot run a workload, and taking the "
+                f"table's {default_cores} instead would measure a part that "
+                "is not there"
+            )
 
         devices.append(
             NeuronDevice(
@@ -261,5 +288,21 @@ def select(devices, spec: str) -> typing.List[NeuronDevice]:
     if missing:
         raise NeuronUnavailable(
             f"Requested device(s) not present: {sorted(missing)}"
+        )
+    # Only a leading run of devices is measured where it says it is. Nothing
+    # pins the runtime to the selection: the profiler split, the aggregates'
+    # per-core workers and the in-process runtime all number cores from 0,
+    # and cores 0..n-1 belong to the first devices. `--device 1` on a
+    # multi-device part would run on device 0's cores and report device 1.
+    # Every part this suite has run on has one device, so pinning a subset
+    # could not be tested on hardware; refusing it is what can be.
+    ordered = sorted(devices, key=lambda device: device.index)
+    if [d.index for d in chosen] != [d.index for d in ordered[:len(chosen)]]:
+        leading = ",".join(str(d.index) for d in ordered[:len(chosen)])
+        raise NeuronUnavailable(
+            f"--device {spec} is not the first {len(chosen)} device(s), and "
+            "cores are numbered from device 0, so the run would measure "
+            f"device(s) {leading} under the requested label. Select a "
+            "leading run of devices, or 'all'."
         )
     return chosen

@@ -8,6 +8,8 @@ an accidental read-modify-write.
 
 import pytest
 
+import sourcecheck
+
 import pantheon_neuron
 from kernels import memory_write, registry, tiling
 from neuron_device import NeuronDevice
@@ -155,3 +157,24 @@ def test_hardware_path_requires_the_toolchain(monkeypatch):
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
     with pytest.raises(nki_backend.BackendUnavailable, match="neuronx-cc"):
         memory_write.run(_workload().problem, duration=1)
+
+
+def test_stores_are_planned_8192_wide_and_reads_keep_their_width():
+    """trn1.2xlarge 2026-09-11: 2048-wide stores 255.1 GB/s, 8192-wide
+    272.6. Reads showed no such effect, so they keep FREE_ELEMENTS."""
+    from kernels import memory_read, tiling
+    problem = _workload().problem
+    write_plan = tiling.tile_plan(problem["bytes"], problem["dtype"],
+                                  free=memory_write.STORE_FREE_ELEMENTS)
+    assert memory_write.STORE_FREE_ELEMENTS == 8192
+    assert write_plan["actual_bytes"] == problem["bytes"]
+    assert memory_read.tile_plan(8 << 30, "bf16")["free"] == tiling.FREE_ELEMENTS == 2048
+    code = sourcecheck.flat_function_code(memory_write._run)
+    assert "free = STORE_FREE_ELEMENTS" in code
+
+
+def test_a_narrow_store_profile_is_refused_by_the_tolerance():
+    """512-wide stores: 229.0 GB/s over the profile's active time, 69.4 by
+    the wall clock. Active time is not the whole story for many small
+    DMAs, and the analytic cross-check is what says so."""
+    assert memory_write.verify_against_analytic(229.0, 69.4) is not None

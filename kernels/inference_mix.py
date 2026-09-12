@@ -110,6 +110,39 @@ def run_fused_attention(problem: typing.Mapping[str, typing.Any],
 SCALE = 0.02
 
 
+# Seconds spent timing the bf16 reference inside a quantized_gemm run.
+BF16_REFERENCE_S = 10
+
+
+def _bf16_reference_tops(torch, xm, device, m: int, n: int, k: int,
+                         seconds: float) -> typing.Optional[float]:
+    """bf16 matmul T-ops/s at the same shape, in the same process.
+
+    Verified like the int8 side: all-ones operands make every element K,
+    and a reference that did not compute K is not a reference. Returns None
+    rather than a number it cannot vouch for.
+    """
+    lhs = torch.ones((m, k), dtype=torch.bfloat16, device=device)
+    rhs = torch.ones((k, n), dtype=torch.bfloat16, device=device)
+    xm.mark_step()
+    warm = torch.matmul(lhs, rhs)
+    xm.mark_step()
+    xm.wait_device_ops()
+    del warm
+    sink, passes = None, 0
+    started = time.perf_counter()
+    while time.perf_counter() < started + seconds:
+        sink = torch.matmul(lhs, rhs)
+        xm.mark_step()
+        passes += 1
+    xm.wait_device_ops()
+    elapsed = time.perf_counter() - started
+    observed = transformer_ops.read_back(sink)
+    if observed != float(k) or not elapsed:
+        return None
+    return passes * 2 * m * n * k / elapsed / 1e12
+
+
 def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
                        duration: int) -> dict:
     """int8 GEMM with a dequantisation scale, counting quantised ops."""
@@ -165,6 +198,15 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
 
     rate = ops / elapsed if elapsed else 0.0
 
+    # The bf16 reference, measured here rather than quoted. The ratio below
+    # divided by 70.38 -- a figure from the 2026-09-10 dtype probe -- so it
+    # set today's int8 rate against another run's bf16, on whatever
+    # toolchain that was. Two numbers from two runs can differ for any
+    # reason; the ratio only means what it says when both sides share a
+    # process, a shape and a clock.
+    bf16_tops = _bf16_reference_tops(torch, xm, device, m, n, k,
+                                     min(duration, BF16_REFERENCE_S))
+
     return {
         "quantized_ops": ops,
         "passes": passes,
@@ -189,9 +231,11 @@ def run_quantized_gemm(problem: typing.Mapping[str, typing.Any],
         # a throughput win, and reporting the ratio beside it is what
         # stops it being read as one. See kernels/tiling.py for the
         # table and docs/a_dtype_the_engine_refuses.md for the run.
-        "ratio_to_bf16": round(
-            (rate / 1e12) / tiling.OPERAND_RATES_4096["bf16"], 3),
-        "reference_bf16_tops": tiling.OPERAND_RATES_4096["bf16"],
+        "ratio_to_bf16": (round((rate / 1e12) / bf16_tops, 3)
+                          if bf16_tops else None),
+        "reference_bf16_tops": bf16_tops,
+        # What the probe measured, for comparison -- no longer the divisor.
+        "probe_bf16_tops": tiling.OPERAND_RATES_4096["bf16"],
         "score_method": "workload",
         "analytic_basis": "quantised ops / wall time",
         # The answer is exact. lhs and rhs are all-ones int8 over K

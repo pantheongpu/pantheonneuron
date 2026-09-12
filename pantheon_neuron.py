@@ -9,8 +9,10 @@ toolchain and torch-neuron on PyTorch 1.x.
 import argparse
 import datetime
 import json
+import math
 import os
 import platform
+import re
 import statistics
 import sys
 import time
@@ -86,6 +88,30 @@ def get_system_snapshot(devices) -> dict:
     return snapshot
 
 
+def finite_only(value, dropped: typing.List[str], path: str = ""):
+    """``value`` with every non-finite float replaced by None.
+
+    NaN and Infinity are not JSON. Python writes them anyway -- ``json``
+    emits the bare tokens by default and reads them back, so a report can
+    look fine here and fail in any strict parser, which is every consumer
+    that is not Python. A telemetry counter or a derived figure only has to
+    go non-finite once for a published report to become unreadable.
+
+    Replaced rather than dropped, and the paths are recorded in the report,
+    because "this field was not a number" is itself a finding.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        dropped.append(path or "<root>")
+        return None
+    if isinstance(value, dict):
+        return {key: finite_only(item, dropped, f"{path}.{key}" if path else str(key))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [finite_only(item, dropped, f"{path}[{index}]")
+                for index, item in enumerate(value)]
+    return value
+
+
 def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str:
     os.makedirs(DATABASE_DIR, exist_ok=True)
     payload = dict(snapshot)
@@ -93,10 +119,17 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
     payload["completed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     payload["test_results"] = results
 
+    dropped: typing.List[str] = []
+    payload = finite_only(payload, dropped)
+    if dropped:
+        payload["non_finite_fields"] = dropped
+
     target = os.path.join(DATABASE_DIR, f"pantheon_neuron_report_{run_id}.json")
     temporary = f"{target}.tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+        # allow_nan=False so this raises here rather than writing a file no
+        # strict parser can read. finite_only has already replaced them.
+        json.dump(payload, handle, indent=2, allow_nan=False)
     os.replace(temporary, target)
     return target
 
@@ -125,6 +158,35 @@ def run_order(workloads) -> list:
                 if w not in baseline and (w.problem or {}).get("cores") == "all"]
     rest = [w for w in workloads if w not in baseline and w not in spawning]
     return baseline + spawning + rest
+
+
+def reservation_point(workloads) -> typing.Optional[int]:
+    """Where in an ordered selection to reserve the profiler's core.
+
+    Before the first workload that runs in this process -- after baseline
+    telemetry and after every ``cores: "all"`` aggregate, which run_order
+    has already moved to the front.
+
+    The reservation used to be decided once, before anything ran, and a
+    selection containing an aggregate turned it off for the whole run: the
+    runtime reads NEURON_RT_VISIBLE_CORES once, and an aggregate must see
+    every core. So --test all and --test memory always published
+    memory_read and memory_write from the analytic fallback. But once the
+    aggregates run first, in their own worker processes, nothing in this
+    process has touched a runtime when they finish -- baseline telemetry
+    opens none (the 2026-09-11 full passes ran the aggregates after it
+    with every worker getting its core). The reservation can simply wait
+    for them.
+
+    None when every workload is baseline or an aggregate.
+    """
+    for position, workload in enumerate(workloads):
+        if workload.suite == "baseline":
+            continue
+        if (workload.problem or {}).get("cores") == "all":
+            continue
+        return position
+    return None
 
 
 def reservation_cost(workloads) -> typing.Tuple[typing.List[str], typing.List[str]]:
@@ -173,13 +235,11 @@ def reserve_profiler_core(devices, workloads=()) -> typing.Optional[str]:
     that says otherwise. A missing profiler Score announces itself in the
     row; a Score over the wrong core count does not.
 
-    That rule has a consequence worth stating plainly, because it applies to
-    the invocation the README puts first: ``--test all`` and ``--test
-    memory`` both select an aggregate workload, so neither can reach the
-    profiler for ``memory_read`` or ``memory_write``. The declared source is
-    available only to a selection with no ``cores: "all"`` workload in it.
-    The message below names which workloads are paying, rather than saying
-    "these Scores" and leaving the reader to work out which.
+    main() now calls this after the aggregates have run (see
+    ``reservation_point``), with only the workloads that remain, so a
+    selection like ``--test all`` still reaches the profiler for
+    ``memory_read`` and ``memory_write``. The aggregate branch below stays
+    for a caller that passes a selection still containing one.
     """
     if nki_backend.mock_mode():
         return None
@@ -252,6 +312,39 @@ def short_window(measured: typing.Optional[float],
     )
 
 
+def monitor_period_for(workload, requested: float) -> float:
+    """The sampling period to ask neuron-monitor for, for this workload.
+
+    The request, except for a pulsed workload, which is sampled over whole
+    pulse cycles: the smallest whole-second multiple of its ``period_s``
+    that is at least the request.
+
+    pulse_virus loads for half of every 2 s and idles for the other half.
+    On 5 s periods every sample mixed both halves. Once the period was
+    honoured at 1 s, each sample covered half a cycle, and on trn1.2xlarge
+    2026-09-11 the readings beat against the pulse: 68.13, 14.31, 52.74,
+    16.49 ... TFLOPS. The mean of 28 contiguous periods was still right
+    (38.76), but a period landing wholly inside an idle half reads zero,
+    and a zero ends the busy block the Score is averaged over
+    (neuron_monitor.whole_periods) -- the Score would then cover whichever
+    stretch happened to be longest. A sample spanning whole cycles cannot
+    read zero while the workload runs. Measured at 2 s the same day, the
+    Score sat 0.03% and 1.5% from the kernel's own FLOPs on two runs,
+    against 3-4% low at 1 s. The residual is the cycle's real length,
+    ~2.07 s, sliding against the 2 s window.
+
+    A pulse period that is not a whole number of seconds has no whole-
+    second multiple to sample at below a few cycles, and none is pinned,
+    so it keeps the request.
+    """
+    pulse = (workload.problem or {}).get("period_s")
+    if not isinstance(pulse, (int, float)) or pulse <= 0 or pulse != int(pulse):
+        return requested
+    pulse = int(pulse)
+    cycles = max(1, -(-round(requested) // pulse))
+    return float(cycles * pulse)
+
+
 def _measure_once(workload, devices, duration: int, monitor_period: float) -> dict:
     """One execution of one workload, scored. See ``run_workload``."""
     skip = workload.skip_reason(devices)
@@ -281,9 +374,33 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             "Telemetry": {"samples": 0},
         }
 
-    monitor = neuron_monitor.NeuronMonitor(period_seconds=monitor_period)
-    telemetry_started = monitor.start([device.index for device in devices])
+    # _LAST_RUN keeps the previous execution of this workload until the
+    # kernel replaces it, and a kernel that returns no figure of its own
+    # never does. These two are written here rather than by a kernel, so
+    # clear them first: a row must not carry an earlier repeat's ratio.
+    for stale in ("kernel_figure", "declared_over_kernel"):
+        (_LAST_RUN.get(workload.name) or {}).pop(stale, None)
 
+    monitor = neuron_monitor.NeuronMonitor(
+        period_seconds=monitor_period_for(workload, monitor_period))
+    telemetry_started = monitor.start([device.index for device in devices])
+    try:
+        return _measure_started(workload, devices, duration, monitor,
+                                telemetry_started)
+    finally:
+        # stop() is idempotent, and this is the only thing that guarantees
+        # it runs. The workload's own failure is caught below and becomes a
+        # row, but anything raised while building that row -- in a check,
+        # in the peak arithmetic, in a KeyboardInterrupt between them --
+        # left neuron-monitor sampling and its config file on disk for the
+        # rest of the run, with one more leaked per row after it.
+        if telemetry_started:
+            monitor.shutdown()
+
+
+def _measure_started(workload, devices, duration: int, monitor,
+                     telemetry_started: bool) -> dict:
+    """The body of one measurement, with the monitor already sampling."""
     started = time.time()
     status, detail, score = "PASS", "", None
     try:
@@ -351,8 +468,14 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
             detail = "; ".join(filter(None, [detail, unaccounted]))
 
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
-        status = "FAIL"
-        detail = f"{metrics['execution_errors']} Neuron execution error(s)"
+        # The Score goes with the status, as on every other path to FAIL.
+        # It was kept, so the row published a FAIL beside a number -- and
+        # under --repeat that number joined the spread and could become
+        # the median of a row whose repeats had failed.
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [
+            f"{metrics['execution_errors']} Neuron execution error(s)",
+            detail]))
 
     # The compute workloads declare neuron-monitor as their Score source, and
     # the monitor has only just stopped -- its counters do not exist while the
@@ -385,6 +508,21 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
                     (_LAST_RUN.get(workload.name) or {}).get("elapsed_s"))
                 if overhang:
                     detail = "; ".join(filter(None, [detail, overhang]))
+            # Keep the figure the declared Score replaced, and the ratio
+            # between them, on every row rather than only when they differ
+            # by the factor of 1.5 that warns. The pair is the second
+            # quantity for a monitor Score, and reading it across a pass is
+            # what showed pulse_virus was being sampled wrong: on
+            # trn1.2xlarge 2026-09-11 tensor_virus, int_virus and
+            # transformer_virus sat within 0.2% of their kernels while
+            # pulse_virus sat at 0.963, and 0.963 is not a warning-sized
+            # number. (omni_virus reads 1.12 for a stated reason: its
+            # kernel counts only the two matmuls of its chain.)
+            if isinstance(score, (int, float)) and score > 0:
+                _LAST_RUN.setdefault(workload.name, {}).update({
+                    "kernel_figure": round(score, 4),
+                    "declared_over_kernel": round(declared / score, 4),
+                })
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
@@ -424,6 +562,27 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     # cross-platform comparison can join on (Test Name, Unit). "Problem"
     # records the pinned shape/dtype, because a Score is only comparable if
     # both platforms ran the same problem.
+    # A Score that is not a finite number is not a measurement, and every
+    # comparison against it -- the ceiling check below included -- answers
+    # False, so it would travel to the row unchallenged and be written as
+    # the JSON that is not JSON (see finite_only).
+    if isinstance(score, float) and not math.isfinite(score) and status == "PASS":
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [
+            detail, "the Score was not a finite number"]))
+
+    # Every Score here is a rate: things counted over the time they took.
+    # Zero of them is not a slow run, it is a run that counted nothing -- a
+    # loop that never executed, a counter that never moved. It passed as a
+    # PASS with a published 0.0, which reads as a measured figure.
+    if (isinstance(score, (int, float)) and not isinstance(score, bool)
+            and score == 0 and status == "PASS"):
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [
+            detail,
+            f"the Score was zero {workload.unit or 'units'}: nothing was "
+            "counted, so this is not a measurement of anything"]))
+
     _peak_share = peak_share(workload, devices, metrics)
     beyond = beyond_the_ceiling(score, _peak_share, workload.unit)
     if beyond and status == "PASS":
@@ -502,6 +661,22 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
 
     scores = [r["Score"] for r in rows
               if isinstance(r.get("Score"), (int, float))]
+    if scores and row["Status"] == "PASS":
+        # The row is the repeat that produced the median, whole -- its
+        # Detail, Telemetry and Duration as well as its Score. It was the
+        # last repeat, with columns patched to the median one by one
+        # (Measurement, then Peak and Percent Of Peak), and the rest left
+        # describing a different execution. An even count has no median
+        # repeat, and the row stays the last one's apart from Measurement,
+        # which is withheld (_median_provenance).
+        base = _median_row(rows, statistics.median(scores))
+        if base is not None:
+            row = dict(base)
+        # Every repeat's warnings, not the base's alone. A warning raised by
+        # repeat 1 and not repeat 3 was dropped with the last-repeat row: a
+        # device shortfall, a consumer-bound read, a thin sample. Only a
+        # failure propagated from the other repeats.
+        row["Detail"] = _repeat_details(rows, base)
     row["Repeats"] = _spread(scores, len(rows))
     if scores and row["Status"] == "PASS":
         published = statistics.median(scores)
@@ -535,6 +710,40 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
                 row["Detail"] = "; ".join(
                     filter(None, [row.get("Detail"), quantised]))
     return row
+
+
+def _repeat_details(rows, base=None) -> str:
+    """Every distinct Detail across repeats, attributed when not all had it.
+
+    Sentences are matched with their numbers masked, since the same warning
+    carries each repeat's own figures (a sample count, a timestamp in a
+    captured error). A warning every repeat raised is stated once, in the
+    base repeat's words; one only some raised says which, so a reader can
+    tell a warning about the workload from one about a single execution.
+    """
+    order: typing.List[str] = []
+    text: typing.Dict[str, str] = {}
+    seen: typing.Dict[str, typing.List[int]] = {}
+    for number, candidate in enumerate(rows, start=1):
+        for part in filter(None, (candidate.get("Detail") or "").split("; ")):
+            key = re.sub(r"\d+(\.\d+)?", "#", part)
+            if key not in seen:
+                seen[key] = []
+                order.append(key)
+                text[key] = part
+            if candidate is base:
+                text[key] = part
+            if number not in seen[key]:
+                seen[key].append(number)
+    parts = []
+    for key in order:
+        which = seen[key]
+        if len(which) == len(rows):
+            parts.append(text[key])
+        else:
+            listed = ", ".join(str(n) for n in which)
+            parts.append(f"{text[key]} [repeat {listed} of {len(rows)}]")
+    return "; ".join(parts)
 
 
 def _median_row(rows, published):
@@ -1126,23 +1335,13 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 
 # Below this many samples a monitor-sourced mean is not a measurement.
 #
-# What that costs in wall time is not what the --monitor-period flag
-# suggests. Measured on trn1.2xlarge 2026-09-10, samples actually
-# delivered over a 20-second window:
-#
-#     requested 0.2s -> 11 samples, one every 1.82s   (9.1x slower)
-#     requested 1.0s ->  5 samples, one every 4.00s   (4.0x slower)
-#     requested 5.0s ->  5 samples, one every 4.00s
-#
-# **neuron-monitor has a floor around two seconds and does not deliver
-# the requested rate at or below one.** At the default period, five
-# samples takes roughly twenty seconds of *executing* -- not of
-# --duration, since samples taken while the workload compiles are
-# dropped.
-#
-# So the advice this suite gives -- "run longer or with a shorter
-# --monitor-period" -- is only half right, and the half that works is
-# running longer.
+# This block used to say neuron-monitor "has a floor around two seconds and
+# does not deliver the requested rate at or below one", from samples-per-
+# window counts on trn1.2xlarge 2026-09-10. It was the config, not the tool:
+# the period went out as "1.0s", which neuron-monitor ignores in favour of
+# its 5 s default, while "1s" delivers 1 s periods (inf2.xlarge 2026-09-11;
+# see neuron_monitor.period_string). --monitor-period works in whole
+# seconds, and 1 is both the default and the smallest it honours.
 #
 # **The five was set against a symptom of something else.** The spread it
 # guarded against -- 17.74, 26.14, 26.13 -- was a partly busy edge period
@@ -1150,7 +1349,7 @@ def monitor_score(workload, metrics: typing.Mapping[str, typing.Any]):
 # the whole periods of one tensor_virus run read 72.34, 72.35, 71.02,
 # 72.35, 72.57, and the two edges 18.25 and 53.43. The mean is now over
 # whole periods only (neuron_monitor.whole_period_flops), each already a
-# 5-second average of a steady kernel, and two is the least that lets one
+# whole-period average of a steady kernel, and two is the least that lets one
 # be checked against another -- the same reasoning as MIN_RATE_PERIODS.
 MIN_FLOPS_SAMPLES = 2
 
@@ -1202,9 +1401,7 @@ def thin_monitor_sample(metrics: typing.Mapping[str, typing.Any],
     return (
         f"effective_flops averaged over {min(counts)} whole sampling "
         f"period(s); fewer than {MIN_FLOPS_SAMPLES} leaves no second period "
-        "to check it against, so run longer before quoting this -- "
-        "neuron-monitor floors around 2s per sample whatever "
-        "--monitor-period asks for"
+        "to check it against, so run longer before quoting this"
     )
 
 
@@ -1266,6 +1463,19 @@ _PROVENANCE_KEYS = (
     # trn1.2xlarge 2026-09-10 with every byte still read; only these said so.
     "consumer_engine_active",
     "dma_active",
+    # memory_*_agg: whether every worker reached the start barrier, so the
+    # timed loops began together.
+    "barrier_all_ready",
+    # kv_cache_churn: how many of the ring's slots the measured loop was
+    # supposed to write, and how many held a written entry afterwards. The
+    # check acts on these; the row has to show them.
+    "ring_slots_expected",
+    "ring_readings_checked",
+    "ring_readings_landed",
+    # What the kernel counted before the declared Score replaced it, and
+    # the ratio between them. See _measure_once.
+    "kernel_figure",
+    "declared_over_kernel",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,
@@ -1287,6 +1497,10 @@ _PROVENANCE_KEYS = (
     # one after another.
     "concurrent_window_s",
     "worker_span_s",
+    # memory_*_agg: the numerator its declared formula sums, and how many
+    # workers it summed, so the Score can be recomputed from the row.
+    "bytes_moved",
+    "cores_reporting",
     # fused_attention, moe_router, rag_embedding and vision_encoder report
     # a tile, token or vector rate, which nothing can check. implied_tflops
     # can be held against the ~26 this kernel family reaches on a dense
@@ -1371,8 +1585,19 @@ def _provenance(workload) -> typing.Optional[dict]:
     run = _LAST_RUN.get(workload.name)
     if not run:
         return None
-    found = {key: run[key] for key in _PROVENANCE_KEYS
-             if run.get(key) is not None}
+    # The counters the registry declares, then the curated extras. A
+    # declaration is the row's promise that the Score can be recomputed
+    # from it, and eleven workloads' numerators never reached the row --
+    # `cache_updates`, `routed_tokens`, `steps_completed` and the rest --
+    # so a reader could check the rate against nothing at all. Taking them
+    # from the declaration rather than a hand-kept list is what stops the
+    # next workload arriving without them. Counters that name a monitor or
+    # profile path ('neuroncore_counters.*.effective_flops') are not kernel
+    # keys and simply do not match.
+    declared = tuple(getattr(workload.score_source, "counters", None) or ())
+    keys = _PROVENANCE_KEYS + tuple(
+        key for key in declared if key not in _PROVENANCE_KEYS)
+    found = {key: run[key] for key in keys if run.get(key) is not None}
     return found or None
 
 
@@ -1592,6 +1817,26 @@ def _execute_bandwidth(workload, duration: int, module) -> float:
 
 # --- CLI --------------------------------------------------------------------
 
+def _positive(value: str) -> int:
+    """A whole number of seconds or repeats, at least one.
+
+    `type=int` accepted 0 and negatives. `--duration 0` gave every kernel a
+    deadline already past, so each loop ran no iterations and reported a
+    rate of zero over no time -- and the short-window check, which exists
+    to say when the duration did not bound the run, returns early for a
+    requested duration of zero.
+    """
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a whole number") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError(
+            f"must be at least 1, got {number}")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pantheon-neuron",
@@ -1603,19 +1848,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--test",
         default="all",
-        help="Workload name, suite (baseline, core, memory, interconnect), or 'all'",
+        # Built from the registry rather than listed here. Four of the
+        # eight suites were named -- inference, training, runtime and
+        # ai_auxiliary were not -- so --help described a smaller suite than
+        # --test accepts, and eight of the twenty-six workloads sat in a
+        # suite a reader had no way to discover.
+        help=("Workload name, suite (" + ", ".join(registry.SUITES) +
+              "), or 'all'"),
     )
     parser.add_argument(
-        "--duration", type=int, default=30, help="Seconds per workload (default: 30)"
+        "--duration", type=_positive, default=30,
+        help="Seconds per workload (default: 30)"
     )
     parser.add_argument(
-        "--device", default="all", help="Comma-separated device indices or 'all'"
+        "--device", default="all", help="'all', or a leading run of device indices (0 or 0,1)"
     )
     parser.add_argument(
         "--monitor-period",
         type=float,
         default=1.0,
-        help="neuron-monitor sampling period in seconds",
+        help="neuron-monitor sampling period in whole seconds (1 is the "
+             "smallest it honours; other values are rounded)",
     )
     parser.add_argument(
         "--mock",
@@ -1624,7 +1877,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--repeat",
-        type=int,
+        type=_positive,
         default=1,
         help="Run each workload this many times and report the spread "
              "(default: 1). A single sample cannot show that a Score is "
@@ -1675,14 +1928,18 @@ def main(argv=None) -> int:
         f"{len(workloads)} workload(s)"
     )
 
-    reserve_profiler_core(devices, workloads)
     workloads = run_order(workloads)
+    reserve_at = reservation_point(workloads)
 
     snapshot = get_system_snapshot(devices)
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results = []
 
-    for workload in workloads:
+    for position, workload in enumerate(workloads):
+        # After the aggregates, before anything initialises a runtime here:
+        # see reservation_point.
+        if position == reserve_at:
+            reserve_profiler_core(devices, workloads[position:])
         print(f"[PANTHEON-NEURON] -> {workload.name}")
         row = run_workload(workload, devices, args.duration,
                            args.monitor_period, repeat=args.repeat)

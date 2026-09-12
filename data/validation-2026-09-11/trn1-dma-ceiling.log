@@ -1,0 +1,10 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. Is ~275 GB/s a per-core DMA ceiling?
+# probe_dma_ceiling.py: memory_read-style kernels, 2 GiB bf16, 20 s, core 0, own compile cache each.
+#   A one 2048-wide load per iteration (the shipped kernel)
+#   U two independent 2048-wide loads per iteration, separate accumulators
+#   X one 16384-wide load per iteration (32 KiB per partition row)
+# PREDICTED: per-core ceiling -> all ~270; issue-limited -> U or X faster.
+
+A  free   2048    269.5 GB/s  coverage 1.000000  (2512 passes)
+U  free   2048    268.8 GB/s  coverage 1.000000  (2506 passes)
+X  free  16384    271.1 GB/s  coverage 1.000000  (2527 passes)

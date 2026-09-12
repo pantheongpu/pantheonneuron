@@ -1,0 +1,121 @@
+Full pass, trn1.2xlarge 2026-09-11, with the monitor-period, deferred-reservation and copy-graph fixes
+(the working tree that was committed as 4f21431, f5bf6b9 and 39e4a2f; in such a pass the later commits change only where the two skipped collectives sit in the order): --test all --duration 30
+
+24 PASS (baseline_metrics included), 0 FAIL, 2 SKIPPED. The reservation lands after the two aggregates, so
+memory_read and memory_write report neuron-profile in a full pass for the first time. Every monitor-scored row
+has sample_period_s 1.0 and a mean over 28-30 whole periods (5-7 before, on 5 s periods).
+
+    [PANTHEON-NEURON] -> baseline_metrics
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.6% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.01% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    81.54% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> int_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> pulse_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    82.5% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> transformer_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    56.04% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> omni_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    56.78% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.02% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.33% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> all_reduce
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> p2p_thrasher
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> pcie_bandwidth
+    [PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.5 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect,
+    [PANTHEON-NEURON] -> llm_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> llm_prefill
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> kv_cache_churn
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> fused_attention
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> quantized_gemm
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> serving_mix
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> speculative_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> moe_router
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> transformer_train_step
+    [PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and the model never updates. The Scor
+    [PANTHEON-NEURON] -> allocation_fragmentation
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> graph_replay
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> rag_embedding
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> vision_encoder
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_195326.json
+    
+
+Rows from the report:
+
+    workload                 status          score unit                   method          detail
+    baseline_metrics         PASS                                                         
+    memory_read_agg          PASS         542.3637 GB/s                   workload        
+    memory_write_agg         PASS         537.1603 GB/s                   workload        
+    tensor_virus             PASS          77.4655 TFLOPS                 neuron-monitor  
+    int_virus                PASS          78.8125 TOPS                   neuron-monitor  
+    pulse_virus              PASS          39.1875 TFLOPS                 neuron-monitor  
+    transformer_virus        PASS          53.2393 TFLOPS                 neuron-monitor  
+    omni_virus               PASS          53.9398 TFLOPS                 neuron-monitor  
+    memory_read              PASS         273.0228 GB/s                   neuron-profile  
+    memory_write             PASS         274.4077 GB/s                   neuron-profile  
+    all_reduce               SKIPPED               GB/s                                   needs 2 devices, 1 selected
+    p2p_thrasher             SKIPPED               GB/s                                   needs 2 devices, 1 selected
+    pcie_bandwidth           PASS           3.8238 GB/s                   workload        d2h ran at 1.1 GB/s against 6.5 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, whe
+    llm_decode               PASS          17.4776 tokens/s               workload        
+    llm_prefill              PASS        3811.0231 prompt-tokens/s        workload        
+    kv_cache_churn           PASS        97249.443 cache-updates/s        workload        
+    fused_attention          PASS        6043.1189 attention-tiles/s      workload        
+    quantized_gemm           PASS     18443169813406.54 quantized-ops/s        workload        
+    serving_mix              PASS           2.4764 requests/s             workload        
+    speculative_decode       PASS          73.7215 verified-tokens/s      workload        
+    moe_router               PASS      254625.5352 routed-tokens/s        workload        
+    transformer_train_step   PASS           3.6443 train-steps/s          workload        the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of 
+    allocation_fragmentation PASS        2237.9563 allocation-events/s    workload        
+    graph_replay             PASS         3000.037 graph-steps/s          neuron-monitor  
+    rag_embedding            PASS          854.251 embedding-vectors/s    workload        
+    vision_encoder           PASS       58132.1195 image-tiles/s          workload        
+
+Monitor sampling per scored row (effective_flops, core 0):
+
+    tensor_virus             period 1.0 s  whole periods 28 of 30  mean 77.47  all-sample mean 76.96 TFLOPS
+    int_virus                period 1.0 s  whole periods 28 of 30  mean 78.81  all-sample mean 77.70 TFLOPS
+    pulse_virus              period 1.0 s  whole periods 28 of 30  mean 39.19  all-sample mean 40.72 TFLOPS
+    transformer_virus        period 1.0 s  whole periods 29 of 31  mean 53.24  all-sample mean 51.62 TFLOPS
+    omni_virus               period 1.0 s  whole periods 29 of 31  mean 53.94  all-sample mean 52.53 TFLOPS
+    memory_read              neuron-profile: candidate 6 of 7, coverage 1.0
+    memory_write             neuron-profile: candidate 3 of 7, coverage 1.0
+    llm_decode               period 1.0 s  whole periods 29 of 31  mean 0.24  all-sample mean 0.23 TFLOPS
+    llm_prefill              period 1.0 s  whole periods 30 of 32  mean 49.14  all-sample mean 48.62 TFLOPS
+    fused_attention          period 1.0 s  whole periods 28 of 30  mean 12.98  all-sample mean 12.97 TFLOPS
+    quantized_gemm           period 1.0 s  whole periods 29 of 31  mean 18.44  all-sample mean 17.86 TFLOPS
+    serving_mix              period 1.0 s  whole periods 29 of 31  mean 29.97  all-sample mean 29.85 TFLOPS
+    speculative_decode       period 1.0 s  whole periods 29 of 31  mean 0.94  all-sample mean 0.91 TFLOPS
+    moe_router               period 1.0 s  whole periods 28 of 30  mean 17.11  all-sample mean 16.56 TFLOPS
+    transformer_train_step   period 1.0 s  whole periods 30 of 32  mean 36.09  all-sample mean 34.82 TFLOPS
+    graph_replay             period 1.0 s  whole periods 29 of 31  mean 51.54  all-sample mean 49.90 TFLOPS
+    rag_embedding            period 1.0 s  whole periods 29 of 31  mean 33.16  all-sample mean 32.40 TFLOPS
+    vision_encoder           period 1.0 s  whole periods 29 of 31  mean 17.09  all-sample mean 17.09 TFLOPS

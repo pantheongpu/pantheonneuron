@@ -12,6 +12,7 @@ started emitting the identifier and stop it at the source.
 import glob
 import json
 import os
+import pathlib
 import re
 import socket
 
@@ -319,3 +320,52 @@ def test_every_whitelisted_key_is_something_a_kernel_reports():
                and f'"{key}"' not in orchestrator.replace(
                    "_PROVENANCE_KEYS", "")]
     assert not orphans, orphans
+
+
+# -- the JSON that is not JSON ----------------------------------------------
+
+def test_a_non_finite_value_does_not_reach_the_file(tmp_path, monkeypatch):
+    """NaN and Infinity are not JSON. Python emits the bare tokens by
+    default and reads them back, so a report can look fine here and fail in
+    every consumer that is not Python."""
+    monkeypatch.setattr(pantheon_neuron, "DATABASE_DIR", str(tmp_path))
+    rows = [{"Test Name": "x", "Score": float("nan"),
+             "Telemetry": {"power": [1.0, float("inf")]}}]
+    path = pantheon_neuron.write_report({"devices": []}, rows, "runid")
+
+    raw = pathlib.Path(path).read_text(encoding="utf-8")
+    assert "NaN" not in raw and "Infinity" not in raw
+    # Strict: json.loads accepts the tokens unless asked not to.
+    payload = json.loads(raw, parse_constant=_reject)
+    assert payload["test_results"][0]["Score"] is None
+    assert payload["test_results"][0]["Telemetry"]["power"] == [1.0, None]
+    assert payload["non_finite_fields"] == [
+        "test_results[0].Score", "test_results[0].Telemetry.power[1]"]
+
+
+def _reject(token):
+    raise AssertionError(f"the report carried {token}")
+
+
+def test_a_finite_report_records_no_dropped_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(pantheon_neuron, "DATABASE_DIR", str(tmp_path))
+    path = pantheon_neuron.write_report({"devices": []},
+                                        [{"Test Name": "x", "Score": 1.5}], "runid")
+    payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    assert "non_finite_fields" not in payload
+
+
+def test_a_non_finite_score_fails_the_row(mock_env, monkeypatch):
+    """Every comparison against NaN answers False, so the ceiling check and
+    the disagreement check both pass it through."""
+    from kernels import registry
+    from neuron_device import NeuronDevice
+
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: float("nan"))
+    workload = next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+    devices = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
+    row = pantheon_neuron.run_workload(
+        workload, devices, duration=0.02, monitor_period=0.01)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "not a finite number" in row["Detail"]

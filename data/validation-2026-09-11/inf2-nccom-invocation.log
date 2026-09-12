@@ -1,0 +1,49 @@
+nccom-test invocation, old vs new -- inf2.xlarge (one device, two NeuronCores), 2026-09-11.
+
+What this is: the command line kernels/collectives.py builds, run for real.
+What this is NOT: NeuronLink. One device, so ranks 0 and 1 are its two cores;
+every figure below is core-to-core on one chip. all_reduce and p2p_thrasher
+still skip on this part (min_devices=2) -- the module was called directly
+with a one-device list to exercise its invocation and parse.
+
+Old: -r len(devices) ... -c <op>. `-c` is --check {random,all_ones}, so
+argparse rejects the operation and nccom-test exits 2 before running.
+Neither collective could ever have produced a row on any part.
+
+New: -r <cores across devices> ... --non-interactive <op>, as the
+2026-08-26 probe ran it. (The script's banner says "trn1 device": the
+NeuronDevice object was built with arch trn1; the hardware is inf2.)
+
+    === old invocation: -r <len(devices)=1> ... -c all_reduce (no positional op)
+                      [--log-level LOG_LEVEL] [--vcpu-pin-mode] [--unique-buff]
+                      [--data-collector-use-ipv6]
+                      [--custom-replica-groups CUSTOM_REPLICA_GROUPS]
+                      [--custom-src-target-pairs CUSTOM_SRC_TARGET_PAIRS]
+                      [--alltoallv-metadata ALLTOALLV_METADATA]
+                      [--data-parallel-dimension DATA_PARALLEL_DIMENSION]
+                      [--coalesced-cc-size-ratio COALESCED_CC_SIZE_RATIO [COALESCED_CC_SIZE_RATIO ...]]
+                      [--report-to-json-file REPORT_TO_JSON_FILE]
+                      [--benchmark-log-directory BENCHMARK_LOG_DIRECTORY]
+                      [--show-input-output-size] [--show-algorithm] [--sb2sb]
+                      [--input-shape INPUT_SHAPE] [--output-shape OUTPUT_SHAPE]
+                      [--cc-dim CC_DIM] [--shared-output-buff] [--permute-chain]
+                      [--unique-tensor] [--mpi-log-dir MPI_LOG_DIR]
+                      {sendrecv,permute,all_reduce,redsct,reduce_scatter,all_gather,allr,alltoallv,allg,alltoall}
+    nccom-test: error: argument -c/--check: invalid choice: 'all_reduce' (choose from 'random', 'all_ones')
+    exit 2
+    === old p2p: -r 1 ... -c sendrecv
+                      [--report-to-json-file REPORT_TO_JSON_FILE]
+                      [--benchmark-log-directory BENCHMARK_LOG_DIRECTORY]
+                      [--show-input-output-size] [--show-algorithm] [--sb2sb]
+                      [--input-shape INPUT_SHAPE] [--output-shape OUTPUT_SHAPE]
+                      [--cc-dim CC_DIM] [--shared-output-buff] [--permute-chain]
+                      [--unique-tensor] [--mpi-log-dir MPI_LOG_DIR]
+                      {allg,all_reduce,allr,redsct,reduce_scatter,alltoallv,sendrecv,alltoall,all_gather,permute}
+    nccom-test: error: argument -c/--check: invalid choice: 'sendrecv' (choose from 'random', 'all_ones')
+    exit 2
+    === new invocation via the module (ranks = cores = 2 on one trn1 device)
+    args: ['-r', '2', '-b', '1048576', '-e', '8388608', '-f', '2', '-n', '20', '-d', 'fp32', '--non-interactive', 'all_reduce']
+    all_reduce: {'busbw_gbps': 61.222500000000004, 'ranks': 2, 'warning': None}
+    sweep: {'1048576': 55.92, '2097152': 61.41, '4194304': 63.57, '8388608': 63.99}
+    p2p: {'busbw_gbps': 66.09, 'ranks': 2, 'bytes': 67108864, 'warning': None}
+    exit 0

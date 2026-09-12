@@ -49,6 +49,22 @@ FREE_ELEMENTS = tiling.FREE_ELEMENTS
 tile_plan = tiling.tile_plan
 
 
+# Stores are 8192 elements wide, where reads stay at tiling.FREE_ELEMENTS.
+# Swept on trn1.2xlarge 2026-09-11, 2 GiB destination, each width its own
+# process, every destination verified:
+#
+#     width    wall GB/s   over active time
+#      512       69.4          229.0
+#     2048      255.1          254.1      (this kernel until then)
+#     8192      272.6          274.4
+#
+# So the write figure was a kernel limit: at 2048 the stores ran 7% below
+# what the part does, and 8192 matches the read rate. Reads showed no such
+# effect (269.5 at 2048, 269.8 at 8192), so memory_read keeps its width and
+# its history.
+STORE_FREE_ELEMENTS = 8192
+
+
 def _build_kernel(total_rows: int):
     """Import NKI and construct the kernel.
 
@@ -90,20 +106,26 @@ def _build_kernel(total_rows: int):
     return nki, nl, memory_write_kernel
 
 
-def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
+def run(problem: typing.Mapping[str, typing.Any], duration: int,
+        before_loop: typing.Optional[typing.Callable[[], None]] = None) -> dict:
     """Execute the streaming write and return timing plus byte accounting."""
     nki_backend.require_toolchain()
+    workdir = cores.kernel_workdir("memory_write")
+    # Compile into the directory the profiler will search, and only while
+    # this kernel runs; see cores.compile_cache.
+    with cores.compile_cache(workdir):
+        return _run(problem, duration, before_loop, workdir)
 
+
+def _run(problem: typing.Mapping[str, typing.Any], duration: int,
+         before_loop: typing.Optional[typing.Callable[[], None]],
+         workdir: str) -> dict:
     import torch_xla.core.xla_model as xm  # type: ignore
 
-    plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]))
+    plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]),
+                     free=STORE_FREE_ELEMENTS)
     rows = plan["tiles"] * PARTITION
     _, _, kernel = _build_kernel(rows)
-
-    workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
-    os.makedirs(workdir, exist_ok=True)
-    # Compile into the directory the profiler searches; see kernels/cores.py.
-    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     import torch  # type: ignore
@@ -164,6 +186,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # the buffer from that point, so dropping our reference frees it for the
     # next pass rather than pruning the computation.
     passes = 0
+    # memory_agg's start barrier: every worker compiled and warmed up, then
+    # released together, so the aggregate's loops coincide.
+    if before_loop is not None:
+        before_loop()
+    # Wall-clock brackets of the timed loop itself, comparable across
+    # processes. The aggregate placed each loop by subtracting elapsed_s
+    # from when run() *returned* -- but run() goes on after the loop (read
+    # back, a profiler attempt), for a time that differs per worker.
+    loop_started_at = time.time()
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
@@ -175,6 +206,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    loop_finished_at = time.time()
 
     # One extra pass, kept, purely to read the destination back. It is
     # deliberately outside the timed region: it exists to prove the stores
@@ -205,6 +237,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     result = {
         "passes": passes,
         "elapsed_s": elapsed,
+        "loop_started_at": loop_started_at,
+        "loop_finished_at": loop_finished_at,
         "bytes_written": bytes_written,
         "analytic_gbps": analytic,
         "profiler_gbps": None,
@@ -219,6 +253,17 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     elided = verify_write_completed(write_verified)
     if elided:
         result["warning"] = elided
+        return result
+
+    # Only when a core was reserved for it; see memory_read for why an
+    # aggregate's worker can never satisfy a capture.
+    if not os.environ.get(cores.RESERVED_CORE):
+        result["warning"] = (
+            "no core was reserved for neuron-profile, so the Score is the "
+            "analytic figure; run a selection that leaves the profiler a "
+            f"core, or set {cores.RESERVED_CORE} to one this process does "
+            "not hold"
+        )
         return result
 
     try:

@@ -8,6 +8,16 @@
 > [Coalescing the loads](#coalescing-the-loads). What follows is kept as
 > it was written, because how the gap was found and misdiagnosed twice is
 > the useful part.
+>
+> **Since, 2026-09-11: 78.50 TFLOPS by `neuron-monitor`, 82.6% of one
+> core.** Two changes, each measured. The monitor mean stopped averaging in
+> the partly busy first and last sampling periods (72.46, cv 0.0005). Then
+> the coalesce factor went from 4 to 8 once a sweep showed that filling
+> PSUM, which the factor of 4 had been chosen to avoid, costs nothing and
+> the 2 KiB lhs rows are worth 9% (see `COALESCE_ROWS` in
+> `kernels/tensor_virus.py`). The same sweep showed the load is not the
+> only term: narrower moving tiles that fit more accumulators into half of
+> PSUM were slower (61.86 and 30.73).
 
 **trn1.2xlarge, 2026-09-10.** 8192³ bf16, 25s each, one process, both
 products verified exact against all-ones arithmetic.

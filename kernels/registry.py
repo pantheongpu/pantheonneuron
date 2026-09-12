@@ -223,18 +223,28 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
                      'total_active_time',
                  ),
                  formula='hbm_write_bytes / total_active_time / 1e9')),
+    # **INTERNAL, not PROFILER, and the difference is structural.**
+    # neuron-profile replays the NEFF and so needs a NeuronCore of its own.
+    # An aggregate gives every core to a worker -- that is what `cores:
+    # "all"` means -- and each worker holds the one core it can see, so no
+    # capture inside a worker can ever find a free core. Declaring
+    # neuron-profile here promised a source the run cannot reach: the rows
+    # read "Score Method: workload" against a registry saying
+    # neuron-profile, with nothing connecting the two, and every worker
+    # spent a subprocess per candidate NEFF arriving at "Logical Neuron
+    # Core(s) not available". The single-core memory_read and memory_write
+    # keep the profiler; it is the aggregate that cannot have it.
     Workload("memory_read_agg", "memory",
              "Aggregate HBM read bandwidth, all NeuronCores.",
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
              problem={"bytes": 8 << 30, "dtype": "bf16", "cores": "all"},
-             score_source=ScoreSource(PROFILER,
+             score_source=ScoreSource(INTERNAL,
                  counters=(
-                     'hbm_read_bytes',
-                     'total_time',
-                     'total_active_time',
+                     'bytes_requested',
+                     'elapsed_s',
                  ),
-                 formula='sum(hbm_read_bytes over cores) / total_active_time / 1e9')),
+                 formula='sum(bytes_requested over cores) / max(elapsed_s over cores) / 1e9')),
     # 4 GiB per core, for the same residency reason as memory_write: each
     # worker allocates its own destination on its own core, so the pin is
     # per-core and the arithmetic is identical.
@@ -243,20 +253,23 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              _HBM | frozenset({"multicore"}),
              unit="GB/s",
              problem={"bytes": 4 << 30, "dtype": "bf16", "cores": "all"},
-             score_source=ScoreSource(PROFILER,
+             score_source=ScoreSource(INTERNAL,
                  counters=(
-                     'hbm_write_bytes',
-                     'total_time',
-                     'total_active_time',
+                     'bytes_written',
+                     'elapsed_s',
                  ),
-                 formula='sum(hbm_write_bytes over cores) / total_active_time / 1e9')),
+                 formula='sum(bytes_written over cores) / max(elapsed_s over cores) / 1e9')),
 
     # -- interconnect ------------------------------------------------------
+    # `cores: "all"` on both collectives: nccom-test starts one worker per
+    # NeuronCore in processes of its own, so like the aggregates they must
+    # run before this process's runtime holds any core, and before the
+    # profiler reservation hides one (run_order, reservation_point).
     Workload("all_reduce", "interconnect",
              "All-reduce collective over NeuronLink.", _COLLECTIVE, min_devices=2,
              unit="GB/s",
              problem={"op": "all_reduce", "bytes_min": 1 << 20, "bytes_max": 8 << 20,
-                      "dtype": "fp32"},
+                      "dtype": "fp32", "cores": "all"},
              score_source=ScoreSource(NCCOM,
                  counters=(
                      'busbw',
@@ -266,7 +279,8 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              "Sustained device-to-device traffic over NeuronLink.",
              _COLLECTIVE, min_devices=2,
              unit="GB/s",
-             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32"},
+             problem={"op": "sendrecv", "bytes": 1 << 26, "dtype": "fp32",
+                      "cores": "all"},
              score_source=ScoreSource(NCCOM,
                  counters=(
                      'busbw',
@@ -619,9 +633,10 @@ SCORE_DEPENDS_ON_PIN = {
 # is scored by the reader that cannot see any engine.**
 #
 # Reaching them needs a profiler capture of the workload's own NEFF, which
-# needs a reserved core, which is off for any selection containing a
-# cores: "all" workload. Real work, not an oversight, and not done -- so
-# it is written down here rather than left as a false attribution.
+# needs a reserved core -- available in every selection since 2026-09-11
+# (pantheon_neuron.reservation_point), but the capture itself is not
+# written. Real work, not an oversight, and not done -- so it is written
+# down here rather than left as a false attribution.
 #
 # docs/neuron_counters.md records the probe that established which reader
 # has what; data/probe-2026-08-26-tools/ carries the raw 108-counter set.

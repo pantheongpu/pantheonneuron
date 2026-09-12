@@ -120,3 +120,113 @@ def test_a_period_the_monitor_did_not_report_is_not_divided_by():
     rate = execution_rate(series)
     assert rate["execution_samples_used"] == 1
     assert rate["executions_per_s"] == 100.0
+
+
+# -- the period neuron-monitor will actually honour -------------------------
+
+from neuron_monitor import NeuronMonitor, period_string  # noqa: E402
+
+
+def test_the_period_goes_out_in_whole_seconds():
+    """inf2.xlarge 2026-09-11: "1.0s" and "0.5s" were ignored in favour of
+    the 5 s default; "1s" delivered 1 s periods."""
+    assert period_string(1.0) == "1s"
+    assert period_string(5.0) == "5s"
+    assert period_string(0.5) == "1s"
+    assert period_string(0.2) == "1s"
+    assert period_string(2.6) == "3s"
+    for value in (0.2, 0.5, 1.0, 2.6, 5.0):
+        text = period_string(value)
+        assert "." not in text and text.endswith("s") and int(text[:-1]) >= 1
+
+
+def test_the_config_uses_the_honoured_string():
+    import inspect
+    source = inspect.getsource(NeuronMonitor.start)
+    assert '"period": period_string(self.period_seconds)' in source
+    assert 'f"{self.period_seconds}s"' not in source
+
+
+def test_the_delivered_period_is_reported():
+    def sample(period):
+        return {"neuron_runtime_data": [{"report": {"neuroncore_counters": {
+            "period": period, "neuroncores_in_use": {
+                "0": {"effective_flops": 7e13, "neuroncore_utilization": 99.0}}}}}]}
+    monitor = NeuronMonitor(mock=True)
+    monitor._samples = [sample(0.004), sample(5.0), sample(5.001), sample(4.999)]
+    monitor._sample_times = [0.0, 5.0, 10.0, 15.0]
+    assert monitor.aggregate()["sample_period_s"] == 5.0
+
+
+# -- a setup execution before the compile is not the run's first period ----
+
+def _series(counts, period=1.0):
+    return [(i, c, period) for i, c in enumerate(counts)]
+
+
+def test_setup_work_before_the_compile_does_not_take_the_first_slot():
+    """The shape whole_periods was fixed for, on the completion counter:
+    a setup graph completes, a long compile reads zero, then the loop. Taking
+    first-to-last busy let the setup blip be the "first" period, so the loop's
+    partly busy first period stayed in the average and diluted it."""
+    counts = [3] + [0] * 46 + [6657, 15409, 15273, 15199, 7465]
+    summary = execution_rate(_series(counts))
+    # 15409, 15273, 15199 -- the loop's whole periods, not 6657 as well.
+    assert summary["executions_per_s"] == pytest.approx((15409 + 15273 + 15199) / 3)
+    assert summary["execution_samples_used"] == 3
+    assert summary["execution_active_periods"] == 6
+    assert summary["execution_block_periods"] == 5
+
+
+def test_an_uninterrupted_run_is_unchanged():
+    """The measured 2026-09-10 series has no gap, so the fix must not move it."""
+    counts = [0] * 15 + [6657, 15409, 15273, 15199, 7465, 0, 0]
+    summary = execution_rate(_series(counts, period=5.0))
+    assert summary["executions_per_s"] == pytest.approx(
+        (15409 + 15273 + 15199) / 15.0)
+    assert summary["execution_active_periods"] == 5
+    assert summary["execution_block_periods"] == 5
+
+
+def test_the_two_counts_differ_exactly_when_the_run_paused():
+    counts = [4, 4, 4]
+    summary = execution_rate(_series(counts))
+    assert summary["execution_active_periods"] == summary["execution_block_periods"] == 3
+
+
+# -- a second runtime on the device is not a second sampling period -------
+
+def _runtime(completed, period=1.0):
+    return {"report": {"execution_stats": {
+        "period": period, "execution_summary": {"completed": completed}}}}
+
+
+def _monitor(samples):
+    monitor = NeuronMonitor(mock=True)
+    monitor._samples = samples
+    monitor._sample_times = [float(i) for i in range(len(samples))]
+    return monitor
+
+
+def test_one_runtime_reports_its_own_rate():
+    samples = [{"neuron_runtime_data": [_runtime(c)]}
+               for c in (100, 1000, 1000, 1000, 100)]
+    assert _monitor(samples).aggregate()["executions_per_s"] == pytest.approx(1000.0)
+
+
+def test_a_second_runtime_does_not_halve_the_rate():
+    """neuron-monitor reports every runtime on the device -- a
+    neuron-profile capture, an aggregate's worker. The series took one
+    entry per runtime, so two runtimes put two entries at the same instant
+    and the rate was divided by two periods' worth of time for one
+    period's completions."""
+    samples = [{"neuron_runtime_data": [_runtime(c), _runtime(c)]}
+               for c in (100, 1000, 1000, 1000, 100)]
+    metrics = _monitor(samples).aggregate()
+    assert metrics["executions_per_s"] == pytest.approx(2000.0)
+    assert metrics["execution_samples"] == 5
+
+
+def test_the_summed_total_is_unchanged_by_the_regrouping():
+    samples = [{"neuron_runtime_data": [_runtime(7), _runtime(3)]}]
+    assert _monitor(samples).aggregate()["executions_total"] == 10

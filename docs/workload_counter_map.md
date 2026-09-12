@@ -10,7 +10,7 @@ Do not hand-edit.
 Instance columns show whether the capability gate admits the workload —
 **not** whether its kernel has met hardware. Every workload in the registry has an implementation (26 of 26); a name absent from `pantheon_neuron.IMPLEMENTED` raises `NotImplementedError` on hardware rather than reporting a silent PASS. See the README for which kernels have actually run on a device.
 
-| Workload | Suite | Unit | Score | Measured | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
+| Workload | Suite | Unit | Score | Probe read | inf2.xl | inf2.24xl | trn1.2xl | trn1.32xl |
 |---|---|---|---|--:|:--:|:--:|:--:|:--:|
 | `baseline_metrics` | baseline | — | — | — | ✅ | ✅ | ✅ | ✅ |
 | `tensor_virus` | core | TFLOPS | monitor | **0.8756** | ✅ | ✅ | ✅ | ✅ |
@@ -20,8 +20,8 @@ Instance columns show whether the capability gate admits the workload —
 | `omni_virus` | core | TFLOPS | monitor | — | ✅ | ✅ | ✅ | ✅ |
 | `memory_read` | memory | GB/s | profile | **56.58** | ✅ | ✅ | ✅ | ✅ |
 | `memory_write` | memory | GB/s | profile | **0.1094** | ✅ | ✅ | ✅ | ✅ |
-| `memory_read_agg` | memory | GB/s | profile | — | ✅ | ✅ | ✅ | ✅ |
-| `memory_write_agg` | memory | GB/s | profile | — | ✅ | ✅ | ✅ | ✅ |
+| `memory_read_agg` | memory | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
+| `memory_write_agg` | memory | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
 | `all_reduce` | interconnect | GB/s | nccom | **50.66** | — | ✅ | — | ✅ |
 | `p2p_thrasher` | interconnect | GB/s | nccom | — | — | ✅ | — | ✅ |
 | `pcie_bandwidth` | interconnect | GB/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
@@ -39,7 +39,7 @@ Instance columns show whether the capability gate admits the workload —
 | `rag_embedding` | ai_auxiliary | embedding-vectors/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
 | `vision_encoder` | ai_auxiliary | image-tiles/s | kernel | — | ✅ | ✅ | ✅ | ✅ |
 
-**Measured** applies each workload's declared formula to the counters actually read during the probe. Only five workloads have one, because only their counters were captured. These are **not Scores** — no kernel ran, and the load was an untuned matmul at 0.0049% MFU rather than the pinned problem each workload declares. A real Score will differ by orders of magnitude.
+**Probe read** applies each workload's declared formula to the counters actually read during the probe. Only five workloads have one, because only their counters were captured. These are **not Scores** — no kernel ran, and the load was an untuned matmul at 0.0049% MFU rather than the pinned problem each workload declares. A real Score will differ by orders of magnitude.
 
 A `—` in an instance column means the capability gate skips it: `all_reduce` and `p2p_thrasher` need 2+ devices for NeuronLink, and `transformer_train_step` needs a Trainium part.
 
@@ -67,9 +67,11 @@ So the fallback is not a rare degradation, it is the only path these Scores have
 
 ## Reserving the core costs a selection
 
-The Neuron runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation, so the workload/profiler split is fixed for a whole run and cannot be renegotiated per workload. `memory_read_agg` and `memory_write_agg` declare `cores: "all"`, and holding a core back from them would report the aggregate of all-but-one core under a name that says otherwise — so their presence turns the reservation off for the entire run.
+The Neuron runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation, so the workload/profiler split is fixed for a whole run and cannot be renegotiated per workload. `memory_read_agg` and `memory_write_agg` declare `cores: "all"`, and holding a core back from them would report the aggregate of all-but-one core under a name that says otherwise. Until 2026-09-11 their presence turned the reservation off for the entire run, so `--test all` and `--test memory` could not reach the profiler for `memory_read` or `memory_write`.
 
-**`--test all` and `--test memory` both select them**, which means neither invocation can reach the profiler for `memory_read` or `memory_write`. The declared source is available only to a selection with no `cores: "all"` workload in it, such as `--test memory_read`. `pantheon_neuron.reservation_cost` derives which workloads are paying and the run names them on the console.
+They now run first, in their own worker processes, and the reservation is made after them (`pantheon_neuron.reservation_point`), so every selection reaches the declared source. The console names where the reservation lands.
+
+**The aggregates themselves never reach neuron-profile, and no longer claim to.** A capture replays the NEFF and needs a NeuronCore of its own; an aggregate gives every core to a worker and each worker holds the one core it can see. They are counted by the kernel — summed bytes over the longest worker's loop — which is what their rows have always reported. The single-core `memory_read` and `memory_write` keep the profiler, and the kernels now skip a capture attempt entirely unless a core was reserved for it.
 
 ## Where the comparison does not hold
 
@@ -107,8 +109,8 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `memory_write` | bytes=4294967296, dtype=bf16, cores=1 |
 | `memory_read_agg` | bytes=8589934592, dtype=bf16, cores=all |
 | `memory_write_agg` | bytes=4294967296, dtype=bf16, cores=all |
-| `all_reduce` | op=all_reduce, bytes_min=1048576, bytes_max=8388608, dtype=fp32 |
-| `p2p_thrasher` | op=sendrecv, bytes=67108864, dtype=fp32 |
+| `all_reduce` | op=all_reduce, bytes_min=1048576, bytes_max=8388608, dtype=fp32, cores=all |
+| `p2p_thrasher` | op=sendrecv, bytes=67108864, dtype=fp32, cores=all |
 | `pcie_bandwidth` | bytes=1073741824, direction=bidirectional |
 | `llm_decode` | hidden=4096, layers=32, batch=1, context=2048, dtype=bf16 |
 | `llm_prefill` | hidden=4096, layers=32, batch=1, prompt=2048, dtype=bf16 |
@@ -135,8 +137,8 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `omni_virus` | `neuroncore_counters.*.effective_flops`<br>`tensor_engine_active_time_percent`<br>`vector_engine_active_time_percent`<br>`scalar_engine_active_time_percent`<br>`gpsimd_engine_active_time_percent` |
 | `memory_read` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
 | `memory_write` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
-| `memory_read_agg` | `hbm_read_bytes`<br>`total_time`<br>`total_active_time` |
-| `memory_write_agg` | `hbm_write_bytes`<br>`total_time`<br>`total_active_time` |
+| `memory_read_agg` | `bytes_requested`<br>`elapsed_s` |
+| `memory_write_agg` | `bytes_written`<br>`elapsed_s` |
 | `all_reduce` | `busbw` |
 | `p2p_thrasher` | `busbw` |
 | `pcie_bandwidth` | `bytes_transferred`<br>`elapsed_s` |
@@ -178,6 +180,6 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `tlb_avalanche` | No exposed TLB behaviour to target. |
 | `voltage` | No equivalent voltage-rail control exposed by the Neuron driver. |
 
-## Measured values
+## What the probe read
 
 `data/baselines.json` records what each counter actually read during the probes. **Those are observations, not benchmark results** — the probe load was an untuned matmul at 0.0049% MFU. They prove each counter is readable and catch plumbing regressions; they are not Inferentia2's throughput.

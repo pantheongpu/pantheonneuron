@@ -56,7 +56,12 @@ part with 2+ devices, and this account's Trn quota is 64 vCPU against the
 128 the smallest such shape needs.
 
 The last full passes were **23 PASS, 0 FAIL** on trn1.2xlarge, 2026-09-08
-and 2026-09-10.
+and 2026-09-10, and **24 PASS, 0 FAIL** (all but the two two-device
+workloads) five times on 2026-09-11, the last at every change described
+below. inf2.xlarge had its first full pass the same day: **23 PASS,
+0 FAIL**, with three skips (the two two-device workloads and the training
+step, which Inferentia has no capability for). Every one is recorded in
+`data/hardware_runs.json` with the log that proves it.
 
 **Scores from a declared hardware source: 7 or 8 of 23**, and which it is
 varies between runs of the same code. That is not a rounding detail — it is
@@ -93,7 +98,8 @@ decimals.
 **`tensor_virus` was a floor, not this part's capability, until
 2026-09-10.** A `torch.matmul` at the same shape reached 2.53× it. The
 coalesced tiling, now the default, closes that: 70.42 TFLOPS against
-`torch.matmul`'s 66.25 in one session, and 71.80 by `neuron-monitor`. The
+`torch.matmul`'s 66.25 in one session, and 71.80 by `neuron-monitor` —
+**78.50** since 2026-09-11, when its coalesce factor went from 4 to 8. The
 `tensor_virus`, `int_virus` and `pulse_virus` rows below are at the new
 default; older reports ran `streaming` and are ~2.7× lower. See
 [the headline TFLOPS figure is the kernel, not the
@@ -103,12 +109,12 @@ part](#the-headline-tflops-figure-is-the-kernel-not-the-part).
 |---|---|--:|---|
 | `baseline_metrics` | ✅ telemetry only, no load | — | — |
 | `memory_read` | ✅ scored from its declared source | 272.94 GB/s | `neuron-profile` |
-| `memory_write` | ✅ scored from its declared source, 4 GiB pin | 254.31 GB/s | `neuron-profile` |
-| `memory_read_agg` | ✅ 98% worker overlap confirmed | 541.49 GB/s | workload |
-| `memory_write_agg` | ✅ 98% worker overlap confirmed | 506.39 GB/s | workload |
-| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling | 72.46 TFLOPS | `neuron-monitor` |
-| `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 77.59 TOPS | `neuron-monitor` |
-| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 36.17 TFLOPS | `neuron-monitor` |
+| `memory_write` | ✅ scored from its declared source, 4 GiB pin, 8192-wide stores | 274.53 GB/s | `neuron-profile` |
+| `memory_read_agg` | ✅ loops start together (barrier), 100% overlap | 542.13 GB/s | workload |
+| `memory_write_agg` | ✅ loops start together (barrier), 8192-wide stores | 537.46 GB/s | workload |
+| `tensor_virus` | ✅ at the pinned 8192³, coalesced tiling, 8 accumulators | 78.50 TFLOPS | `neuron-monitor` |
+| `int_virus` | ✅ at the pinned 8192³, uint8, coalesced tiling | 78.84 TOPS | `neuron-monitor` |
+| `pulse_virus` | ✅ at the pinned 8192³, 50% duty, coalesced tiling | 39.97 TFLOPS | `neuron-monitor` |
 | `omni_virus` | ✅ at the pinned 8192³ | 54.12 TFLOPS | `neuron-monitor` |
 | `transformer_virus` | ✅ realistic instruction mix | 53.18 TFLOPS | `neuron-monitor` |
 | `graph_replay` | ✅ per-period completion tallies, cv 0.006 | 3,038.8 graph-steps/s | `neuron-monitor` |
@@ -143,9 +149,22 @@ pinned response is an open decision.
 
 `all_reduce` and `p2p_thrasher` need two or more devices. `trn1.32xlarge` is
 the smallest instance with device-to-device NeuronLink and needs 128 vCPUs
-against a granted 64, so they are written against the documented
-`nccom-test` output rather than against observed output, and their tests are
-the only thing behind them until that quota lands.
+against a granted 64, so no NeuronLink figure exists and none is recorded.
+
+**Their command line had never run, and could not have.** Until 2026-09-11
+the kernel passed the operation as `-c all_reduce`; `-c` is nccom-test's
+`--check {random,all_ones}`, so argparse rejected it and both collectives
+would have exited 2 on the first multi-device part they met. It also passed
+one rank per *device*, where a rank is a NeuronCore: two devices would have
+run both ranks on device 0, a core-to-core figure under a NeuronLink name.
+The invocation is now the one the 2026-08-26 probe ran, and it has met
+hardware on the one-device path it can reach: on inf2.xlarge 2026-09-11 the
+module's own call returned 61.22 GB/s all_reduce busbw over a fully parsed
+1-8 MiB sweep and 66.09 GB/s sendrecv at 64 MiB, both between the two cores
+of one chip (`data/validation-2026-09-11/inf2-nccom-invocation.log`). Both
+now also claim every core (`cores: "all"`), so they run before this process's
+runtime holds any. Which rank pairs sendrecv forms across devices is still
+unobserved.
 
 ### What the 2026-09-08 findings were resolved into
 
@@ -580,7 +599,7 @@ python pantheon_neuron.py --test interconnect --duration 120 --device 0,1
 ```
 
 Key flags: `--test` (workload name, suite, or `all`), `--duration` (seconds per
-workload), `--device` (indices or `all`), `--monitor-period` (telemetry
+workload), `--device` (`all`, or a leading run of indices such as `0,1`), `--monitor-period` (telemetry
 sampling interval), `--mock`, `--no-report`.
 
 ### The first clean run: 23 of 23, and eight fixes confirmed
@@ -880,10 +899,10 @@ how many chips an instance carries.
 |---|--:|--:|--:|
 | `memory_read` | 272.9 GB/s | 1 of 2 | **62.0%** |
 | `memory_read_agg` | 541.5 GB/s | 2 of 2 | 61.5% |
-| `memory_write` | 254.3 GB/s | 1 of 2 | 57.8% |
-| `memory_write_agg` | 506.4 GB/s | 2 of 2 | 57.5% |
-| `tensor_virus` | 72.46 TFLOPS | 1 of 2 | **76.3%** |
-| `pulse_virus` | 36.17 TFLOPS | 1 of 2, 50% duty | **76.2%** |
+| `memory_write` | 274.5 GB/s | 1 of 2 | 62.4% |
+| `memory_write_agg` | 537.5 GB/s | 2 of 2 | 61.0% |
+| `pulse_virus` | 39.97 TFLOPS | 1 of 2, 50% duty | **84.1%** |
+| `tensor_virus` | 78.50 TFLOPS | 1 of 2 | **82.6%** |
 | `torch.matmul` (not a workload) | 66.3 TFLOPS | 1 of 2 | 69.8% |
 | `omni_virus` | 54.12 TFLOPS | 1 of 2 | 57.0% |
 | `transformer_virus` | 53.2 TFLOPS | 1 of 2 | 56.0% |
@@ -939,12 +958,14 @@ the compute engines near idle and counting cores by arithmetic activity
 would call a saturated memory path unused.
 
 It also separates the two kinds of gap. The bandwidth kernels reach
-51–62% of HBM — ordinary for a streaming benchmark, and a figure worth
-comparing across vendors. `tensor_virus` reached 27.5% under the
+61–62.6% of HBM — ordinary for a streaming benchmark, and a figure worth
+comparing across vendors. (51–62% before 2026-09-11, when the profiler's
+idle startup stopped counting as transfer time and `memory_write`'s
+stores went 8192 wide.) `tensor_virus` reached 27.5% under the
 `streaming` tiling, which was a statement about the kernel: a plain
 `torch.matmul` on the same core reaches 69.8%. Coalescing its lhs loads
-took it to 75.6% — past the compiler's matmul — and nothing about the
-silicon changed in between.
+took it to 75.6% — past the compiler's matmul — and eight accumulators
+to 82.6%, and nothing about the silicon changed in between.
 
 **A Score above 105% of its ceiling now fails the row.** A planted defect
 in the coalesced kernel posted 186.8 TFLOPS on one 95 TFLOPS core: the
@@ -990,7 +1011,8 @@ product checked:
 | `torch.matmul` | 66.25 | — |
 
 `neuron-monitor`, the declared Score source, reads **71.80** (median of
-three, cv 0.035).
+three, cv 0.035). With the monitor mean over whole sampling periods and
+the coalesce factor at 8, both 2026-09-11, it reads **78.50** (cv 0.0023).
 
 What caused it was measured, not guessed. Coalescing changes the load
 width and gives each lhs load four independent accumulators, so a
@@ -1119,28 +1141,28 @@ median of unlike numbers is not a measurement.
 A failure in any repeat fails the row. A workload that works four times in
 five is not a workload that works.
 
-### What `--test all` cannot measure
+### What `--test all` could not measure, until 2026-09-11
 
 The profiler needs a NeuronCore of its own to replay a NEFF, and the Neuron
 runtime reads `NEURON_RT_VISIBLE_CORES` once at initialisation — so the split
-between workload and profiler is fixed for a whole run and cannot be
-renegotiated per workload.
+between workload and profiler is fixed once a runtime starts in the
+orchestrator's process.
 
-`memory_read_agg` and `memory_write_agg` declare `cores: "all"`. Holding a
-core back from them would report the aggregate of all-but-one core under a
-name that says otherwise, so their presence in a selection turns the
-reservation off for the entire run. **`--test all` and `--test memory` both
-select them**, which means `memory_read` and `memory_write` report the
-analytic fallback rather than the `neuron-profile` Score they declare.
+`memory_read_agg` and `memory_write_agg` declare `cores: "all"`, and holding
+a core back from them would report the aggregate of all-but-one core under a
+name that says otherwise. Until 2026-09-11 their presence in a selection
+turned the reservation off for the entire run, so **`--test all` and
+`--test memory` published `memory_read` and `memory_write` from the
+analytic fallback** rather than the `neuron-profile` Score they declare.
 
-To reach the declared source, run them in a selection with no `cores: "all"`
-workload in it:
+That constraint no longer holds. The aggregates now run first, in their own
+worker processes, before anything in the orchestrator starts a runtime; the
+reservation is made after them (`reservation_point`). Measured on
+trn1.2xlarge with `--test memory --duration 30`: both aggregates pass at
+542.6 and 537.5 GB/s, the reservation lands, and `memory_read` (273.09) and
+`memory_write` (274.93) report `neuron-profile`.
 
-```bash
-python pantheon_neuron.py --test memory_read --duration 60
-```
-
-The run says which it did — the console names the workloads that are paying,
+The run says which it did — the console names where the reservation lands,
 and each row's `Score Method` records the method actually used.
 
 **The aggregates themselves run first.** The Neuron runtime in the

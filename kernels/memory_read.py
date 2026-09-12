@@ -27,9 +27,10 @@ needed compile-cache isolation, because timestamp narrowing alone selected
 the wrong graph and verify_profile_covers_plan correctly refused it
 (*profiled graph moved 4 bytes against a plan of 8589934592*).
 
-The reservation is not free: it is off for any selection containing a
-`cores: "all"` workload, which includes --test all and --test memory. See
-docs/workload_counter_map.md.
+The reservation used to be off for any selection containing a
+`cores: "all"` workload, which included --test all and --test memory.
+Since 2026-09-11 it is made after those aggregates run, so a full pass
+reaches the profiler too (pantheon_neuron.reservation_point).
 
 **What sets the rate, measured rather than assumed** (trn1.2xlarge
 2026-09-10, 2 GiB bf16, one core, each variant in its own process, every
@@ -49,6 +50,13 @@ product exact):
   neuron-profile), so the DMA side is close to saturated. The two-core
   aggregate reads exactly 2x (541 GB/s), which also points at a per-core
   limit on the DMA side, not at HBM.
+- **The loads sit at a per-core DMA ceiling, not at HBM.** Reads reach
+  ~273 and 8192-wide writes ~275 GB/s on one core; a read-and-write copy
+  on one core moves ~207 combined (kv_cache_churn); two cores sum to
+  exactly 2x (542 of the chip's 880). And more DMA concurrency does not
+  lift it -- trn1.2xlarge 2026-09-11, 2 GiB: two independent loads per
+  iteration 268.8, one 16384-wide load 271.1, against 269.5 for this
+  kernel. Whatever the ceiling is, it is per core and it is not issue rate.
 - **The kernel is not a floor.** The compiler's own reduction over the
   same bytes is 1.55x slower. That is the opposite of tensor_virus, where
   torch.matmul was 2.53x the hand-written kernel.
@@ -115,7 +123,8 @@ def _build_kernel():
     return nki, nl, memory_read_kernel
 
 
-def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
+def run(problem: typing.Mapping[str, typing.Any], duration: int,
+        before_loop: typing.Optional[typing.Callable[[], None]] = None) -> dict:
     """Execute the streaming read and return timing plus byte accounting.
 
     Returns the raw material for a Score; it does not compute the Score
@@ -123,20 +132,21 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     ``hbm_read_bytes``, and the caller is responsible for reading it.
     """
     nki_backend.require_toolchain()
+    workdir = cores.kernel_workdir("memory_read")
+    # Compile into the directory the profiler will search, and only while
+    # this kernel runs; see cores.compile_cache.
+    with cores.compile_cache(workdir):
+        return _run(problem, duration, before_loop, workdir)
 
+
+def _run(problem: typing.Mapping[str, typing.Any], duration: int,
+         before_loop: typing.Optional[typing.Callable[[], None]],
+         workdir: str) -> dict:
     import torch  # type: ignore
     import torch_xla.core.xla_model as xm  # type: ignore
 
     plan = tile_plan(int(problem["bytes"]), str(problem["dtype"]))
     _, _nl, kernel = _build_kernel()
-
-    # torch_neuronx deletes its compiler workdir unless told otherwise, and
-    # neuron-profile capture needs the NEFF that lives there.
-    workdir = os.environ.get("PANTHEON_NEURON_WORKDIR", "/tmp/pantheon_ccwork")
-    os.makedirs(workdir, exist_ok=True)
-    # Compile into the same directory the profiler will search, so it holds
-    # this run's graphs and nothing else. See kernels/cores.py.
-    os.environ.setdefault(cores.COMPILE_CACHE, workdir)
 
     device = xm.xla_device()
     torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,
@@ -194,6 +204,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # counted thousands of submissions; the device ran the graph once.
     sink = None
     passes = 0
+    # memory_agg's start barrier: every worker compiled and warmed up, then
+    # released together, so the aggregate's loops coincide.
+    if before_loop is not None:
+        before_loop()
+    # Wall-clock brackets of the timed loop itself, comparable across
+    # processes. The aggregate placed each loop by subtracting elapsed_s
+    # from when run() *returned* -- but run() goes on after the loop (read
+    # back, a profiler attempt), for a time that differs per worker.
+    loop_started_at = time.time()
     started = time.perf_counter()
     deadline = started + duration
     while time.perf_counter() < deadline:
@@ -202,6 +221,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
+    loop_finished_at = time.time()
 
     # One pass reduces an all-ones buffer along the free axis, so every
     # partition of the accumulator must equal tiles * FREE_ELEMENTS exactly.
@@ -225,6 +245,8 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     result = {
         "passes": passes,
         "elapsed_s": elapsed,
+        "loop_started_at": loop_started_at,
+        "loop_finished_at": loop_finished_at,
         "bytes_requested": bytes_requested,
         "analytic_gbps": analytic,
         "profiler_gbps": None,
@@ -239,6 +261,23 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     elided = verify_read_completed(read_verified)
     if elided:
         result["warning"] = elided
+        return result
+
+    # neuron-profile replays the NEFF, so it needs a NeuronCore of its own,
+    # and it only has one when the orchestrator reserved it (RESERVED_CORE,
+    # which profiler._environment pins the capture to). Without that, this
+    # process holds every core it can see and the capture cannot succeed --
+    # which is the aggregates' case by construction: each worker is given
+    # exactly one core and holds it. Attempting anyway spent a subprocess
+    # per candidate to arrive at "Logical Neuron Core(s) not available" and
+    # put that in every worker's warning.
+    if not os.environ.get(cores.RESERVED_CORE):
+        result["warning"] = (
+            "no core was reserved for neuron-profile, so the Score is the "
+            "analytic figure; run a selection that leaves the profiler a "
+            f"core, or set {cores.RESERVED_CORE} to one this process does "
+            "not hold"
+        )
         return result
 
     # The declared Score source. A failure here degrades to the analytic

@@ -424,27 +424,19 @@ def test_a_missing_counter_sample_count_is_not_thinness():
     assert pantheon_neuron.thin_monitor_sample({}, _graph_replay()) is None
 
 
-def test_the_thinness_advice_does_not_recommend_a_shorter_period():
-    """It did, and the shorter period does not deliver.
-
-    Measured on trn1.2xlarge 2026-09-10 over a 20-second window:
-    requesting 0.2s gave one sample every 1.82s, 1.0s gave one every
-    4.00s, and 5.0s also gave one every 4.00s. neuron-monitor floors
-    around two seconds and does not honour a request at or below one, so
-    "run with a shorter --monitor-period" was advice that cannot work.
-
-    Running longer does work, and is what both messages now say.
-    """
+def test_the_thinness_advice_is_run_longer_and_blames_nothing_false():
+    """It said neuron-monitor "floors around 2s whatever --monitor-period
+    asks for". That was a malformed period string ("1.0s", ignored in
+    favour of the 5 s default), not the tool -- "1s" delivers 1 s periods
+    (inf2.xlarge 2026-09-11)."""
     flops = pantheon_neuron.thin_monitor_sample(
         {"effective_flops": {"0": {"samples": 1, "mean": 1.0}}})
     counter = pantheon_neuron.thin_monitor_sample(
         {"execution_samples_used": 1}, _graph_replay())
-
     for message in (flops, counter):
         assert message is not None
         assert "run longer" in message
-        assert "shorter --monitor-period" not in message
-    assert "floors around 2s" in flops
+        assert "floors around" not in message
 
 
 def test_the_span_overhang_is_only_reported_for_a_rate():
@@ -459,7 +451,7 @@ def test_the_span_overhang_is_only_reported_for_a_rate():
     Same defect as thin_monitor_sample two commits earlier, gated the
     same way: a row must describe the counter it publishes.
     """
-    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_started)
     marker = code.index("span_outran_the_kernel")
     preceding = code[:marker]
     assert "_wants_execution_rate ( workload )" in preceding, (
@@ -485,3 +477,81 @@ def test_the_rate_threshold_rests_on_the_measured_periods():
     assert pantheon_neuron.MIN_RATE_PERIODS == 2
     assert pantheon_neuron.thin_monitor_sample(
         {"execution_samples_used": 2}, _graph_replay()) is None
+
+
+# -- a pulsed workload is sampled over whole cycles ------------------------
+
+def _pulse():
+
+    return next(w for w in registry.WORKLOADS if w.name == "pulse_virus")
+
+
+def test_a_pulsed_workload_is_sampled_over_whole_cycles():
+    """At 1 s a sample covers half of pulse_virus's 2 s cycle, and one that
+    falls inside an idle half reads zero and splits the busy block."""
+    assert pantheon_neuron.monitor_period_for(_pulse(), 1.0) == 2.0
+
+
+def test_the_whole_cycle_period_is_at_least_the_request():
+    assert pantheon_neuron.monitor_period_for(_pulse(), 2.0) == 2.0
+    assert pantheon_neuron.monitor_period_for(_pulse(), 3.0) == 4.0
+    assert pantheon_neuron.monitor_period_for(_pulse(), 5.0) == 6.0
+
+
+def test_a_steady_workload_keeps_the_request():
+
+    steady = next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+    assert pantheon_neuron.monitor_period_for(steady, 1.0) == 1.0
+
+
+def test_every_pinned_pulse_period_is_whole_seconds():
+    """neuron-monitor takes whole seconds; a fractional pulse would get no
+    whole-cycle period and fall back to half-cycle samples."""
+
+    for workload in registry.WORKLOADS:
+        pulse = (workload.problem or {}).get("period_s")
+        if pulse is not None:
+            assert pulse == int(pulse), workload.name
+
+
+# -- the figure the declared Score replaced ---------------------------------
+
+def _row_with_monitor_score(monkeypatch, kernel_figure, monitor_flops):
+    """Run one workload whose kernel counted `kernel_figure` while the
+    monitor reports `monitor_flops`, and return the row."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: kernel_figure)
+    monkeypatch.setattr(
+        pantheon_neuron.neuron_monitor.NeuronMonitor, "stop",
+        lambda self: {"samples": 4, "effective_flops": {
+            "0": {"samples": 3, "mean": monitor_flops}}})
+    workload = next(w for w in registry.WORKLOADS if w.name == "tensor_virus")
+    row = pantheon_neuron.run_workload(workload, TRN1, 0.02, 0.01)
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+    return row
+
+
+def test_the_row_keeps_the_figure_the_monitor_replaced(monkeypatch):
+    """The pair is the second quantity for a monitor Score. Reading it
+    across a pass is what showed pulse_virus was sampled wrong -- 0.963
+    where every other compute row sat within 0.2% of its kernel, and
+    0.963 is far below the 1.5x that warns."""
+    row = _row_with_monitor_score(monkeypatch, 40.0, 38.0e12)
+    assert row["Score"] == 38.0
+    assert row["Measurement"]["kernel_figure"] == 40.0
+    assert row["Measurement"]["declared_over_kernel"] == 0.95
+
+
+def test_agreement_is_recorded_too_not_just_disagreement(monkeypatch):
+    row = _row_with_monitor_score(monkeypatch, 77.74, 77.59e12)
+    assert row["Measurement"]["declared_over_kernel"] == 0.9981
+    assert not row["Detail"], "agreement is recorded, not complained about"
+
+
+def test_a_kernel_with_no_figure_of_its_own_records_no_ratio(monkeypatch):
+    """A workload whose _execute returns None has nothing to divide -- and
+    must not inherit the ratio of the run before it, which _LAST_RUN keeps
+    until a kernel replaces it."""
+    row = _row_with_monitor_score(monkeypatch, None, 50.0e12)
+    assert row["Score"] == 50.0
+    assert "declared_over_kernel" not in (row["Measurement"] or {})

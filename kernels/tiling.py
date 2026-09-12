@@ -104,8 +104,9 @@ def refusal(dtype: str, path: str = "xla") -> typing.Optional[str]:
     return OPERAND_REFUSALS.get((path, dtype))
 
 
-def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
-    """Split a requested byte count into whole tiles.
+def tile_plan(total_bytes: int, dtype: str,
+              free: int = FREE_ELEMENTS) -> typing.Dict[str, int]:
+    """Split a requested byte count into whole tiles ``free`` elements wide.
 
     ``actual_bytes`` is what the kernel will really move: the request
     rounded *down* to a whole number of tiles. A Score must be computed
@@ -115,7 +116,7 @@ def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
     if dtype not in DTYPE_BYTES:
         raise ValueError(f"unsupported dtype {dtype!r}")
     element = DTYPE_BYTES[dtype]
-    tile_bytes = PARTITION * FREE_ELEMENTS * element
+    tile_bytes = PARTITION * free * element
 
     tiles = total_bytes // tile_bytes
     if tiles < 1:
@@ -128,7 +129,7 @@ def tile_plan(total_bytes: int, dtype: str) -> typing.Dict[str, int]:
         "tile_bytes": tile_bytes,
         "actual_bytes": tiles * tile_bytes,
         "partition": PARTITION,
-        "free": FREE_ELEMENTS,
+        "free": free,
         "element_bytes": element,
     }
 

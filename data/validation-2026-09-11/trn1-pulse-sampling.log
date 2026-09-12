@@ -1,0 +1,58 @@
+pulse_virus under neuron-monitor at 1 s and 2 s periods -- trn1.2xlarge 2026-09-11.
+
+pulse_virus loads for half of each 2 s cycle (measured cycle ~2.07 s). Once the
+monitor period was honoured at 1 s, each sample covered half a cycle. Printed below:
+every period's effective_flops for core 0, through the harness (pulse_probe.py
+wraps neuron_monitor.whole_period_flops), then the row.
+
+Kernel's own figure for comparison (flops_issued / the 30 s window):
+  1 s run: 40.02 TFLOPS  -> monitor Score 38.76, -3.2%
+  2 s run: 40.61 TFLOPS  -> monitor Score 40.60, -0.03%
+  (the full pass on 1 s periods: kernel 40.68, monitor 39.19, -3.7%)
+
+At 1 s the readings beat against the pulse (14 to 68 TFLOPS) and the Score sits
+3-4% under the kernel; a period falling wholly inside an idle half would read 0
+and end the busy block. At 2 s every whole period reads 40.67-40.69.
+pantheon_neuron.monitor_period_for now asks for whole pulse cycles.
+
+    === pulse_virus, --monitor-period 1
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> pulse_virus
+      flops per period (TFLOPS): [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 68.13, 14.31, 52.74, 16.49, 61.61, 19.78, 58.26, 23.1, 54.98, 26.39, 52.8, 28.57, 49.46, 31.89, 47.3, 34.1, 43.97, 37.37, 40.68, 40.69, 38.48, 42.89, 35.16, 46.21, 31.89, 49.46, 28.58, 52.8, 25.27, 48.39]
+      -> {'peak': 68.13, 'samples_all': 30, 'mean_all_samples': 40.06, 'samples': 28, 'mean': 38.76}
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    81.6% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_203500.json
+      Score 38.7583 TFLOPS (81.6% of {'peak': 47.5, 'peak_field': 'bf16_tflops', 'peak_source': 'AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS', 'peak_verified': True, 'cores_used': 1, 'cores_available': 2, 'duty_cycle': 0.5}), method neuron-monitor, sample_period_s 1.0
+      Detail: 
+    === pulse_virus, --monitor-period 2
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> pulse_virus
+      flops per period (TFLOPS): [0.0, 0.0, 0.0, 41.23, 39.58, 40.68, 40.68, 40.69, 40.69, 40.67, 40.69, 40.68, 40.68, 40.67, 40.69, 40.68, 40.67, 40.69]
+      -> {'peak': 41.23, 'samples_all': 15, 'mean_all_samples': 40.64, 'samples': 13, 'mean': 40.6}
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    85.47% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_203542.json
+      Score 40.5968 TFLOPS (85.47% of {'peak': 47.5, 'peak_field': 'bf16_tflops', 'peak_source': 'AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS', 'peak_verified': True, 'cores_used': 1, 'cores_available': 2, 'duty_cycle': 0.5}), method neuron-monitor, sample_period_s 2.0
+      Detail: 
+
+Through the harness after the fix, --test pulse_virus --duration 30 at the default --monitor-period 1:
+the row reports sample_period_s 2.0, i.e. monitor_period_for asked for one whole cycle.
+
+    === --test pulse_virus --duration 30
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> pulse_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    82.53% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_211805.json
+      pulse_virus: PASS Score=39.2022 method=neuron-monitor repeats=None period=2.0
+    whole periods 13 of 15, mean 39.202, all-sample mean 38.372, highest period 39.59 TFLOPS
+    kernel over the 30 s window: 39.802 TFLOPS (observed duty 0.5183) -> monitor -1.5%
+
+Why -1.5% here and -0.03% in the probe: the measured cycle is ~2.07 s, not 2, so a 2 s
+window slides against the pulse and its loaded fraction drifts with phase. Over 13 periods
+the phase moves under half a cycle, so the bias does not average out fully. It is bounded
+and never produces a zero; at 1 s the same run shape read 3-4% low with periods from 14 to 68.

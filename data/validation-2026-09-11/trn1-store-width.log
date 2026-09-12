@@ -1,0 +1,23 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. Does store width set memory_write's rate?
+# Probe: memory_write's kernel at three store widths, 2 GiB destination, 20 s, each its own
+# process on core 0; destination's last element read back; profiles on core 1.
+# PREDICTED: like loads -> 8192 ~= 2048, 512 slower. Measured: 8192 is 7% faster.
+
+free  2048  stores/pass   4096    255.1 GB/s  last element 1.0  (2378 passes)
+free  8192  stores/pass   1024    272.6 GB/s  last element 1.0  (2541 passes)
+free   512  stores/pass  16384     69.4 GB/s  last element 1.0  (649 passes)
+free  2048  profile:   254.1 GB/s over active  dma 0.8022519075359439  active 8.452 ms
+free  8192  profile:   274.4 GB/s over active  dma 0.7899213782725011  active 7.826 ms
+free   512  profile:   229.0 GB/s over active  dma 0.27603455572027075  active 9.377 ms
+
+
+## Harness after STORE_FREE_ELEMENTS = 8192
+memory_write --duration 20 --repeat 3:
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    62.36% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON]    3 repeats: 274.4062 to 274.8805, median 274.5312, cv 0.0009
+   Score 274.5312 neuron-profile | Detail: ''
+    {'analytic_gbps': 276.34560047229786, 'profiler_time_basis': 'total_active_time', 'profiler_startup_s': 0.002076163, 'hbm_write_bytes': 4294967296}
+memory_write_agg --duration 30:
+memory_write_agg: PASS Score 537.4569 | Detail ''
+   barrier_all_ready True, concurrent_window_s 30.03757357597351, worker_span_s 30.03921338300006

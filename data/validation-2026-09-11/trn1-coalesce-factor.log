@@ -1,0 +1,24 @@
+# trn1.2xlarge (us-east-1), 2026-09-11 UTC. tensor_virus's coalesced tiling: how many
+# accumulators, and how wide the moving tile? coalesce_sweep.sh: each variant a copy of the
+# tree with COALESCE_ROWS and MOVING patched (the bracket shows the patched lines), its own
+# compile cache, run() for 20 s at 8192^3 bf16, every row-tile of the product checked
+# (ROW_CHECK_PERIOD 7 at the time -- see the note at the end).
+# PREDICTED: if lhs load width still limits, 8 > 4 > 2; a full PSUM (B) might stall instead.
+
+A [MOVING = 512                        # N per matmul call COALESCE_ROWS = 4 ]  71.72 TFLOPS  row-tiles wrong 0/64  warning None
+B [MOVING = 512                        # N per matmul call COALESCE_ROWS = 8 ]  78.15 TFLOPS  row-tiles wrong 0/64  warning None
+C [MOVING = 512                        # N per matmul call COALESCE_ROWS = 2 ]  51.80 TFLOPS  row-tiles wrong 0/64  warning None
+D [MOVING = 256                        # N per matmul call COALESCE_ROWS = 8 ]  61.86 TFLOPS  row-tiles wrong 0/64  warning None
+E [MOVING = 128                        # N per matmul call COALESCE_ROWS = 16 ]  30.73 TFLOPS  row-tiles wrong 0/64  warning None
+
+## Harness at COALESCE_ROWS = 8, ROW_CHECK_PERIOD = 13
+COALESCE_ROWS = 8
+ROW_CHECK_PERIOD = 13
+tensor_virus: PASS Score 78.5048 TFLOPS [neuron-monitor] cv 0.0023 | pct 82.64 | Detail ''
+int_virus: PASS Score 78.836 TOPS [neuron-monitor] cv None | pct None | Detail ''
+pulse_virus: PASS Score 39.9664 TFLOPS [neuron-monitor] cv None | pct 84.14 | Detail ''
+
+
+# Note: raising COALESCE_ROWS to 8 left the 7-period row check unable to tell a block's first
+# and eighth tiles apart (all 64 blocks of 8 had a repeated scale). The sweep's '0/64 wrong'
+# at factor 8 was therefore a slightly weaker check; the harness rows above use period 13.

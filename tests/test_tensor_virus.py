@@ -631,15 +631,30 @@ def test_the_lhs_load_width_grows_by_the_coalesce_factor():
     assert coalesced == 256 * tensor_virus.COALESCE_ROWS
 
 
-def test_the_accumulator_fits_in_half_of_psum():
+def test_the_accumulator_fits_in_psum():
     """COALESCE_ROWS fp32 tiles of MOVING columns, against NeuronCore-v2's
-    16 KiB of PSUM per partition. Half leaves the compiler room to
-    double-buffer; a full PSUM would not."""
+    16 KiB of PSUM per partition. This asserted *half*, on reasoning about
+    double-buffering; filling it measured 78.15 TFLOPS against 71.72 at
+    half (trn1.2xlarge 2026-09-11). Over 16 KiB would not compile."""
     per_partition = tensor_virus.COALESCE_ROWS * tensor_virus.MOVING * 4
-    assert per_partition <= 16 * 1024 // 2, per_partition
+    assert per_partition <= 16 * 1024, per_partition
 
 
-@pytest.mark.parametrize("m", [4096, 8192, 512])
+def test_the_coalesce_factor_is_the_fastest_one_measured():
+    measured = {(2, 512): 51.80, (4, 512): 71.72, (8, 512): 78.15,
+                (8, 256): 61.86, (16, 128): 30.73}
+    best = max(measured, key=measured.get)
+    assert (tensor_virus.COALESCE_ROWS, tensor_virus.MOVING) == best
+
+
+def test_a_shape_that_no_longer_divides_is_refused_before_compiling():
+    """M = 512 divided into 4-tile blocks; it does not divide into 8."""
+    plan = tensor_virus.gemm_plan([512, 4096, 4096], "bf16")
+    with pytest.raises(ValueError):
+        tensor_virus.validate_tiling(plan, "coalesced")
+
+
+@pytest.mark.parametrize("m", [4096, 8192, 1024])
 def test_shapes_that_divide_are_accepted(m):
     plan = tensor_virus.gemm_plan([m, 4096, 4096], "bf16")
     tensor_virus.validate_tiling(plan, "coalesced")
@@ -698,10 +713,14 @@ def test_the_planted_first_accumulator_defect_is_caught():
     each block hold tile 0's value. On trn1.2xlarge this left 24 of 32
     tiles wrong at 4096^3.
     """
-    rows = tensor_virus.COALESCE_ROWS
+    rows = 4  # COALESCE_ROWS when the defect was planted on hardware
     out = _output(32, k=4096, store=lambda t: t - (t % rows))
     wrong = tensor_virus.rows_in_wrong_place(out, 4096, tile=4)
     assert len(wrong) == 32 - 32 // rows == 24
+    # At today's factor the same defect would leave even more wrong.
+    rows = tensor_virus.COALESCE_ROWS
+    out = _output(32, k=4096, store=lambda t: t - (t % rows))
+    assert len(tensor_virus.rows_in_wrong_place(out, 4096, tile=4)) == 32 - 32 // rows
 
 
 def test_the_all_ones_check_cannot_see_the_same_defect():
@@ -718,6 +737,17 @@ def test_the_all_ones_check_cannot_see_the_same_defect():
 def test_a_permutation_is_caught_too():
     out = _output(8, k=4096, store=lambda t: (t + 1) % 8)
     assert tensor_virus.rows_in_wrong_place(out, 4096, tile=4)
+
+
+def test_no_two_tiles_of_one_coalesced_block_share_a_scale():
+    """Or a swap inside the block -- exactly what coalescing could get
+    wrong -- is invisible. With a period of 7 and blocks of 8, tiles 0 and
+    7 of every block matched."""
+    rows = tensor_virus.COALESCE_ROWS
+    for base in range(0, 64 * rows, rows):
+        scales = [tensor_virus.row_tile_scale(base + i) for i in range(rows)]
+        assert len(set(scales)) == rows, (base, scales)
+    assert tensor_virus.ROW_CHECK_PERIOD > tensor_virus.COALESCE_ROWS
 
 
 def test_adjacent_tiles_never_share_a_scale():

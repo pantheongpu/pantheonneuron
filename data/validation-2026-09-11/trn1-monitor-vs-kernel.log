@@ -1,0 +1,114 @@
+Full pass, trn1.2xlarge 2026-09-11 at 5c3d36e (both execution-rate fixes): --test all --duration 30
+
+24 PASS (baseline_metrics included), 0 FAIL, 2 SKIPPED.
+
+    [PANTHEON-NEURON] 1 device(s) [trn1], 26 workload(s)
+    [PANTHEON-NEURON] -> baseline_metrics
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.59% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    60.93% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> all_reduce
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> p2p_thrasher
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    82.79% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> int_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> pulse_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    85.65% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> transformer_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    56.05% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> omni_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    56.87% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.03% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.28% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> pcie_bandwidth
+    [PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.8 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s u
+    [PANTHEON-NEURON] -> llm_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> llm_prefill
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> kv_cache_churn
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> fused_attention
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> quantized_gemm
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> serving_mix
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> speculative_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> moe_router
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> transformer_train_step
+    [PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimis
+    [PANTHEON-NEURON] -> allocation_fragmentation
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> graph_replay
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> rag_embedding
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> vision_encoder
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260911_223640.json
+
+Rows from the report:
+
+    workload                 status          score unit                   method          detail
+    baseline_metrics         PASS                                                         
+    memory_read_agg          PASS         542.3307 GB/s                   workload        
+    memory_write_agg         PASS         536.4807 GB/s                   workload        
+    all_reduce               SKIPPED               GB/s                                   needs 2 devices, 1 selected
+    p2p_thrasher             SKIPPED               GB/s                                   needs 2 devices, 1 selected
+    tensor_virus             PASS          78.6526 TFLOPS                 neuron-monitor  
+    int_virus                PASS          78.8242 TOPS                   neuron-monitor  
+    pulse_virus              PASS          40.6827 TFLOPS                 neuron-monitor  
+    transformer_virus        PASS          53.2478 TFLOPS                 neuron-monitor  
+    omni_virus               PASS          54.0276 TFLOPS                 neuron-monitor  
+    memory_read              PASS         273.0974 GB/s                   neuron-profile  
+    memory_write             PASS         274.1949 GB/s                   neuron-profile  
+    pcie_bandwidth           PASS           3.9415 GB/s                   workload        d2h ran at 1.1 GB/s against 6.8 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, whe
+    llm_decode               PASS          17.4824 tokens/s               workload        
+    llm_prefill              PASS        3811.3515 prompt-tokens/s        workload        
+    kv_cache_churn           PASS       97294.9707 cache-updates/s        workload        
+    fused_attention          PASS        6044.2255 attention-tiles/s      workload        
+    quantized_gemm           PASS     18450882213146.656 quantized-ops/s        workload        
+    serving_mix              PASS           2.4774 requests/s             workload        
+    speculative_decode       PASS          73.7266 verified-tokens/s      workload        
+    moe_router               PASS      255017.3215 routed-tokens/s        workload        
+    transformer_train_step   PASS           3.6448 train-steps/s          workload        the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of 
+    allocation_fragmentation PASS        2242.2027 allocation-events/s    workload        
+    graph_replay             PASS         3011.998 graph-steps/s          neuron-monitor  
+    rag_embedding            PASS         854.5242 embedding-vectors/s    workload        
+    vision_encoder           PASS       58134.5353 image-tiles/s          workload        
+
+Then --test core --duration 20 on the same instance, with the row recording the
+figure the declared Score replaced and the ratio between them:
+
+    workload                Score unit     kernel figure   ratio  period
+    tensor_virus          75.3169 TFLOPS         75.6341  0.9958  1.0
+    int_virus             78.8016 TOPS           78.8365  0.9996  1.0
+    pulse_virus           40.6829 TFLOPS         40.6806  1.0001  2.0
+    transformer_virus     53.2773 TFLOPS         53.2911  0.9997  1.0
+    omni_virus            54.0094 TFLOPS         48.1371   1.122  1.0
+
+Four of the five sit within 0.5% of their kernels. omni_virus reads 1.12 for a
+stated reason: its kernel counts only the two matmuls of its four-engine chain
+("chain stages excluded"), so the monitor sees arithmetic the kernel does not
+count. pulse_virus reads 1.0001 at the 2 s period it now asks for; at 1 s the
+same row read 0.963, which is far below the 1.5x that warns -- the reason the
+pair is now recorded on every monitor-scored row rather than only when extreme.

@@ -529,3 +529,74 @@ def test_the_peak_comes_from_the_median_repeat(monkeypatch):
     assert row["Peak"] == {"peak": 50.0}
     assert row["Percent Of Peak"] == 40.0
     monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+# -- the rest of the row, and every repeat's warnings ------------------------
+
+def test_telemetry_and_duration_come_from_the_median_repeat(monkeypatch):
+    """The row was the last repeat with columns patched to the median one
+    at a time; Telemetry and Duration were never patched, so a row's power
+    and temperature described a run whose Score was discarded."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    runs = iter([(30.0, "third-fastest"), (20.0, "median"), (10.0, "last")])
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"], label = next(runs)
+        row["Telemetry"] = {"from": label}
+        row["Duration"] = label
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+    assert row["Score"] == 20.0
+    assert row["Telemetry"] == {"from": "median"}
+    assert row["Duration"] == "median"
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_a_warning_from_an_earlier_repeat_is_not_dropped(monkeypatch):
+    """Only failures propagated from other repeats. A device shortfall
+    raised by repeat 1 alone vanished when repeat 3 came back clean."""
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    runs = iter([(10.0, "only 1 of 2 cores ran"), (20.0, ""), (30.0, "")])
+    original = pantheon_neuron._measure_once
+
+    def scripted(*args, **kwargs):
+        row = original(*args, **kwargs)
+        row["Score"], row["Detail"] = next(runs)
+        return row
+
+    monkeypatch.setattr(pantheon_neuron, "_measure_once", scripted)
+    row = pantheon_neuron.run_workload(_workload(), MOCK, DURATION, 0.01, repeat=3)
+    assert row["Status"] == "PASS"
+    assert "only 1 of 2 cores ran [repeat 1 of 3]" in row["Detail"]
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_a_warning_every_repeat_raised_is_stated_once_in_the_median_words():
+    rows = [{"Score": 1.0, "Detail": "mean over 3 of 30 whole periods"},
+            {"Score": 2.0, "Detail": "mean over 4 of 30 whole periods"},
+            {"Score": 3.0, "Detail": "mean over 5 of 30 whole periods"}]
+    assert pantheon_neuron._repeat_details(rows, rows[1]) == (
+        "mean over 4 of 30 whole periods")
+
+
+def test_a_captured_error_differing_only_in_timestamps_is_one_warning():
+    """neuron-profile's stderr carries a timestamp, so the same failure
+    reads differently per repeat and was once listed three times."""
+    rows = [{"Detail": "capture failed (2026-Sep-10 22:18:53.339955 ERROR)"},
+            {"Detail": "capture failed (2026-Sep-10 22:19:27.953973 ERROR)"}]
+    merged = pantheon_neuron._repeat_details(rows, rows[0])
+    assert merged == "capture failed (2026-Sep-10 22:18:53.339955 ERROR)"
+
+
+def test_different_warnings_keep_their_order_and_attribution():
+    rows = [{"Detail": "a; b"}, {"Detail": "b"}, {"Detail": "c"}]
+    assert pantheon_neuron._repeat_details(rows) == (
+        "a [repeat 1 of 3]; b [repeat 1, 2 of 3]; c [repeat 3 of 3]")
+
+
+def test_no_warnings_anywhere_is_an_empty_detail():
+    assert pantheon_neuron._repeat_details([{"Detail": ""}, {}]) == ""
