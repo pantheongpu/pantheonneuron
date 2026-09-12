@@ -1463,6 +1463,8 @@ _PROVENANCE_KEYS = (
     # trn1.2xlarge 2026-09-10 with every byte still read; only these said so.
     "consumer_engine_active",
     "dma_active",
+    # memory_write's side of the same question; see its _profile.
+    "vector_engine_active",
     # memory_*_agg: whether every worker reached the start barrier, so the
     # timed loops began together.
     "barrier_all_ready",
@@ -1476,6 +1478,15 @@ _PROVENANCE_KEYS = (
     # the ratio between them. See _measure_once.
     "kernel_figure",
     "declared_over_kernel",
+    # The kernel's own measured window. "Duration (s)" is the whole
+    # measurement -- compile, warm-up, and for the bandwidth kernels a
+    # profiler search that has taken six minutes for a ten-second loop --
+    # so a reader comparing it against --duration is reading the wrong
+    # number. The workloads counted by the kernel carry this already,
+    # because their declared formula names it; the profiler- and
+    # monitor-scored ones did not, and they are the rows where the two
+    # figures differ most.
+    "elapsed_s",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,

@@ -337,6 +337,18 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         # profiler.bandwidth_gbps.
         "profiler_time_basis": profiler.execution_window(counters)[1],
         "profiler_startup_s": _startup(counters),
+        # Which side set the rate. memory_read has recorded this since
+        # 2026-09-10, when a heavier consumer halved its bandwidth with
+        # every byte still read and only these counters said so; the write
+        # path could not answer the same question at all. dma_active is the
+        # store path's own occupancy -- near 1.0 means the DMA is the
+        # limit, and anything well below it means the kernel is not
+        # feeding it. Recorded, not interpreted: what limits this kernel's
+        # writes has not been attributed on hardware the way the read
+        # side's was.
+        "dma_active": counters.get("dma_active_time_percent"),
+        "vector_engine_active": counters.get(
+            "vector_engine_active_time_percent"),
         "profiler_neff": os.path.basename(found["neff"]),
         "profiler_plan_coverage": found["plan_coverage"],
         "profiler_candidates_tried": found["candidates_tried"],
