@@ -456,6 +456,17 @@ class NeuronMonitor:
 
     def stop(self) -> dict:
         """Stop sampling and return the aggregated, scrubbed metrics."""
+        self.shutdown()
+        return self.aggregate()
+
+    def shutdown(self) -> None:
+        """Stop sampling and release everything, without aggregating.
+
+        Split from ``stop`` so a caller can guarantee the teardown in a
+        finally without paying for a second aggregation -- and without a
+        test double for ``stop`` seeing a call it did not expect.
+        Idempotent: a second call finds nothing left to release.
+        """
         self._stop.set()
         if self._process is not None:
             self._process.terminate()
@@ -479,7 +490,6 @@ class NeuronMonitor:
             except OSError:
                 pass
             self._stderr = None
-        return self.aggregate()
 
     # -- sampling ----------------------------------------------------------
 

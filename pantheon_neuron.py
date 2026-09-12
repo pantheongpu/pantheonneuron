@@ -384,7 +384,23 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     monitor = neuron_monitor.NeuronMonitor(
         period_seconds=monitor_period_for(workload, monitor_period))
     telemetry_started = monitor.start([device.index for device in devices])
+    try:
+        return _measure_started(workload, devices, duration, monitor,
+                                telemetry_started)
+    finally:
+        # stop() is idempotent, and this is the only thing that guarantees
+        # it runs. The workload's own failure is caught below and becomes a
+        # row, but anything raised while building that row -- in a check,
+        # in the peak arithmetic, in a KeyboardInterrupt between them --
+        # left neuron-monitor sampling and its config file on disk for the
+        # rest of the run, with one more leaked per row after it.
+        if telemetry_started:
+            monitor.shutdown()
 
+
+def _measure_started(workload, devices, duration: int, monitor,
+                     telemetry_started: bool) -> dict:
+    """The body of one measurement, with the monitor already sampling."""
     started = time.time()
     status, detail, score = "PASS", "", None
     try:

@@ -451,7 +451,7 @@ def test_the_span_overhang_is_only_reported_for_a_rate():
     Same defect as thin_monitor_sample two commits earlier, gated the
     same way: a row must describe the counter it publishes.
     """
-    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_started)
     marker = code.index("span_outran_the_kernel")
     preceding = code[:marker]
     assert "_wants_execution_rate ( workload )" in preceding, (

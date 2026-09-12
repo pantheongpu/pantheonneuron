@@ -43,6 +43,9 @@ class _StubMonitor:
     def stop(self):
         return dict(type(self).metrics)
 
+    def shutdown(self):
+        """The teardown _measure_once guarantees in a finally."""
+
 
 def _run(monkeypatch, workload, kernel_result, metrics, tail=True, score=3000.0):
     monkeypatch.setenv("NEURON_RT_VISIBLE_CORES", "0")

@@ -214,7 +214,10 @@ def test_a_score_above_peak_is_reported_rather_than_clamped():
 # -- the row -----------------------------------------------------------------
 
 def test_the_row_carries_the_percentage_and_its_provenance(mock_env=None):
-    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    # Both halves: the skipped row is built in _measure_once, the scored
+    # one in the body it wraps.
+    code = (sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+            + sourcecheck.flat_function_code(pantheon_neuron._measure_started))
     assert '"Percent Of Peak"' in code
     assert '"Peak"' in code
     # Both on the skipped row too, or the shapes diverge.
@@ -492,7 +495,7 @@ def test_missing_telemetry_falls_back_to_the_visible_mask(monkeypatch):
 
 
 def test_the_row_passes_its_telemetry_to_the_share():
-    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_started)
     assert "peak_share ( workload , devices , metrics )" in code
 
 

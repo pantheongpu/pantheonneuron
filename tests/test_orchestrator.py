@@ -231,7 +231,7 @@ def test_a_kernel_that_reports_bounded_by_is_not_told_twice():
     guard compared the two message texts for equality, which was never
     the question being asked.
     """
-    code = sourcecheck.function_code(pantheon_neuron._measure_once)
+    code = sourcecheck.function_code(pantheon_neuron._measure_started)
     assert '"bounded_by" not in run_result' in code
 
 
@@ -389,3 +389,32 @@ def test_a_score_of_zero_fails_the_row(mock_env, monkeypatch):
     assert row["Status"] == "FAIL"
     assert row["Score"] is None
     assert "zero TFLOPS" in row["Detail"]
+
+
+def test_the_monitor_is_released_even_when_the_row_cannot_be_built(monkeypatch):
+    """The workload's own failure becomes a row, but anything raised while
+    building that row left neuron-monitor sampling and its config on disk,
+    one more leaked per row after it."""
+    released = []
+
+    class _Stub:
+        def __init__(self, period_seconds=1.0, mock=False):
+            pass
+
+        def start(self, device_indices):
+            return True
+
+        def stop(self):
+            return {"samples": 1}
+
+        def shutdown(self):
+            released.append(True)
+
+    monkeypatch.setattr(pantheon_neuron.neuron_monitor, "NeuronMonitor", _Stub)
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 1.0)
+    monkeypatch.setattr(pantheon_neuron, "peak_share",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        pantheon_neuron._measure_once(_workload("tensor_virus"), TRN1, 0.02, 0.01)
+    assert released == [True], "the monitor was left running"

@@ -329,7 +329,7 @@ def test_an_idle_period_from_before_the_call_does_not_count():
 
 
 def test_the_orchestrator_waits_for_the_tail_only_for_a_rate():
-    code = sourcecheck.flat_function_code(pantheon_neuron._measure_once)
+    code = sourcecheck.flat_function_code(pantheon_neuron._measure_started)
     wait = code.index("monitor . await_idle_period ( )")
     assert "_wants_execution_rate ( workload )" in code[code.rindex("if", 0, wait):wait]
     assert wait < code.index("metrics = monitor . stop ( )")
