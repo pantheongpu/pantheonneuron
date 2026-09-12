@@ -9,6 +9,7 @@ toolchain and torch-neuron on PyTorch 1.x.
 import argparse
 import datetime
 import json
+import math
 import os
 import platform
 import re
@@ -87,6 +88,30 @@ def get_system_snapshot(devices) -> dict:
     return snapshot
 
 
+def finite_only(value, dropped: typing.List[str], path: str = ""):
+    """``value`` with every non-finite float replaced by None.
+
+    NaN and Infinity are not JSON. Python writes them anyway -- ``json``
+    emits the bare tokens by default and reads them back, so a report can
+    look fine here and fail in any strict parser, which is every consumer
+    that is not Python. A telemetry counter or a derived figure only has to
+    go non-finite once for a published report to become unreadable.
+
+    Replaced rather than dropped, and the paths are recorded in the report,
+    because "this field was not a number" is itself a finding.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        dropped.append(path or "<root>")
+        return None
+    if isinstance(value, dict):
+        return {key: finite_only(item, dropped, f"{path}.{key}" if path else str(key))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [finite_only(item, dropped, f"{path}[{index}]")
+                for index, item in enumerate(value)]
+    return value
+
+
 def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str:
     os.makedirs(DATABASE_DIR, exist_ok=True)
     payload = dict(snapshot)
@@ -94,10 +119,17 @@ def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str
     payload["completed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     payload["test_results"] = results
 
+    dropped: typing.List[str] = []
+    payload = finite_only(payload, dropped)
+    if dropped:
+        payload["non_finite_fields"] = dropped
+
     target = os.path.join(DATABASE_DIR, f"pantheon_neuron_report_{run_id}.json")
     temporary = f"{target}.tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+        # allow_nan=False so this raises here rather than writing a file no
+        # strict parser can read. finite_only has already replaced them.
+        json.dump(payload, handle, indent=2, allow_nan=False)
     os.replace(temporary, target)
     return target
 
@@ -514,6 +546,15 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
     # cross-platform comparison can join on (Test Name, Unit). "Problem"
     # records the pinned shape/dtype, because a Score is only comparable if
     # both platforms ran the same problem.
+    # A Score that is not a finite number is not a measurement, and every
+    # comparison against it -- the ceiling check below included -- answers
+    # False, so it would travel to the row unchallenged and be written as
+    # the JSON that is not JSON (see finite_only).
+    if isinstance(score, float) and not math.isfinite(score) and status == "PASS":
+        status, score = "FAIL", None
+        detail = "; ".join(filter(None, [
+            detail, "the Score was not a finite number"]))
+
     _peak_share = peak_share(workload, devices, metrics)
     beyond = beyond_the_ceiling(score, _peak_share, workload.unit)
     if beyond and status == "PASS":
