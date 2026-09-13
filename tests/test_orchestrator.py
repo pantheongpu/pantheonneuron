@@ -484,3 +484,29 @@ def test_an_interrupt_still_writes_the_rows_already_measured(
     reports = list(tmp_path.glob("*.json"))
     assert len(reports) == 1, "the partial report was written"
     assert len(json.loads(reports[0].read_text())["test_results"]) == 2
+
+
+def test_a_row_whose_monitor_never_started_says_why(monkeypatch):
+    """The reason reached only the console, so a monitor-scored row read
+    "reported no effective_flops" with no cause -- the same as a run whose
+    counter was merely silent."""
+
+    class _Refuses:
+        unavailable = None
+
+        def __init__(self, period_seconds=1.0, mock=False):
+            pass
+
+        def start(self, device_indices):
+            self.unavailable = "it exited immediately (3): bad config: period"
+            return False
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(pantheon_neuron.neuron_monitor, "NeuronMonitor", _Refuses)
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 72.0)
+    row = pantheon_neuron._measure_once(_workload("tensor_virus"), TRN1, 0.02, 1.0)
+
+    assert row["Telemetry"]["monitor_unavailable"].startswith("it exited immediately")
+    assert "neuron-monitor did not run: it exited immediately (3)" in row["Detail"]

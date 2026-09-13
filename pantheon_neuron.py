@@ -394,8 +394,9 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         # in the peak arithmetic, in a KeyboardInterrupt between them --
         # left neuron-monitor sampling and its config file on disk for the
         # rest of the run, with one more leaked per row after it.
-        if telemetry_started:
-            monitor.shutdown()
+        # Unconditional: shutdown() is idempotent, and a monitor whose start
+        # failed partway has already released itself through it.
+        monitor.shutdown()
 
 
 def _measure_started(workload, devices, duration: int, monitor,
@@ -460,7 +461,16 @@ def _measure_started(workload, devices, duration: int, monitor,
     tail_reported = None
     if telemetry_started and status == "PASS" and _wants_execution_rate(workload):
         tail_reported = monitor.await_idle_period()
-    metrics = monitor.stop() if telemetry_started else {"samples": 0}
+    if telemetry_started:
+        metrics = monitor.stop()
+    else:
+        metrics = {"samples": 0}
+        # Why, in the row. It reached only the console, so a report whose
+        # monitor never started read the same as one whose counter was
+        # silent. getattr: a stand-in monitor need not declare it.
+        reason = getattr(monitor, "unavailable", None)
+        if reason:
+            metrics["monitor_unavailable"] = reason
     if tail_reported is not None:
         metrics["execution_tail_reported"] = tail_reported
         unaccounted = executions_unaccounted(metrics, run_result)
@@ -541,6 +551,9 @@ def _measure_started(workload, devices, duration: int, monitor,
             because = metrics.get("execution_rate_absent"
                                   if _wants_execution_rate(workload)
                                   else "effective_flops_absent")
+            if not because and metrics.get("monitor_unavailable"):
+                because = ("neuron-monitor did not run: "
+                           f"{metrics['monitor_unavailable']}")
             # Said whether or not the kernel's own figure takes the Score's
             # place. It was said only when there was no fallback, so a
             # 5-second tensor_virus on trn1.2xlarge 2026-09-11 published

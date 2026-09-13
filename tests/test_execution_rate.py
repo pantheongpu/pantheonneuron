@@ -12,6 +12,9 @@ periods' tallies, and produced 729, 1012, 1506 or nothing depending on
 where the samples fell.
 """
 
+import os
+import time
+
 import pytest
 
 from neuron_monitor import execution_rate
@@ -250,3 +253,71 @@ def test_a_line_that_is_valid_json_but_not_an_object_is_not_a_sample():
     assert len(monitor._samples) == 1
     assert isinstance(monitor._samples[0], dict)
     monitor.aggregate()   # must not raise
+
+
+# -- a monitor that does not start ---------------------------------------------
+
+def test_a_missing_binary_records_why(monkeypatch):
+    import neuron_monitor as nm
+
+    monkeypatch.setattr(nm.shutil, "which", lambda name: None)
+    monitor = NeuronMonitor()
+    assert monitor.start([0]) is False
+    assert monitor.unavailable == "neuron-monitor not found on PATH"
+
+
+def test_an_early_exit_records_its_stderr_and_leaves_nothing_behind(monkeypatch, tmp_path):
+    """The config file stayed in /tmp and the stderr capture stayed open,
+    because the caller only tears down a monitor that started -- one of each
+    per workload in a pass where neuron-monitor refuses to run."""
+    import neuron_monitor as nm
+
+    fake = tmp_path / "neuron-monitor"
+    fake.write_text("#!/bin/sh\necho 'bad config: period' >&2\nexit 3\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(nm.shutil, "which", lambda name: str(fake))
+
+    monitor = NeuronMonitor()
+    assert monitor.start([0]) is False
+    assert "exited immediately (3)" in monitor.unavailable
+    assert "bad config: period" in monitor.unavailable
+    assert monitor._config_path is None, "the config file was not deleted"
+    assert monitor._stderr is None, "the stderr capture was left open"
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/sh"), reason="needs /bin/sh")
+def test_a_real_monitor_process_stops_with_its_pipe_closed(monkeypatch, tmp_path):
+    """The normal stop path, against a genuine subprocess and pipe.
+
+    Every other test runs the mock monitor, which has no process, so none of
+    them could see that shutdown() never closed neuron-monitor's stdout pipe
+    -- on a normal stop, or when the process exited at startup. pytest.ini
+    turns ResourceWarning into an error, so a pipe left open fails this test.
+    """
+    import neuron_monitor as nm
+
+    fake = tmp_path / "neuron-monitor"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "while :; do\n"
+        "  echo '{\"neuron_runtime_data\": [{\"report\": {\"execution_stats\": "
+        "{\"period\": 1.0, \"execution_summary\": {\"completed\": 7}}}}]}'\n"
+        "  sleep 1\n"
+        "done\n")
+    fake.chmod(0o755)
+    monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+    monkeypatch.setattr(nm.shutil, "which", lambda name: str(fake))
+
+    monitor = NeuronMonitor(period_seconds=1.0)
+    assert monitor.start([0]) is True, monitor.unavailable
+    time.sleep(1.5)
+    process = monitor._process
+    metrics = monitor.stop()
+
+    assert metrics["samples"] >= 1
+    assert metrics["executions_total"] == 7 * metrics["samples"]
+    assert process.stdout.closed, "the stdout pipe was left open"
+    assert process.returncode is not None, "the process was not reaped"
+    assert monitor._process is None and monitor._thread is None
+    assert monitor._config_path is None and monitor._stderr is None
+    monitor.shutdown()   # idempotent

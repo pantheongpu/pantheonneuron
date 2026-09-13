@@ -325,6 +325,9 @@ class NeuronMonitor:
         self._warned: typing.Set[str] = set()
         self._config_path: typing.Optional[str] = None
         self._stderr: typing.Optional[typing.IO[str]] = None
+        # Why start() returned False, for the row rather than only the
+        # console. None while telemetry is available or has not been tried.
+        self.unavailable: typing.Optional[str] = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -360,7 +363,7 @@ class NeuronMonitor:
                 "missing",
                 "neuron-monitor not found; run will proceed without telemetry.",
             )
-            return False
+            return self._unavailable("neuron-monitor not found on PATH")
 
         config = json.dumps(
             {
@@ -392,7 +395,7 @@ class NeuronMonitor:
             self._config_path = handle.name
         except OSError as error:
             self._warn_once("config", f"could not write neuron-monitor config: {error}")
-            return False
+            return self._unavailable(f"could not write its config: {error}")
 
         try:
             # stderr is captured, not discarded: it is the only place
@@ -407,7 +410,7 @@ class NeuronMonitor:
             )
         except OSError as error:
             self._warn_once("spawn", f"could not start neuron-monitor: {error}")
-            return False
+            return self._unavailable(f"could not start it: {error}")
 
         # A bad invocation dies immediately; surface that now rather than
         # reporting "samples: 0" at the end of a five-minute workload.
@@ -415,13 +418,13 @@ class NeuronMonitor:
         if self._process.poll() is not None:
             self._stderr.seek(0)
             why = (self._stderr.read() or "").strip().splitlines()
-            self._warn_once(
-                "earlyexit",
-                "neuron-monitor exited immediately "
-                f"({self._process.returncode}): {why[-1] if why else 'no stderr'}",
-            )
-            self._process = None
-            return False
+            reason = (f"it exited immediately ({self._process.returncode}): "
+                      f"{why[-1] if why else 'no stderr'}")
+            self._warn_once("earlyexit", f"neuron-monitor {reason}")
+            # Not `self._process = None` here: shutdown() has to see the
+            # process to close its stdout pipe, and terminate() on one that
+            # has already exited does nothing.
+            return self._unavailable(reason)
 
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -468,16 +471,32 @@ class NeuronMonitor:
         Idempotent: a second call finds nothing left to release.
         """
         self._stop.set()
-        if self._process is not None:
-            self._process.terminate()
+        process = self._process
+        if process is not None:
+            process.terminate()   # a no-op if it has already exited
             try:
-                self._process.wait(timeout=10)
+                process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                self._process.kill()
-            self._process = None
+                process.kill()
+                # Reaped, or it lingers as a zombie holding its pipe.
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:  # pragma: no cover
+                    pass
         if self._thread is not None:
             self._thread.join(timeout=10)
             self._thread = None
+        if process is not None:
+            # The stdout pipe was never closed -- not on a normal stop, and not
+            # when neuron-monitor exited at startup, where the path dropped the
+            # process with its pipe still open. Closed only after the reader
+            # thread has joined, since that thread iterates this pipe.
+            if process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
+            self._process = None
         if self._config_path:
             try:
                 os.unlink(self._config_path)
@@ -564,6 +583,22 @@ class NeuronMonitor:
                 )
             )
             self._sample_times.append(time.monotonic())
+
+    def _unavailable(self, reason: str) -> bool:
+        """Record why telemetry is unavailable, release what start() made, and
+        return False for start() to hand back.
+
+        Two things the False paths used to skip. Nothing reached the row: the
+        reason went to the console alone, so a monitor-scored row read
+        "reported no effective_flops" with no cause. And nothing was
+        released: the config file stayed in /tmp and the stderr capture
+        stayed open, because the caller only tears down a monitor that
+        started. A pass where neuron-monitor refuses to run left one of each
+        per workload.
+        """
+        self.unavailable = reason
+        self.shutdown()
+        return False
 
     def _warn_once(self, key: str, message: str) -> None:
         if key not in self._warned:
