@@ -321,9 +321,14 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
     is actually ours. The plan check used to run once against a single
     guess and reject it; it now selects. See ``profiler.select_by_plan``.
     """
-    candidates = profiler.find_neffs(workdir, since=since)
+    # The searched list and the true total. find_neffs truncates to the
+    # candidate budget, and the row used to count the truncated list: on
+    # trn1.2xlarge 2026-09-11 a directory holding 63 NEFFs was reported as
+    # "none of 16", which hid the very pollution that was the problem.
+    candidates, available = profiler.candidate_search(workdir, since=since)
     session = os.path.join(workdir, "memory_write.ntff")
-    found = profiler.select_by_plan(candidates, session, "write", planned_bytes)
+    found = profiler.select_by_plan(candidates, session, "write", planned_bytes,
+                                    available=available)
     counters = found["counters"]
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "write"),
@@ -337,6 +342,18 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         # profiler.bandwidth_gbps.
         "profiler_time_basis": profiler.execution_window(counters)[1],
         "profiler_startup_s": _startup(counters),
+        # Which side set the rate. memory_read has recorded this since
+        # 2026-09-10, when a heavier consumer halved its bandwidth with
+        # every byte still read and only these counters said so; the write
+        # path could not answer the same question at all. dma_active is the
+        # store path's own occupancy -- near 1.0 means the DMA is the
+        # limit, and anything well below it means the kernel is not
+        # feeding it. Recorded, not interpreted: what limits this kernel's
+        # writes has not been attributed on hardware the way the read
+        # side's was.
+        "dma_active": counters.get("dma_active_time_percent"),
+        "vector_engine_active": counters.get(
+            "vector_engine_active_time_percent"),
         "profiler_neff": os.path.basename(found["neff"]),
         "profiler_plan_coverage": found["plan_coverage"],
         "profiler_candidates_tried": found["candidates_tried"],

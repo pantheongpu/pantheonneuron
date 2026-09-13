@@ -394,8 +394,9 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         # in the peak arithmetic, in a KeyboardInterrupt between them --
         # left neuron-monitor sampling and its config file on disk for the
         # rest of the run, with one more leaked per row after it.
-        if telemetry_started:
-            monitor.shutdown()
+        # Unconditional: shutdown() is idempotent, and a monitor whose start
+        # failed partway has already released itself through it.
+        monitor.shutdown()
 
 
 def _measure_started(workload, devices, duration: int, monitor,
@@ -460,7 +461,16 @@ def _measure_started(workload, devices, duration: int, monitor,
     tail_reported = None
     if telemetry_started and status == "PASS" and _wants_execution_rate(workload):
         tail_reported = monitor.await_idle_period()
-    metrics = monitor.stop() if telemetry_started else {"samples": 0}
+    if telemetry_started:
+        metrics = monitor.stop()
+    else:
+        metrics = {"samples": 0}
+        # Why, in the row. It reached only the console, so a report whose
+        # monitor never started read the same as one whose counter was
+        # silent. getattr: a stand-in monitor need not declare it.
+        reason = getattr(monitor, "unavailable", None)
+        if reason:
+            metrics["monitor_unavailable"] = reason
     if tail_reported is not None:
         metrics["execution_tail_reported"] = tail_reported
         unaccounted = executions_unaccounted(metrics, run_result)
@@ -541,6 +551,9 @@ def _measure_started(workload, devices, duration: int, monitor,
             because = metrics.get("execution_rate_absent"
                                   if _wants_execution_rate(workload)
                                   else "effective_flops_absent")
+            if not because and metrics.get("monitor_unavailable"):
+                because = ("neuron-monitor did not run: "
+                           f"{metrics['monitor_unavailable']}")
             # Said whether or not the kernel's own figure takes the Score's
             # place. It was said only when there was no fallback, so a
             # 5-second tensor_virus on trn1.2xlarge 2026-09-11 published
@@ -1451,6 +1464,11 @@ _PROVENANCE_KEYS = (
     # The counters the declared formula divides, so a Score can be
     # recomputed from the report rather than trusted.
     "allocation_events",
+    # allocation_fragmentation: one retained block, read back. The Score
+    # counts allocation calls, and a call that allocated nothing counts the
+    # same.
+    "retained_blocks",
+    "retained_element",
     "hbm_read_bytes",
     "hbm_write_bytes",
     "profiler_total_time_s",
@@ -1463,6 +1481,8 @@ _PROVENANCE_KEYS = (
     # trn1.2xlarge 2026-09-10 with every byte still read; only these said so.
     "consumer_engine_active",
     "dma_active",
+    # memory_write's side of the same question; see its _profile.
+    "vector_engine_active",
     # memory_*_agg: whether every worker reached the start barrier, so the
     # timed loops began together.
     "barrier_all_ready",
@@ -1476,6 +1496,15 @@ _PROVENANCE_KEYS = (
     # the ratio between them. See _measure_once.
     "kernel_figure",
     "declared_over_kernel",
+    # The kernel's own measured window. "Duration (s)" is the whole
+    # measurement -- compile, warm-up, and for the bandwidth kernels a
+    # profiler search that has taken six minutes for a ten-second loop --
+    # so a reader comparing it against --duration is reading the wrong
+    # number. The workloads counted by the kernel carry this already,
+    # because their declared formula names it; the profiler- and
+    # monitor-scored ones did not, and they are the rows where the two
+    # figures differ most.
+    "elapsed_s",
     # A raw ops/s rate nobody can read, restated at a human scale.
     "quantized_tops",
     # kv_cache_churn: the bandwidth its update rate actually achieved,
@@ -1935,14 +1964,74 @@ def main(argv=None) -> int:
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results = []
 
+    try:
+        _run_selection(workloads, reserve_at, devices, args, results)
+    except KeyboardInterrupt:
+        # Stopped by hand. The rows already measured are real, and a
+        # 40-minute pass interrupted at workload 20 should not lose 19 of
+        # them; write what exists, then stop the way an interrupt should.
+        if results and not args.no_report:
+            path = write_report(snapshot, results, run_id)
+            print(f"[PANTHEON-NEURON] interrupted; partial report: {path}")
+        raise
+
+    if not args.no_report:
+        path = write_report(snapshot, results, run_id)
+        print(f"[PANTHEON-NEURON] report: {path}")
+
+    return 1 if any(row["Status"] == "FAIL" for row in results) else 0
+
+
+def _harness_error_row(workload, devices, error: BaseException) -> dict:
+    """A FAIL row for an exception the measurement itself did not contain.
+
+    Same shape as every other row, so a report with one of these still joins
+    and still passes the schema a consumer expects. The workload's own
+    failures are caught inside _measure_started and become rows there; this
+    is for what escapes it -- a telemetry sample aggregate() cannot read, a
+    check that raises, anything in the row arithmetic.
+    """
+    return {
+        "Test Name": workload.name,
+        "Suite": workload.suite,
+        "Status": "FAIL",
+        "Detail": f"harness error, not a workload result: "
+                  f"{type(error).__name__}: {error}",
+        "Duration (s)": 0.0,
+        "Devices": [device.index for device in devices],
+        "Score": None,
+        "Unit": workload.unit,
+        "Percent Of Peak": None,
+        "Peak": None,
+        "Score Method": None,
+        "Measurement": None,
+        "Repeats": None,
+        "Problem": dict(workload.problem) if workload.problem else None,
+        "Telemetry": {"samples": 0},
+    }
+
+
+def _run_selection(workloads, reserve_at, devices, args, results) -> None:
+    """Measure each workload in turn, appending its row to ``results``.
+
+    **One workload's escaping exception used to end the run with no report.**
+    write_report ran only after the loop, and nothing around run_workload
+    caught what _measure_started does not -- so an exception at workload 20
+    of a 40-minute pass discarded the 19 rows already measured, and the
+    console was all that survived. It now becomes that workload's FAIL row,
+    and the pass continues.
+    """
     for position, workload in enumerate(workloads):
         # After the aggregates, before anything initialises a runtime here:
         # see reservation_point.
         if position == reserve_at:
             reserve_profiler_core(devices, workloads[position:])
         print(f"[PANTHEON-NEURON] -> {workload.name}")
-        row = run_workload(workload, devices, args.duration,
-                           args.monitor_period, repeat=args.repeat)
+        try:
+            row = run_workload(workload, devices, args.duration,
+                               args.monitor_period, repeat=args.repeat)
+        except Exception as error:  # broad: contained to this workload's row
+            row = _harness_error_row(workload, devices, error)
         results.append(row)
         detail = f" ({row['Detail']})" if row.get("Detail") else ""
         print(f"[PANTHEON-NEURON]    {row['Status']}{detail}")
@@ -1963,12 +2052,6 @@ def main(argv=None) -> int:
             print(f"[PANTHEON-NEURON]    {spread['scored']} repeats: "
                   f"{spread['min']} to {spread['max']}, "
                   f"median {spread['median']}, cv {spread.get('cv')}")
-
-    if not args.no_report:
-        path = write_report(snapshot, results, run_id)
-        print(f"[PANTHEON-NEURON] report: {path}")
-
-    return 1 if any(row["Status"] == "FAIL" for row in results) else 0
 
 
 if __name__ == "__main__":

@@ -284,3 +284,34 @@ def test_the_repin_prediction_is_recorded_as_falsified():
     assert "falsified" in doc
     assert "0.14" in doc and "monotonically rising" in doc
     assert "warm allocator three times" in doc
+
+
+# -- the allocations have to have happened ----------------------------------
+
+def test_a_retained_block_holding_its_fill_is_accepted():
+    assert fragmentation.verify_allocations_landed(1.0, 4) is None
+
+
+def test_a_block_that_lost_its_fill_invalidates_the_score():
+    message = fragmentation.verify_allocations_landed(0.0, 4)
+    assert message and "did not hold what was written" in message
+
+
+def test_an_unreadable_block_is_unverified_not_a_pass():
+    message = fragmentation.verify_allocations_landed(None, 4)
+    assert message and "not shown to have reached the device" in message
+
+
+def test_no_surviving_block_is_reported():
+    message = fragmentation.verify_allocations_landed(None, 0)
+    assert message and "no block survived" in message
+
+
+def test_the_check_invalidates_the_score_rather_than_only_warning():
+    """The Score counts allocation calls; a call that allocated nothing
+    counts the same, so the rate would measure how fast this loop can ask."""
+    import sourcecheck
+
+    code = sourcecheck.flat_function_code(fragmentation.run)
+    assert '"score_invalid" : bool (' in code
+    assert "verify_allocations_landed" in code

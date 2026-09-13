@@ -415,3 +415,27 @@ def test_the_absent_counters_really_are_absent():
             registry.COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY.items()):
         for counter in counters:
             assert f'"{counter}"' not in readers, (name, counter)
+
+
+def test_every_row_can_show_its_measured_window():
+    """"Duration (s)" is the whole measurement -- compile, warm-up, and for
+    the bandwidth kernels a profiler search that has taken six minutes for
+    a ten-second loop. The kernel's own elapsed_s is the window the Score
+    describes, and a reader comparing Duration against --duration is
+    reading the other number."""
+    import pantheon_neuron
+
+    assert "elapsed_s" in pantheon_neuron._PROVENANCE_KEYS
+
+
+def test_the_window_reaches_a_profiler_scored_row(monkeypatch):
+    """The rows where the two figures differ most are the ones that did not
+    carry it: their declared counters are profiler counters, so the
+    declaration alone does not bring elapsed_s along."""
+    import pantheon_neuron
+
+    workload = next(w for w in registry.WORKLOADS if w.name == "memory_read")
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, workload.name,
+                        {"elapsed_s": 10.0, "hbm_read_bytes": 8 << 30})
+    provenance = pantheon_neuron._provenance(workload)
+    assert provenance["elapsed_s"] == 10.0

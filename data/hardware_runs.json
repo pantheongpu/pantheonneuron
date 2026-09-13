@@ -185,6 +185,18 @@
           ],
           "failed": [],
           "skipped": []
+        },
+        {
+          "date": "2026-09-13",
+          "evidence": "data/validation-2026-09-13/trn1-deep-dive-4-batch.log",
+          "note": "Targeted, not a full pass: --test memory --duration 20, --test allocation_fragmentation --duration 20, then --test tensor_virus --duration 15 on a re-synced tree. elapsed_s reaches every row (memory_read 20.07 s of loop beside a 314.72 s Duration); memory_write records dma_active 0.883 against vector_engine_active 0.0000226; candidate totals match the NEFFs present (3, 4 -- under budget, so the above-budget case is covered by unit tests only); allocation_fragmentation's retained block reads 1.0 across 832 survivors. The monitor's start/shutdown change ran against the real neuron-monitor: telemetry normal, and no monitor process or config file left after stop(). Found here: the aggregates' elapsed_s was the whole worker phase (577.4 s beside a 20 s loop).",
+          "passed": [
+            "allocation_fragmentation", "memory_read",
+            "memory_read_agg", "memory_write", "memory_write_agg",
+            "tensor_virus"
+          ],
+          "failed": [],
+          "skipped": []
         }
       ]
     },

@@ -322,9 +322,22 @@ def test_a_selection_without_aggregates_keeps_registry_order():
     assert _names(pantheon_neuron.run_order(selected)) == _names(selected)
 
 
+def _main_and_its_loop() -> str:
+    """main(), then the loop it delegates to, in execution order.
+
+    The loop moved into _run_selection so that one workload's escaping
+    exception becomes its own FAIL row instead of ending the run with no
+    report. Reading the two together keeps these ordering checks about what
+    runs, not about which function the lines happen to sit in.
+    """
+    return (sourcecheck.flat_function_code(pantheon_neuron.main)
+            + " " + sourcecheck.flat_function_code(pantheon_neuron._run_selection))
+
+
 def test_main_runs_the_ordered_selection():
-    code = sourcecheck.flat_function_code(pantheon_neuron.main)
+    code = _main_and_its_loop()
     assert code.index("workloads = run_order ( workloads )") < code.index(
+        "_run_selection ( workloads , reserve_at ,") < code.index(
         "for position , workload in enumerate ( workloads )")
 
 
@@ -354,7 +367,7 @@ def test_a_selection_of_only_aggregates_reserves_nothing():
 
 
 def test_main_reserves_inside_the_loop_at_that_point():
-    code = sourcecheck.flat_function_code(pantheon_neuron.main)
+    code = _main_and_its_loop()
     assert "reserve_at = reservation_point ( workloads )" in code
     assert code.index("for position , workload in enumerate ( workloads )") < code.index(
         "reserve_profiler_core ( devices , workloads [ position : ] )")
@@ -418,3 +431,82 @@ def test_the_monitor_is_released_even_when_the_row_cannot_be_built(monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         pantheon_neuron._measure_once(_workload("tensor_virus"), TRN1, 0.02, 0.01)
     assert released == [True], "the monitor was left running"
+
+
+# -- one workload's failure is not the run's ---------------------------------
+
+def test_an_escaping_exception_becomes_that_workloads_row_and_the_run_continues(
+        mock_env, monkeypatch, tmp_path):
+    """write_report ran only after the loop and nothing caught what the
+    measurement did not, so an exception at workload 20 of a 40-minute pass
+    discarded the 19 rows already measured."""
+    monkeypatch.setattr(pantheon_neuron, "DATABASE_DIR", str(tmp_path))
+    real = pantheon_neuron.run_workload
+
+    def run(workload, *args, **kwargs):
+        if workload.name == "tensor_virus":
+            raise AttributeError("'int' object has no attribute 'get'")
+        return real(workload, *args, **kwargs)
+
+    monkeypatch.setattr(pantheon_neuron, "run_workload", run)
+    status = pantheon_neuron.main(["--test", "core", "--duration", "1",
+                                   "--monitor-period", "1"])
+
+    assert status == 1, "a FAIL row still fails the run"
+    report = max(tmp_path.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    rows = {row["Test Name"]: row for row in json.loads(report.read_text())["test_results"]}
+    assert rows["tensor_virus"]["Status"] == "FAIL"
+    assert "harness error" in rows["tensor_virus"]["Detail"]
+    assert rows["tensor_virus"]["Score"] is None
+    assert len(rows) == 5, "every other core workload still produced its row"
+    shapes = {tuple(sorted(row)) for row in rows.values()}
+    assert len(shapes) == 1, "the error row has the same shape as the others"
+
+
+def test_an_interrupt_still_writes_the_rows_already_measured(
+        mock_env, monkeypatch, tmp_path):
+    """Stopped by hand at workload 3, the first two rows are real."""
+    monkeypatch.setattr(pantheon_neuron, "DATABASE_DIR", str(tmp_path))
+    real = pantheon_neuron.run_workload
+    calls = []
+
+    def run(workload, *args, **kwargs):
+        calls.append(workload.name)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+        return real(workload, *args, **kwargs)
+
+    monkeypatch.setattr(pantheon_neuron, "run_workload", run)
+    with pytest.raises(KeyboardInterrupt):
+        pantheon_neuron.main(["--test", "core", "--duration", "1",
+                              "--monitor-period", "1"])
+
+    reports = list(tmp_path.glob("*.json"))
+    assert len(reports) == 1, "the partial report was written"
+    assert len(json.loads(reports[0].read_text())["test_results"]) == 2
+
+
+def test_a_row_whose_monitor_never_started_says_why(monkeypatch):
+    """The reason reached only the console, so a monitor-scored row read
+    "reported no effective_flops" with no cause -- the same as a run whose
+    counter was merely silent."""
+
+    class _Refuses:
+        unavailable = None
+
+        def __init__(self, period_seconds=1.0, mock=False):
+            pass
+
+        def start(self, device_indices):
+            self.unavailable = "it exited immediately (3): bad config: period"
+            return False
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(pantheon_neuron.neuron_monitor, "NeuronMonitor", _Refuses)
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a: 72.0)
+    row = pantheon_neuron._measure_once(_workload("tensor_virus"), TRN1, 0.02, 1.0)
+
+    assert row["Telemetry"]["monitor_unavailable"].startswith("it exited immediately")
+    assert "neuron-monitor did not run: it exited immediately (3)" in row["Detail"]

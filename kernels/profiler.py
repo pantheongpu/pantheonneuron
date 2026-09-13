@@ -41,6 +41,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import typing
 
 from . import cores
@@ -387,12 +388,29 @@ def verify_profile_covers_plan(
     )
 
 
+def candidate_search(workdir: str, since: typing.Optional[float] = None
+                     ) -> typing.Tuple[typing.List[str], int]:
+    """The candidates the budget allows, and how many there actually were.
+
+    find_neffs truncates to the candidate budget, and select_by_plan then
+    counted the truncated list -- so a row could never report more
+    candidates than the budget, however many were on the machine. On
+    trn1.2xlarge 2026-09-11 the compile directory held 63 NEFFs and the row
+    said "none of 16 candidate NEFF(s)": a four-fold understatement of the
+    search space at exactly the moment its size was the problem.
+    """
+    every = find_neffs(workdir, since=since, limit=sys.maxsize)
+    return every[:_candidate_limit()], len(every)
+
+
 def select_by_plan(candidates: typing.Sequence[str],
                    session_path: str,
                    direction: str,
                    expected_bytes: int,
                    floor: float = 0.5,
-                   exact: float = 0.05) -> typing.Dict[str, typing.Any]:
+                   exact: float = 0.05,
+                   available: typing.Optional[int] = None,
+                   ) -> typing.Dict[str, typing.Any]:
     """Find which of ``candidates`` is the graph the kernel actually ran.
 
     The reason this exists: ``find_neffs`` ranks by mtime, and mtime picked
@@ -427,7 +445,10 @@ def select_by_plan(candidates: typing.Sequence[str],
     graph was wrong, not that none was right.
 
     Returns the counters, the NEFF they came from, and how hard it looked.
+    ``available`` is how many NEFFs existed before the budget truncated
+    ``candidates``; left out, the list is taken to be all of them.
     """
+    total = len(candidates) if available is None else max(available, len(candidates))
     if not candidates:
         raise ProfilerUnavailable("no NEFF candidates to profile")
 
@@ -466,7 +487,9 @@ def select_by_plan(candidates: typing.Sequence[str],
             "neff": neff,
             "plan_coverage": coverage,
             "candidates_tried": position,
-            "candidates_available": len(candidates),
+            # How many existed, not how many the budget let through; see
+            # candidate_search.
+            "candidates_available": total,
         }
 
         # No plan to check against: nothing can rank these, so the first
@@ -502,11 +525,17 @@ def select_by_plan(candidates: typing.Sequence[str],
         except ProfilerUnavailable as error:
             attempts.append(str(error))
 
+    searched = len(candidates)
+    scope = (f"{searched} candidate NEFF(s)" if total <= searched
+             else f"the {searched} candidate NEFF(s) searched, of {total} found,")
     raise ProfilerUnavailable(
-        f"none of {len(candidates)} candidate NEFF(s) moved the planned "
-        f"{expected_bytes} bytes -- " + "; ".join(attempts[:4])
+        f"none of {scope} moved the planned {expected_bytes} bytes -- "
+        + "; ".join(attempts[:4])
+        # Only when there is somewhere further to look. It fired whenever
+        # the list reached the budget, including when the budget was exactly
+        # everything on the machine and raising it would search nothing new.
         + (f" (raise {CANDIDATES_ENV} to search further)"
-           if len(candidates) >= _candidate_limit() else "")
+           if total > searched else "")
     )
 
 
