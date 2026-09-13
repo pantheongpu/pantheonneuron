@@ -135,6 +135,15 @@ def _report_is_clean(report, label):
     tokens = {token.lower() for token in _flatten(report)}
     for key in FORBIDDEN_KEYS:
         assert key not in tokens, f"{label} leaked '{key}'"
+    # Values too, not just key names. A report carries free text -- a row's
+    # Detail, neuron-profile's stderr inside a capture failure, the reason a
+    # monitor did not start -- and an instance id or a zone inside a sentence
+    # is not a token equal to any forbidden key, so the check above passed it.
+    for token in _flatten(report):
+        for pattern, name in _IDENTIFIER_PATTERNS:
+            match = re.search(pattern, token)
+            assert match is None, (
+                f"{label} carries a {name} in its text: {match.group(0)!r}")
 
 
 def test_a_freshly_written_report_is_clean(mock_env, tmp_path, monkeypatch):
@@ -197,6 +206,16 @@ _IDENTIFIER_PATTERNS = (
     # readings are 12 digits. Require account context.
     (r"arn:aws[^\s]*:\d{12}:", "AWS account id in an ARN"),
     (r"(?i)account[^\n]{0,24}?\b\d{12}\b", "AWS account id"),
+    # IP addresses, in the forms they actually arrive in from this workflow:
+    # an ssh target, a launch loop's "ready at", and EC2's own hostnames. Not a
+    # bare dotted quad -- neuron-profile prints its version as one
+    # ("neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a"), and a pattern that
+    # fires on every capture-failure line gets deleted, not heeded.
+    (r"(?i)(?:@|\bready at\s+|\bip(?:v4)?(?:[_ ]?addr(?:ess)?)?\s*[:=]\s*)"
+     r"(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b",
+     "IP address"),
+    (r"\b(?:ip|ec2)-(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)-){3}"
+     r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b", "EC2 hostname carrying an IP"),
 )
 
 
@@ -207,7 +226,11 @@ def _committed_text_files():
         root = os.path.join(REPO_ROOT, directory)
         for base, _, names in os.walk(root):
             for name in names:
-                if name.endswith((".md", ".txt", ".json")):
+                # .log included. The validation evidence is all .log files --
+                # 37 of them, committed to a public repo -- and this scanned
+                # only .md, .txt and .json, so none had ever been checked.
+                # One carried a real availability zone in its header.
+                if name.endswith((".md", ".txt", ".json", ".log")):
                     found.append(os.path.join(base, name))
     return sorted(found)
 
@@ -369,3 +392,48 @@ def test_a_non_finite_score_fails_the_row(mock_env, monkeypatch):
     assert row["Status"] == "FAIL"
     assert row["Score"] is None
     assert "not a finite number" in row["Detail"]
+
+
+# -- the guard's own coverage ---------------------------------------------------
+
+def test_the_committed_scan_reaches_the_validation_logs():
+    """It scanned .md, .txt and .json only, so the 37 .log files of hardware
+    evidence -- committed to a public repo -- were never checked, and one held
+    a real availability zone. A scan that silently shrinks back is the same
+    gap, so its reach is asserted, not assumed."""
+    logs = [path for path in _committed_text_files() if path.endswith(".log")]
+    assert len(logs) >= 30, f"only {len(logs)} .log files scanned"
+
+
+@pytest.mark.parametrize("leak", [
+    "ssh ubuntu@98.92.72.25 'neuron-ls'",
+    "ready at 98.92.72.25",
+    "ip_address: 10.0.4.17",
+    "hostname ip-172-31-5-9.ec2.internal",
+    "ec2-98-92-72-25.compute-1.amazonaws.com",
+])
+def test_an_ip_in_the_forms_this_workflow_emits_is_caught(leak):
+    labels = [label for pattern, label in _IDENTIFIER_PATTERNS
+              if re.search(pattern, leak)]
+    assert labels, f"not caught: {leak!r}"
+
+
+@pytest.mark.parametrize("benign", [
+    "neuron-profile 2.28.23.0%kaena-tools/2.28@f1c114a built on 2026-02-19",
+    "neuronxcc 2.23.6484.0+3b612583 | torch 2.8.0+cu128",
+    "tensor_virus 78.654 TFLOPS, ratio 1.0074",
+])
+def test_a_version_string_is_not_an_ip(benign):
+    """The real neuron-profile line from a committed log, and the toolchain
+    banner. A privacy check that fires on these gets turned off."""
+    labels = [label for pattern, label in _IDENTIFIER_PATTERNS
+              if label.startswith(("IP", "EC2 hostname")) and re.search(pattern, benign)]
+    assert not labels, f"false positive on {benign!r}: {labels}"
+
+
+def test_a_report_value_carrying_a_zone_is_caught():
+    """_report_is_clean compared whole tokens against key names, so a zone
+    inside a Detail sentence passed."""
+    report = {"test_results": [{"Detail": "capture failed on us-east-1d host"}]}
+    with pytest.raises(AssertionError, match="availability zone"):
+        _report_is_clean(report, "planted")
