@@ -689,7 +689,15 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
         # repeat 1 and not repeat 3 was dropped with the last-repeat row: a
         # device shortfall, a consumer-bound read, a thin sample. Only a
         # failure propagated from the other repeats.
-        row["Detail"] = _repeat_details(rows, base)
+        # The wording comes from the repeat the row actually is. With an even
+        # count there is no median repeat, the row stays the last one -- and
+        # passing base=None let each warning's figures come from whichever
+        # repeat raised it first, so the Detail described repeat 1 beside the
+        # last repeat's Telemetry: two executions in one row, which is what
+        # basing the row on a single repeat exists to prevent. The list
+        # element, not the dict copy in `row`: matching is by identity.
+        row["Detail"] = _repeat_details(
+            rows, base if base is not None else rows[-1])
     row["Repeats"] = _spread(scores, len(rows))
     if scores and row["Status"] == "PASS":
         published = statistics.median(scores)
@@ -1174,8 +1182,13 @@ def quantised_agreement(spread, resolution) -> typing.Optional[str]:
         return None
     return (
         f"repeats agree to cv {cv:.4g} on a Score that one more completed "
-        f"unit would move by {resolution:.4g} -- the repeats landed on the "
-        "same integer, so this is the counter's resolution rather than the "
+        # "within one completed unit", not "landed on the same integer": the
+        # check sees only cv, and counts of 75, 76 and 75 fire it too. The
+        # conclusion holds for both -- one unit of variation is the counter's
+        # limit -- but the claim that the counts were identical does not.
+        f"unit would move by {resolution:.4g} -- the repeats sit within one "
+        "completed unit of each other, so this is the counter's resolution "
+        "rather than the "
         "workload's stability"
     )
 

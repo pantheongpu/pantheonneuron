@@ -197,6 +197,26 @@
           ],
           "failed": [],
           "skipped": []
+        },
+        {
+          "date": "2026-09-13",
+          "evidence": "data/validation-2026-09-13/trn1-full-pass-main.log",
+          "note": "--test all --duration 30 on merged main (dced318, through #12 and #13): 24 PASS (baseline_metrics not listed), 0 FAIL, 2 SKIPPED. Confirms #13's changes together in one run: elapsed_s is the loop window on every row including the aggregates (30.09, 30.05 s); monitor rows within 0.1% of their kernels except omni_virus's known 1.121; memory_read and memory_write by neuron-profile (273.12, 274.79 GB/s); kv_cache_churn 16 of 16 ring readings; allocation read-back 1.0; no neuron-monitor process or config file left after the pass.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher"
+          ]
         }
       ]
     },

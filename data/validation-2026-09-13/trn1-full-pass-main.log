@@ -1,0 +1,129 @@
+Full pass on merged main (dced318, i.e. through #12 and #13), trn1.2xlarge,
+2026-09-13: --test all --duration 30. Tree 902c8fb0, synced and hash-matched.
+
+26 rows: 24 PASS, 2 SKIPPED (all_reduce and p2p_thrasher need a second device),
+0 FAIL. One row shape, no non-finite fields.
+
+What this pass confirms for the changes merged in #13, together, in one run:
+
+  - elapsed_s is the measured window on every row -- including the aggregates,
+    whose rows now read 30.09 and 30.05 s (the loop) rather than the worker
+    phase.
+  - Every monitor-scored row carries the figure its Score replaced:
+    tensor_virus 0.9999, int_virus 1.0002, pulse_virus 1.0000 (sampled at its
+    2 s pulse period), transformer_virus 0.9992, graph_replay 1.0001, and
+    omni_virus 1.1206 -- the known ratio, its kernel counting only the two
+    matmuls of its chain.
+  - memory_read and memory_write reach neuron-profile (273.12 and 274.79 GB/s),
+    candidate counts 3 and 4, dma_active 0.938 and 0.882.
+  - kv_cache_churn: 16 of 16 ring readings landed.
+    allocation_fragmentation: retained block reads 1.0.
+  - monitor_unavailable is None on every row, and after the pass no
+    neuron-monitor process and no config file remained.
+
+Scores sit where the 2026-09-11 and 2026-09-12 runs put them.
+
+The instance was launched with instance-initiated shutdown set to terminate
+and a shutdown timer armed, so it could not outlive a lapsed AWS session; it
+was terminated directly once the pass finished.
+
+    === --test all --duration 30 (started 07:06:05)
+    exit 0 (finished 07:56:07)
+    [PANTHEON-NEURON] 1 device(s) [trn1], 26 workload(s)
+    [PANTHEON-NEURON] -> baseline_metrics
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.6% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.06% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> all_reduce
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] -> p2p_thrasher
+    [PANTHEON-NEURON]    SKIPPED (needs 2 devices, 1 selected)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    82.75% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> int_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> pulse_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    85.64% of 47.5 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> transformer_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    56.01% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> omni_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    56.79% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.04% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.42% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> pcie_bandwidth
+    [PANTHEON-NEURON]    PASS (d2h ran at 1.1 GB/s against 6.2 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s u
+    [PANTHEON-NEURON] -> llm_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> llm_prefill
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> kv_cache_churn
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> fused_attention
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> quantized_gemm
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> serving_mix
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> speculative_decode
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> moe_router
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> transformer_train_step
+    [PANTHEON-NEURON]    PASS (the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimis
+    [PANTHEON-NEURON] -> allocation_fragmentation
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> graph_replay
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> rag_embedding
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] -> vision_encoder
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260913_070928.json
+    
+    === rows: 26 {'PASS': 24, 'SKIPPED': 2}
+        non_finite_fields: None
+        distinct row shapes: 1
+      baseline_metrics         PASS                    None                      None                   period=None mon_unavail=None {}
+      memory_read_agg          PASS                542.3926 GB/s                 workload               period=1.0 mon_unavail=None {'elapsed_s': 30.090522659000044}
+      memory_write_agg         PASS                537.6323 GB/s                 workload               period=1.0 mon_unavail=None {'elapsed_s': 30.045390701000088}
+      all_reduce               SKIPPED                 None GB/s                 None                   period=None mon_unavail=None {}
+          Detail: needs 2 devices, 1 selected
+      p2p_thrasher             SKIPPED                 None GB/s                 None                   period=None mon_unavail=None {}
+          Detail: needs 2 devices, 1 selected
+      tensor_virus             PASS                 78.6124 TFLOPS               neuron-monitor         period=1.0 mon_unavail=None {'elapsed_s': 30.038974647000032, 'declared_over_kernel': 0.9999}
+      int_virus                PASS                 78.8619 TOPS                 neuron-monitor         period=1.0 mon_unavail=None {'elapsed_s': 30.03843262700002, 'declared_over_kernel': 1.0002}
+      pulse_virus              PASS                 40.6813 TFLOPS               neuron-monitor         period=2.0 mon_unavail=None {'elapsed_s': 30.000449431000106, 'declared_over_kernel': 1.0}
+      transformer_virus        PASS                 53.2114 TFLOPS               neuron-monitor         period=1.0 mon_unavail=None {'elapsed_s': 30.045946489000016, 'declared_over_kernel': 0.9992}
+      omni_virus               PASS                 53.9468 TFLOPS               neuron-monitor         period=1.0 mon_unavail=None {'elapsed_s': 30.101884658000017, 'declared_over_kernel': 1.1206}
+      memory_read              PASS                273.1181 GB/s                 neuron-profile         period=1.0 mon_unavail=None {'elapsed_s': 30.086878211999874, 'profiler_candidates_available': 3, 'dma_active': 0.9376986645637201}
+      memory_write             PASS                274.7914 GB/s                 neuron-profile         period=1.0 mon_unavail=None {'elapsed_s': 30.04097565899997, 'profiler_candidates_available': 4, 'dma_active': 0.882112594814383}
+      pcie_bandwidth           PASS                  3.7123 GB/s                 workload               period=1.0 mon_unavail=None {'elapsed_s': 30.08102490500005}
+          Detail: d2h ran at 1.1 GB/s against 6.2 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s pas
+      llm_decode               PASS                 17.4884 tokens/s             workload               period=1.0 mon_unavail=None {'elapsed_s': 30.134285847}
+      llm_prefill              PASS               3810.9511 prompt-tokens/s      workload               period=1.0 mon_unavail=None {'elapsed_s': 31.169121717999815}
+      kv_cache_churn           PASS              97184.3328 cache-updates/s      workload               period=1.0 mon_unavail=None {'elapsed_s': 30.005824147999874, 'ring_readings_landed': 16}
+      fused_attention          PASS               6044.7253 attention-tiles/s    workload               period=1.0 mon_unavail=None {'elapsed_s': 30.010958553000364}
+      quantized_gemm           PASS      18446644076107.535 quantized-ops/s      workload               period=1.0 mon_unavail=None {'elapsed_s': 30.018551952000053}
+      serving_mix              PASS                  2.4775 requests/s           workload               period=1.0 mon_unavail=None {'elapsed_s': 30.272692834999816}
+      speculative_decode       PASS                  73.737 verified-tokens/s    workload               period=1.0 mon_unavail=None {'elapsed_s': 30.161238383000182}
+      moe_router               PASS             254446.9905 routed-tokens/s      workload               period=1.0 mon_unavail=None {'elapsed_s': 30.03822518600009}
+      transformer_train_step   PASS                  3.6437 train-steps/s        workload               period=1.0 mon_unavail=None {'elapsed_s': 30.738026764000097}
+          Detail: the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and 
+      allocation_fragmentation PASS               2238.5877 allocation-events/s  workload               period=1.0 mon_unavail=None {'elapsed_s': 17.868408372999966, 'retained_element': 1.0}
+      graph_replay             PASS               2995.9184 graph-steps/s        neuron-monitor         period=1.0 mon_unavail=None {'elapsed_s': 30.000829962999887, 'declared_over_kernel': 1.0001}
+      rag_embedding            PASS                854.7753 embedding-vectors/s  workload               period=1.0 mon_unavail=None {'elapsed_s': 30.17401031999998}
+      vision_encoder           PASS              58197.3151 image-tiles/s        workload               period=1.0 mon_unavail=None {'elapsed_s': 30.686226615000123}
+    === neuron-monitor processes left: 0; config files left: 0

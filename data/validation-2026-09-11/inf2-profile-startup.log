@@ -1,4 +1,4 @@
-# inf2.xlarge (us-east-1d), 2026-09-11 UTC. The profiler startup on the other part.
+# inf2.xlarge, 2026-09-11 UTC. The profiler startup on the other part.
 # --duration 20, one run each, same tree as trn1-full-pass.log section 2.
 # PREDICTED: the same ~2 ms startup; Scores within a few percent of the wall clock.
 
