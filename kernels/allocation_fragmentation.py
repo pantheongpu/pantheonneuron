@@ -100,6 +100,42 @@ def size_sequence(problem: typing.Mapping[str, typing.Any]) -> typing.List[int]:
     return sizes
 
 
+def _retained_value(retained) -> typing.Optional[float]:
+    """One element of the oldest retained block, or None if unreadable."""
+    if not retained:
+        return None
+    block, _ = retained[0]
+    try:
+        return float(block.reshape(-1)[0])
+    except Exception:  # broad: materialisation failed; leave unverified
+        return None
+
+
+def verify_allocations_landed(held: typing.Optional[float],
+                              retained_blocks: int) -> typing.Optional[str]:
+    """Say so when the retained blocks are not holding what was put in them.
+
+    The Score counts allocation calls. A call that allocated nothing, or a
+    block the runtime never materialised, counts the same -- so the rate
+    would be a measure of how fast this loop can ask, not of what the
+    device did. Every block is filled with ones, so one element of one
+    surviving block settles it.
+    """
+    if not retained_blocks:
+        return "no block survived the churn, so nothing can be read back"
+    if held is None:
+        return (
+            "a retained block could not be read back, so these allocations "
+            "are counted but not shown to have reached the device"
+        )
+    if held != 1.0:
+        return (
+            f"a retained block reads {held:g} where it was filled with 1 -- "
+            "the allocation did not hold what was written to it"
+        )
+    return None
+
+
 def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     """Churn device allocations and return the event rate.
 
@@ -197,6 +233,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # the reader to assume it was thirty.
     bounded_by = "allocations" if events >= len(sizes) else "duration"
 
+    # One retained block, read back. Every other kernel in this suite proves
+    # its work reached the device -- a product, a stack's depth, a cache
+    # slot, a replay chain -- and this one asserted nothing at all: the
+    # count of allocations it publishes is a count of calls it made, and a
+    # call that allocated nothing looks exactly the same from here. A
+    # retained block still holding the ones it was filled with is the
+    # cheapest evidence that these are device allocations.
+    held = _retained_value(retained)
+
     return {
         # Named to match the registry's declared formula,
         # `allocation_events / elapsed_s`. It was "events", so the counter
@@ -207,11 +252,14 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         "elapsed_s": elapsed,
         "allocation_events_per_s": events / elapsed if elapsed else 0.0,
         "retained_blocks": len(retained),
+        "retained_element": held,
         "live_bytes": live_bytes,
         "score_method": "workload",
         "analytic_basis": "allocation events / wall time",
-        "warning": failure or verify_window_is_long_enough(
-            elapsed, duration, bounded_by),
+        "warning": failure or verify_allocations_landed(held, len(retained))
+        or verify_window_is_long_enough(elapsed, duration, bounded_by),
+        "score_invalid": bool(
+            failure or verify_allocations_landed(held, len(retained))),
         "requested": len(sizes),
         "bounded_by": bounded_by,
         "measured_window_s": round(elapsed, 3),

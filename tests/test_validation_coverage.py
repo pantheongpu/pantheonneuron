@@ -13,6 +13,7 @@ adding it to the pass fails the build rather than quietly going unrun.
 
 import os
 import re
+import pathlib
 
 import pytest
 
@@ -518,3 +519,18 @@ def test_the_privacy_guard_does_not_depend_on_finding_a_file():
     assert "def test_a_freshly_written_report_is_clean" in source
     assert "write_report(" in source
     assert "the run wrote no report, so nothing was checked" in source
+
+
+def test_the_readme_index_counts_the_catalogue_correctly():
+    """It said "Ten of them" while the catalogue held twenty-eight. The
+    index is the first thing a reader meets, and a count that drifts is a
+    claim about the repo that the repo contradicts."""
+    catalogue = pathlib.Path("docs/checks_that_pass_by_accident.md").read_text(
+        encoding="utf-8")
+    entries = len(re.findall(r"^### (\d+)\. ", catalogue, re.MULTILINE))
+    readme = pathlib.Path("README.md").read_text(encoding="utf-8")
+    line = next(line for line in readme.splitlines()
+                if "checks_that_pass_by_accident.md" in line and line.startswith("|"))
+    assert f"| {entries} of them" in line, (
+        f"the index says {line.split('|')[2].strip()[:40]!r}, the catalogue "
+        f"has {entries} entries")
