@@ -492,6 +492,27 @@ def test_the_comparison_tool_exists_and_verifies_before_it_divides():
     del raw
 
 
+def test_the_xla_half_verifies_its_timed_product_not_its_warm_up():
+    """The XLA half read one element of the warm-up pass and called that
+    "exact"; the timed loop's product was read back and discarded. So a loop
+    the compiler elided, or a graph that went wrong after its first pass,
+    still reported exact -- while the NKI half checked its timed product at
+    every row-tile. Read as code, because CI cannot run torch_xla."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "tools", "compare_matmul_paths.py")
+    spec = importlib.util.spec_from_file_location("compare_matmul_paths", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    code = sourcecheck.function_code(module.xla_matmul)
+
+    loop = code.index("while time . perf_counter ( ) < started + DURATION")
+    read = code.index('host = sink . to ( "cpu" )')
+    assert loop < read, "the product must be read after the timed loop"
+    assert "product_elements_wrong ( host , n )" in code, "the whole product"
+    assert '"exact" : wrong == 0' in code
+    assert "float ( warm [ 0 ] [ 0 ]" not in code, "the warm-up decided exact"
+
+
 def _finding_doc():
     """The headline document, with line wrapping normalised away.
 
