@@ -230,3 +230,23 @@ def test_a_second_runtime_does_not_halve_the_rate():
 def test_the_summed_total_is_unchanged_by_the_regrouping():
     samples = [{"neuron_runtime_data": [_runtime(7), _runtime(3)]}]
     assert _monitor(samples).aggregate()["executions_total"] == 10
+
+
+# -- a line that parses but is not a sample ----------------------------------
+
+def test_a_line_that_is_valid_json_but_not_an_object_is_not_a_sample():
+    """json.loads accepts "0" and "[]", and _scrub passes them through, so
+    they reached aggregate()'s sample.get() and raised out of stop()."""
+    import io
+
+    monitor = NeuronMonitor(mock=True)
+
+    class _Process:
+        stdout = io.StringIO('0\n[]\n"x"\n{"neuron_runtime_data": []}\n')
+
+    monitor._process = _Process()
+    monitor._loop()
+
+    assert len(monitor._samples) == 1
+    assert isinstance(monitor._samples[0], dict)
+    monitor.aggregate()   # must not raise

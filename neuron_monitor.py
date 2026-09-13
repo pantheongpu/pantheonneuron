@@ -506,6 +506,15 @@ class NeuronMonitor:
             except json.JSONDecodeError:
                 self._warn_once("parse", "skipped malformed neuron-monitor sample")
                 continue
+            # An object, or nothing. json.loads accepts a bare number, string
+            # or list, and _scrub passes those through unchanged, so a stray
+            # "0" or "[]" line used to land in _samples -- where aggregate()
+            # calls sample.get() on it and raises out of stop(), taking the
+            # row and, before main() contained it, the whole run's report.
+            if not isinstance(sample, dict):
+                self._warn_once(
+                    "shape", "skipped a neuron-monitor line that was not a JSON object")
+                continue
             self._samples.append(_scrub(sample))
             self._sample_times.append(time.monotonic())
 
