@@ -333,7 +333,23 @@ def test_a_cv_far_below_the_resolution_is_quantisation():
     message = pantheon_neuron.quantised_agreement({"cv": 0.0001}, 1 / 149)
     assert message is not None
     assert "resolution" in message
-    assert "same integer" in message
+    assert "within one completed unit" in message
+
+
+def test_counts_one_unit_apart_fire_it_without_claiming_they_were_equal():
+    """The check sees cv, not the counts. Requests of 75, 76 and 75 over the
+    same 60 s sit within one unit of each other -- the counter's limit, so
+    the warning is right to fire -- but they did not land on the same
+    integer, which is what the message used to say."""
+    scores = [75 / 60, 76 / 60, 75 / 60]
+    spread = pantheon_neuron._spread(scores, attempted=3)
+    resolution = 1 / 75
+    assert spread["cv"] < resolution, "the off-by-one case must reach the check"
+
+    message = pantheon_neuron.quantised_agreement(spread, resolution)
+    assert message is not None
+    assert "within one completed unit" in message
+    assert "same integer" not in message
 
 
 def test_a_continuous_score_is_never_accused():
