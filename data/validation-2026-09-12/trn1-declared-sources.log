@@ -1,0 +1,66 @@
+The aggregates' declared source, the capture that was never possible, and the
+counters a row has to carry -- trn1.2xlarge 2026-09-12.
+
+What changed:
+  - memory_read_agg and memory_write_agg declared neuron-profile. A capture
+    replays the NEFF and needs a NeuronCore of its own; an aggregate gives
+    every core to a worker and each worker holds the one core it can see, so
+    no capture inside a worker can ever succeed. They now declare what they
+    measure: summed bytes over the longest worker's elapsed_s.
+  - memory_read and memory_write attempt a capture only when a core was
+    reserved for it. Before, a worker spent a subprocess per candidate NEFF
+    to reach "Logical Neuron Core(s) not available" and put it in the row.
+  - _provenance records the counters the registry declares, so the Score can
+    be recomputed from the row. Eleven workloads' numerators never reached
+    one.
+
+    3
+    === --test memory --duration 20 (started 12:40:20)
+    [PANTHEON-NEURON] 1 device(s) [trn1], 4 workload(s)
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.76% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.03% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.99% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.26% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260912_124352.json
+        finished 13:00:23
+      memory_read_agg: PASS Score=543.7791 GB/s method=workload
+        Measurement keys: ['analytic_gbps', 'barrier_all_ready', 'bytes_moved', 'concurrent_window_s', 'cores_reporting', 'elapsed_s', 'worker_span_s']
+      memory_write_agg: PASS Score=537.3877 GB/s method=workload
+        Measurement keys: ['analytic_gbps', 'barrier_all_ready', 'bytes_moved', 'concurrent_window_s', 'cores_reporting', 'elapsed_s', 'worker_span_s']
+      memory_read: PASS Score=272.8991 GB/s method=neuron-profile
+        Measurement keys: ['analytic_gbps', 'consumer_engine_active', 'dma_active', 'hbm_read_bytes', 'profiler_candidates_available', 'profiler_candidates_tried', 'profiler_neff', 'profiler_plan_coverage', 'profiler_startup_s', 'profiler_time_basis', 'profile
+      memory_write: PASS Score=274.0779 GB/s method=neuron-profile
+        Measurement keys: ['analytic_gbps', 'hbm_read_bytes', 'hbm_write_bytes', 'profiler_candidates_available', 'profiler_candidates_tried', 'profiler_neff', 'profiler_plan_coverage', 'profiler_startup_s', 'profiler_time_basis', 'profiler_total_time_s', 'wri
+    === --test kv_cache_churn --duration 15 (started 13:00:23)
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> kv_cache_churn
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260912_130027.json
+        finished 13:01:35
+      kv_cache_churn: PASS Score=97373.3722 cache-updates/s method=workload
+        Measurement keys: ['cache_element', 'cache_fill', 'cache_gbps', 'cache_updates', 'elapsed_s', 'entry_fill', 'ring_readings_checked', 'ring_readings_landed', 'ring_slots_expected']
+    === per-core worker detail from the last aggregate report
+      memory_read_agg: bytes_moved=10917806866432 cores_reporting=2 window=20.06790828704834 span=20.07765222499995 barrier=True
+      memory_write_agg: bytes_moved=10771777978368 cores_reporting=2 window=20.04084539413452 span=20.044705508999982 barrier=True
+
+The aggregate Score recomputed from its own row, which is the point of the
+declaration:
+
+    read :  10917806866432 bytes / 20.07765 s / 1e9 = 543.7791 GB/s   (row: 543.7791)
+    write:  10771777978368 bytes / 20.04471 s / 1e9 = 537.3877 GB/s   (row: 537.3877)
+
+Unchanged by any of it: 543.78 and 537.39 GB/s against 542.4-543.1 and
+536.4-537.4 on earlier runs; memory_read 272.90 and memory_write 274.08 by
+neuron-profile, which is the point of the gate -- the single-core kernels
+still reach the profiler, because the orchestrator reserves them a core.
+kv_cache_churn 97373 cache-updates/s against 97138-97297 before.
