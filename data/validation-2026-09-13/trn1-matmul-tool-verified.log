@@ -1,0 +1,43 @@
+tools/compare_matmul_paths.py after the XLA-verification fix, trn1.2xlarge,
+2026-09-13. Run exactly as the README tells a reader to:
+python tools/compare_matmul_paths.py (8192^3 bf16, 25 s each, one process).
+
+The fix: the XLA half used to call its product "exact" from one element of the
+warm-up pass, and threw the timed loop's product away. It now reads the timed
+loop's last product back whole after the clock stops and checks every element
+against K. The synced tool below is the patched one (md5 a8bb2609, and its
+product_elements_wrong definition present).
+
+    remote tool md5 a8bb2609
+    === synced tool carries the fix: 1 (expect 1)
+    === python tools/compare_matmul_paths.py (started 13:01:25)
+    ....
+    8192^3 bf16, 25s each, one process
+                  path    TFLOPS   passes        product  exact
+    Neuron NKI - Kernel call: tensor_virus_coalesced(lhs_t = Tensor(shape: (8192, 8192), dtype: bfloat16), rhs = Tensor(shape: (8192, 8192), dtype: bfloat16))
+      NKI tensor_virus     78.03     1777            1.0   True
+      device = xm.xla_device()
+      xm.mark_step()
+      xm.mark_step()
+    ..
+      xm.mark_step()
+      XLA torch.matmul     66.20     1508         8192.0   True
+    verdict
+      XLA is 0.85x the NKI kernel at a matched shape.
+      No meaningful gap: the headline figure and the compiler agree on what this part does.
+    exit 0 (finished 13:07:43)
+
+What the run shows:
+
+  - Both halves exact under the new standard. For XLA, exact True now means
+    every one of the 8192^2 elements of the timed product equals 8192 -- not
+    one corner of the warm-up.
+  - XLA torch.matmul 66.20 TFLOPS, against 66.25 and 66.32 recorded on
+    2026-09-10. Reading the whole product back after the timed loop did not
+    move the timed figure.
+  - NKI tensor_virus 78.03 TFLOPS, row-tiles checked. XLA is 0.85x the kernel:
+    no meaningful gap by the tool's 1.2x band, the NKI kernel ahead -- the
+    coalesced tiling's result, as the tool's docstring records.
+
+The instance launched with instance-initiated shutdown set to terminate and a
+shutdown timer armed, and was terminated directly once the run finished.
