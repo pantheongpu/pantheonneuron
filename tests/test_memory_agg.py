@@ -6,6 +6,8 @@ the time along with the bytes, which would report roughly one core's
 bandwidth as the whole part's.
 """
 
+import pytest
+
 import pantheon_neuron
 import sourcecheck
 from kernels import cores, memory_agg, registry
@@ -425,3 +427,37 @@ def test_both_kernels_bracket_their_loop_and_take_the_hook():
         assert hook < code.index("loop_started_at = time . time ( )") < code.index(
             "started = time . perf_counter ( )"), module.__name__
         assert '"loop_finished_at" : loop_finished_at' in code, module.__name__
+
+
+# -- the row's elapsed_s is the window its Score divides by --------------------
+
+def test_the_aggregate_row_recomputes_from_its_own_elapsed_s():
+    """elapsed_s carried the whole worker phase -- 577.4 s beside a 20 s loop
+    on trn1.2xlarge 2026-09-13 -- under the name every single-core kernel
+    uses for its timed loop, so bytes over elapsed_s did not give the Score."""
+    workers = [
+        {"core": 0, "bytes_requested": 5 << 30, "elapsed_s": 20.0,
+         "analytic_gbps": 1.0, "read_verified_ratio": 1.0},
+        {"core": 1, "bytes_requested": 5 << 30, "elapsed_s": 20.5,
+         "analytic_gbps": 1.0, "read_verified_ratio": 1.0},
+    ]
+    summary = memory_agg.summarise(workers, [], 577.4, 2, "read")
+
+    assert summary["elapsed_s"] == 20.5, "the longest loop, not the phase"
+    assert summary["phase_elapsed_s"] == 577.4
+    assert summary["worker_span_s"] == summary["elapsed_s"]
+    assert summary["analytic_gbps"] == pytest.approx(
+        summary["bytes_moved"] / summary["elapsed_s"] / 1e9)
+
+
+def test_short_window_can_now_see_an_aggregate_that_ran_short():
+    """577 s of phase always cleared half of --duration, so the check that
+    says a run was bounded by something other than the clock was blind to
+    aggregates. Their loop span is what it has to judge."""
+    import pantheon_neuron
+
+    workers = [{"core": c, "bytes_requested": 1 << 30, "elapsed_s": 4.0,
+                "analytic_gbps": 1.0, "read_verified_ratio": 1.0} for c in (0, 1)]
+    summary = memory_agg.summarise(workers, [], 577.4, 2, "read")
+
+    assert pantheon_neuron.short_window(summary["elapsed_s"], 20) is not None

@@ -399,8 +399,19 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         "score_invalid": (bool(failures) or len(results) < core_count
                           or _no_overlap_at_all(results, span)),
         "bytes_moved": total_bytes,
-        "elapsed_s": elapsed,
+        # The measured window, not the phase around it. This carried the
+        # whole worker phase -- spawn, compile, warm-up, loop -- under the
+        # same name every single-core kernel uses for its timed loop. On
+        # trn1.2xlarge 2026-09-13 memory_read_agg's row read elapsed_s 577.4
+        # beside a 20 s loop, so the declared formula (bytes over elapsed_s)
+        # did not recompute from its own row, and short_window, which reads
+        # elapsed_s, could never see an aggregate whose loops ran short: 577
+        # always clears half of --duration.
+        "elapsed_s": span,
+        # Kept under its old name, equal to elapsed_s, for readers of
+        # earlier reports.
         "worker_span_s": span,
+        "phase_elapsed_s": elapsed,
         # The window in which every worker was inside its timed loop. An
         # aggregate is a claim about cores loading memory *at the same
         # time*, and summed bytes over the longest span cannot tell a
