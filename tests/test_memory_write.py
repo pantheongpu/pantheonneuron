@@ -178,3 +178,14 @@ def test_a_narrow_store_profile_is_refused_by_the_tolerance():
     the wall clock. Active time is not the whole story for many small
     DMAs, and the analytic cross-check is what says so."""
     assert memory_write.verify_against_analytic(229.0, 69.4) is not None
+
+
+def test_the_write_profile_records_which_side_set_the_rate():
+    """memory_read has recorded this since 2026-09-10, when a heavier
+    consumer halved its bandwidth with every byte still read and only
+    these counters said so. The write path could not answer the question."""
+    import sourcecheck
+
+    code = sourcecheck.flat_function_code(memory_write._profile)
+    assert '"dma_active" : counters . get ( "dma_active_time_percent" )' in code
+    assert "vector_engine_active_time_percent" in code

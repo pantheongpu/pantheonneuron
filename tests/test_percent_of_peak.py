@@ -254,8 +254,9 @@ def test_the_console_prints_the_share_and_flags_an_unverified_peak(capsys):
 
 def test_the_console_block_exists_in_the_run_loop():
     """The test above exercises the arithmetic; this asserts the loop
-    actually does it, which is the half a copy of the code cannot show."""
-    source = sourcecheck.flat_function_code(pantheon_neuron.main)
+    actually does it, which is the half a copy of the code cannot show.
+    The loop is _run_selection, which main() delegates to."""
+    source = sourcecheck.flat_function_code(pantheon_neuron._run_selection)
     assert '"Percent Of Peak"' in source
     assert "peak unverified" in source
 
@@ -263,7 +264,7 @@ def test_the_console_block_exists_in_the_run_loop():
 def test_a_verified_peak_would_drop_the_caveat():
     """So the caveat disappears on its own when someone checks the
     datasheet, rather than needing a second edit to remove."""
-    source = sourcecheck.flat_function_code(pantheon_neuron.main)
+    source = sourcecheck.flat_function_code(pantheon_neuron._run_selection)
     assert 'if share . get ( "peak_verified" )' in source
 
 

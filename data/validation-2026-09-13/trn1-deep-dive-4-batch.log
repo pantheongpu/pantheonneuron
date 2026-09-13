@@ -1,0 +1,106 @@
+The fix/deep-dive-4 batch on trn1.2xlarge, 2026-09-13 (tree e542ac79, i.e. through
+d59f00f): the measured window on every row, memory_write's DMA and engine counters,
+the true NEFF candidate total, and allocation_fragmentation's device read-back.
+
+What each change shows here:
+
+  - elapsed_s on every row. memory_read reads 20.07 s of loop beside a
+    Duration of 314.72 s -- the gap the field exists to expose.
+  - memory_write's side of "which side set the rate": dma_active 0.883,
+    vector_engine_active 0.0000226. The write path is DMA-bound; the producer
+    is essentially idle. (memory_read: dma 0.938, consumer engine 0.650.)
+    Recorded, not interpreted in code.
+  - profiler_candidates_available 3 and 4, matching the NEFFs actually present
+    in each kernel's directory (listed at the end). Both are under the
+    16-candidate budget, so the above-budget case -- where the old count capped
+    at 16 against 63 present -- is not exercised by this run; the unit tests
+    cover it. What this shows is that an in-budget count is unchanged.
+  - allocation_fragmentation: retained_element 1.0 across 832 surviving blocks;
+    the allocations reached the device, and the row passes at 2418.8 events/s.
+  - Scores unchanged: 543.68 / 536.57 / 273.04 / 274.44 GB/s against
+    543.78 / 537.39 / 272.90 / 274.08 on 2026-09-12.
+
+Found by this run: the aggregates' elapsed_s was the whole worker phase
+(577.4 s on memory_read_agg beside a 20 s loop), not the window the Score
+divides by -- fixed in the commit this log accompanies.
+
+    1
+    === --test memory --duration 20 (started 04:57:40)
+    [PANTHEON-NEURON] 1 device(s) [trn1], 4 workload(s)
+    [PANTHEON-NEURON] -> memory_read_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    61.75% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write_agg
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    60.94% of 880.5 GB/s across 2 of 2 core(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> memory_read
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.02% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] -> memory_write
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    62.34% of 440.25 GB/s across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260913_050050.json
+        finished 05:17:20
+      memory_read_agg: PASS Score=543.6754 GB/s method=workload
+        elapsed_s=577.407629266  Duration(s)=577.41
+      memory_write_agg: PASS Score=536.5711 GB/s method=workload
+        elapsed_s=43.29619715500007  Duration(s)=43.3
+      memory_read: PASS Score=273.0446 GB/s method=neuron-profile
+        elapsed_s=20.070859092999854  Duration(s)=314.72
+        profiler_candidates_tried=2
+        profiler_candidates_available=3
+        dma_active=0.9376701650434799
+        consumer_engine_active=0.6504508859623697
+      memory_write: PASS Score=274.4402 GB/s method=neuron-profile
+        elapsed_s=20.04144218400006  Duration(s)=51.2
+        profiler_candidates_tried=3
+        profiler_candidates_available=4
+        dma_active=0.8826119740102841
+        vector_engine_active=2.2612064479299524e-05
+    === --test allocation_fragmentation --duration 20 (started 05:17:20)
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> allocation_fragmentation
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260913_051724.json
+        finished 05:18:02
+      allocation_fragmentation: PASS Score=2418.7962 allocation-events/s method=workload
+        elapsed_s=16.537151732999973  Duration(s)=36.5
+        retained_element=1.0
+        retained_blocks=832
+        allocation_events=40000
+    === NEFFs actually present in each kernel's compile directory
+      /tmp/pantheon_ccwork/memory_read: 3
+      /tmp/pantheon_ccwork/memory_write: 4
+
+--------------------------------------------------------------------------------
+Then the monitor's start/shutdown change (4ff4f13), against the real neuron-monitor
+binary on the same instance, tree 902c8fb0 (through 4ff4f13):
+
+  Every test runs the mock monitor, which has no process, so the pipe and
+  cleanup half of that change had only met a stand-in subprocess. Here it meets
+  neuron-monitor itself.
+
+    1
+    === neuron-monitor processes before: 0
+    === --test tensor_virus --duration 15 (started 05:18:16)
+    [PANTHEON-NEURON] 1 device(s) [trn1], 1 workload(s)
+    [PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+    [PANTHEON-NEURON] -> tensor_virus
+    [PANTHEON-NEURON]    PASS
+    [PANTHEON-NEURON]    82.79% of 95.0 TFLOPS across 1 of 2 core(s)
+    [PANTHEON-NEURON] report: /home/ubuntu/pn/database/pantheon_neuron_report_20260913_051820.json
+        finished 05:19:16
+      tensor_virus: PASS Score=78.654 TFLOPS method=neuron-monitor
+        samples=55 sample_period_s=1.0 whole_periods=13
+        monitor_unavailable=None  (expect None)
+        kernel_figure=78.0767 declared_over_kernel=1.0074 elapsed_s=15.040066361000072
+    === neuron-monitor processes after: 0  (expect 0: stop() reaped it)
+    === pantheon config files left in /tmp: 0  (expect 0)
+
+  Telemetry populated normally (55 samples at 1.0 s, 13 whole periods, the
+  Score from neuron-monitor within 0.74% of the kernel's own figure), and
+  monitor_unavailable is None. After stop(): no neuron-monitor process left and
+  no config file left in /tmp -- the pipe closed, the process reaped, the
+  release path working on the real binary.

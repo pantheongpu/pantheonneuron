@@ -67,6 +67,14 @@ jobs:
         # how one reached a commit.
         run: python -m pytest tests/ -q
 
+      - name: Run tests in reversed file order
+        # Forward order alone is how an order-dependent suite stays green.
+        # A test left NEURON_RT_VISIBLE_CORES pinned to one core, and forward
+        # order happened to run every reader of that variable before the
+        # writer; reversed, tensor_virus's ceiling read 95 against 190. See
+        # tests/conftest.py. This is the run that would have shown it.
+        run: python -m pytest $(ls tests/test_*.py | sort -r) -q
+
       - name: Mock end-to-end run
         env:
           PANTHEON_NEURON_MOCK: "1"
