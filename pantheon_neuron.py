@@ -1174,8 +1174,13 @@ def quantised_agreement(spread, resolution) -> typing.Optional[str]:
         return None
     return (
         f"repeats agree to cv {cv:.4g} on a Score that one more completed "
-        f"unit would move by {resolution:.4g} -- the repeats landed on the "
-        "same integer, so this is the counter's resolution rather than the "
+        # "within one completed unit", not "landed on the same integer": the
+        # check sees only cv, and counts of 75, 76 and 75 fire it too. The
+        # conclusion holds for both -- one unit of variation is the counter's
+        # limit -- but the claim that the counts were identical does not.
+        f"unit would move by {resolution:.4g} -- the repeats sit within one "
+        "completed unit of each other, so this is the counter's resolution "
+        "rather than the "
         "workload's stability"
     )
 
