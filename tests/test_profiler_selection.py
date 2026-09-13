@@ -278,6 +278,8 @@ def test_exhausting_the_search_says_what_every_candidate_reported(monkeypatch):
 
 
 def test_exhausting_a_capped_search_says_how_to_look_further(monkeypatch):
+    """The hint, and the true total: the budget let MAX_CANDIDATES through
+    of more on the machine, so there is somewhere further to look."""
     planned = 8 << 30
     paths = [f"/tmp/{index}.neff" for index in range(profiler.MAX_CANDIDATES)]
     fake = _FakeCaptures({p: {"hbm_read_bytes": 4, "total_time": 1e-4}
@@ -285,9 +287,54 @@ def test_exhausting_a_capped_search_says_how_to_look_further(monkeypatch):
     monkeypatch.setattr(profiler, "read_counters", fake)
 
     with pytest.raises(profiler.ProfilerUnavailable) as raised:
-        profiler.select_by_plan(paths, "/tmp/s.ntff", "read", planned)
+        profiler.select_by_plan(paths, "/tmp/s.ntff", "read", planned,
+                                available=profiler.MAX_CANDIDATES + 47)
 
-    assert profiler.CANDIDATES_ENV in str(raised.value)
+    message = str(raised.value)
+    assert profiler.CANDIDATES_ENV in message
+    assert f"of {profiler.MAX_CANDIDATES + 47} found" in message
+
+
+def test_a_search_that_covered_everything_does_not_suggest_looking_further(monkeypatch):
+    """The hint fired whenever the list reached the budget -- including when
+    the budget was exactly everything on the machine, where raising it
+    searches nothing new."""
+    planned = 8 << 30
+    paths = [f"/tmp/{index}.neff" for index in range(profiler.MAX_CANDIDATES)]
+    fake = _FakeCaptures({p: {"hbm_read_bytes": 4, "total_time": 1e-4}
+                          for p in paths})
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    with pytest.raises(profiler.ProfilerUnavailable) as raised:
+        profiler.select_by_plan(paths, "/tmp/s.ntff", "read", planned,
+                                available=profiler.MAX_CANDIDATES)
+
+    assert profiler.CANDIDATES_ENV not in str(raised.value)
+
+
+def test_candidate_search_reports_what_the_budget_hid(tmp_path):
+    """trn1.2xlarge 2026-09-11: 63 NEFFs in the directory, and the row said
+    "none of 16". The count has to come from before the truncation."""
+    for index in range(profiler.MAX_CANDIDATES + 4):
+        _neff(str(tmp_path / f"m{index}" / "model.neff"), 1000 + index)
+
+    searched, available = profiler.candidate_search(str(tmp_path))
+
+    assert len(searched) == profiler.MAX_CANDIDATES
+    assert available == profiler.MAX_CANDIDATES + 4
+
+
+def test_a_found_graph_reports_the_true_total_as_available(monkeypatch):
+    planned = 8 << 30
+    fake = _FakeCaptures({"/tmp/a.neff": {"hbm_read_bytes": planned,
+                                          "total_time": 1.0}})
+    monkeypatch.setattr(profiler, "read_counters", fake)
+
+    found = profiler.select_by_plan(["/tmp/a.neff"], "/tmp/s.ntff", "read",
+                                    planned, available=63)
+
+    assert found["candidates_available"] == 63
+    assert found["candidates_tried"] == 1
 
 
 def test_an_empty_candidate_list_is_refused():

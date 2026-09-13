@@ -321,9 +321,14 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
     is actually ours. The plan check used to run once against a single
     guess and reject it; it now selects. See ``profiler.select_by_plan``.
     """
-    candidates = profiler.find_neffs(workdir, since=since)
+    # The searched list and the true total. find_neffs truncates to the
+    # candidate budget, and the row used to count the truncated list: on
+    # trn1.2xlarge 2026-09-11 a directory holding 63 NEFFs was reported as
+    # "none of 16", which hid the very pollution that was the problem.
+    candidates, available = profiler.candidate_search(workdir, since=since)
     session = os.path.join(workdir, "memory_write.ntff")
-    found = profiler.select_by_plan(candidates, session, "write", planned_bytes)
+    found = profiler.select_by_plan(candidates, session, "write", planned_bytes,
+                                    available=available)
     counters = found["counters"]
     return {
         "profiler_gbps": profiler.bandwidth_gbps(counters, "write"),
