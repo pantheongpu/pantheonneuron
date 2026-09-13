@@ -31,6 +31,13 @@ settled anything.
 Both sides verify their product. A fast kernel that computes the wrong
 thing is not a fast kernel, and the ratio between a correct kernel and a
 rounded one means nothing at all.
+
+**Until 2026-09-13 the XLA half verified its warm-up, not its measurement.**
+It read one element of the pass that compiled the graph, and read the timed
+loop's product back without comparing it. The NKI half has always checked its
+timed product at every row-tile. The XLA figures recorded before then are
+throughput a warm-up pass was shown to compute correctly; the XLA half now
+checks every element of its timed product, the same standard as the NKI half.
 """
 
 import os
@@ -57,14 +64,15 @@ def xla_matmul():
     lhs = torch.ones((n, n), dtype=torch.bfloat16, device=device)
     rhs = torch.ones((n, n), dtype=torch.bfloat16, device=device)
     xm.mark_step()
+    # Compile only. This used to be where the product was verified, which
+    # made "exact" a statement about the warm-up pass: the timed loop's own
+    # product was read back and thrown away, so a loop the compiler elided or
+    # a graph that went wrong after the first pass still reported exact. The
+    # NKI side verifies its timed product, so the two halves were not held to
+    # the same test.
     warm = torch.matmul(lhs, rhs)
     xm.mark_step()
     xm.wait_device_ops()
-    # All-ones operands: every element must be exactly K. bf16 carries 8
-    # mantissa bits, so a sum reaching 8192 is exact only if the
-    # accumulator is wider -- if this is not K, the comparison is between
-    # a correct kernel and a rounded one.
-    got = float(warm[0][0].to("cpu"))
     del warm
 
     sink = None
@@ -76,14 +84,31 @@ def xla_matmul():
         passes += 1
     xm.wait_device_ops()
     elapsed = time.perf_counter() - started
-    float(sink[0][0].to("cpu"))
+
+    # The timed loop's last product, whole, after the clock has stopped.
+    # All-ones operands make every element exactly K. bf16 carries 8 mantissa
+    # bits, so a sum reaching 8192 is exact only if the accumulator is wider;
+    # a single element (what this checked) cannot see a product that is right
+    # at [0][0] and wrong elsewhere, where the NKI side checks every row-tile.
+    host = sink.to("cpu").float()
+    wrong = product_elements_wrong(host, n)
 
     return {
         "tflops": passes * 2 * n ** 3 / elapsed / 1e12,
         "passes": passes,
-        "product": got,
-        "exact": abs(got - n) < 0.5,
+        "product": float(host[0][0]),
+        "elements_wrong": wrong,
+        "exact": wrong == 0,
     }
+
+
+def product_elements_wrong(host, k: int) -> int:
+    """How many elements of an all-ones product are not exactly ``k``.
+
+    Split out so the arithmetic can be checked without a device: it takes any
+    tensor on the host.
+    """
+    return int(((host - k).abs() >= 0.5).sum())
 
 
 def nki_kernel():
