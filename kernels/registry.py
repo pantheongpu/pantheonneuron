@@ -56,12 +56,13 @@ class Workload:
     meaningful at all. A comparison joins on (Test Name, Unit), so a mismatch
     silently breaks the join rather than raising.
 
-    Matching the GPU unit is not always the right thing. pantheongpu v1.0.19
-    replaced the units of its AI workloads with a single ``ai-ops/s``, because
-    ten of them shared one kernel body and six compiled to byte-identical
-    SASS: the numbers were generic synthetic throughput wearing twelve
-    different metric names. The Neuron workloads of those names count real
-    tokens, cache updates and training steps. Copying ``ai-ops/s`` here to
+    Matching the GPU unit is not always the right thing. Since v1.1.0
+    pantheongpu reports the nine AI workloads in its shared harness as a
+    single ``ai-ops/s`` -- thread-iterations per second -- because through
+    v1.0.19 ten of them shared one loop and six compiled to byte-identical
+    SASS: generic synthetic throughput wearing different metric names. The
+    Neuron workloads of those names count real tokens, cache updates and
+    training steps. Copying ``ai-ops/s`` here to
     restore the join would make these numbers less honest, not more, so those
     workloads keep their own units and are listed in
     ``NOT_COMPARABLE_WITH_GPU`` instead.
@@ -566,24 +567,42 @@ NO_NEURON_EQUIVALENT = {
 }
 
 
-# Workloads that exist on both platforms under the same name, but whose
-# Scores must not be joined. pantheongpu v1.0.19 collapsed these to a single
-# ``ai-ops/s``: ten of its AI workloads shared one kernel body and six
-# compiled to byte-identical SASS, so what it reports is generic synthetic
-# throughput, not the quantity the name suggests. The Neuron implementations
-# count the real thing -- tokens generated, cache updates applied, training
-# steps completed -- so the two numbers share a name while measuring
-# different quantities.
+# Workloads that exist on both platforms under the same name, whose Scores
+# must not be joined, and whose units already keep them apart.
+#
+# Eight are in pantheongpu's shared AI harness, which since v1.1.0 reports
+# ``ai-ops/s`` -- thread-iterations per second, the same count under every
+# name. The Neuron implementations count the real thing -- tokens generated,
+# cache updates applied, training steps completed -- so the two numbers share
+# a name while measuring different quantities.
+#
+# allocation_fragmentation is the ninth. pantheongpu's reports
+# ``alloc-events/s`` over a fixed duration inside a memory budget; this one
+# reports ``allocation-events/s`` over a pinned allocation count, and its rate
+# falls as that count rises (SCORE_DEPENDS_ON_PIN). Renaming the unit to
+# restore the join would join a duration-bound rate to a count-bound one.
+#
+# THIS REGISTER WAS WRONG UNTIL 2026-09-13, in both directions. It listed
+# twelve names, on the belief that pantheongpu had moved every AI workload to
+# ``ai-ops/s``. llm_decode, llm_prefill, kv_cache_churn and graph_replay were
+# never in that harness and have never published ``ai-ops/s``: every report
+# in pantheongpu's database, at every version, carries tokens/s,
+# prompt-tokens/s, cache-updates/s and graph-steps/s -- the strings used
+# here. Those four joined all along while this register said they could not,
+# and they compare synthetic loop iterations with real work, so they are in
+# SAME_UNIT_DIFFERENT_QUANTITY now. allocation_fragmentation went the other
+# way: its GPU unit changed in v1.1.0, nothing declared it, and its row
+# silently stopped joining. The test that should have caught both compared
+# against a transcription written from the same belief;
+# data/validation-2026-09-13/pantheongpu-published-units.json is the tally
+# of what was actually published, and the test now reads it.
 #
 # Kept as data for the same reason as NO_NEURON_EQUIVALENT: the comparison
 # tooling can render an honest "not comparable" rather than a row that
 # quietly never joins, or worse, one that joins and misleads.
 NOT_COMPARABLE_WITH_GPU = {
+    "allocation_fragmentation": "allocation-events/s",
     "fused_attention": "attention-tiles/s",
-    "graph_replay": "graph-steps/s",
-    "kv_cache_churn": "cache-updates/s",
-    "llm_decode": "tokens/s",
-    "llm_prefill": "prompt-tokens/s",
     "moe_router": "routed-tokens/s",
     "quantized_gemm": "quantized-ops/s",
     "rag_embedding": "embedding-vectors/s",
@@ -747,7 +766,7 @@ NO_PUBLISHED_PEAK = {
                     "been verified",
 }
 
-# What pantheongpu reports for those names since v1.0.19.
+# What pantheongpu's shared AI harness reports, since v1.1.0, for every name in it.
 GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 
 
@@ -756,7 +775,8 @@ GPU_SYNTHETIC_AI_UNIT = "ai-ops/s"
 # has no register here -- names where the unit matches, the join succeeds,
 # and the two numbers measure different quantities.
 #
-# It applies to the compute viruses. pantheongpu's tensor_virus is __hfma2
+# It applies to the compute viruses, and to the four AI workloads pantheongpu
+# kept outside its shared harness. pantheongpu's tensor_virus is __hfma2
 # chains on the FP16 vector lanes with no matrix at all, counted analytically
 # from occupancy; Neuron's is a dense systolic GEMM read from a hardware
 # counter. Same name, same TFLOPS, different functional unit and different
@@ -784,6 +804,27 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
     "omni_virus": (
         "pantheongpu sums analytic per-engine op counts; this drives four "
         "engines in one dependent chain and reads effective_flops."
+    ),
+    # The four below were declared NOT_COMPARABLE_WITH_GPU until 2026-09-13,
+    # on the belief that their GPU units had diverged. They never had.
+    "llm_decode": (
+        "pantheongpu counts synthetic token iterations -- blocks x threads x "
+        "loops of a KV-cache gather kernel, counted as issued; this counts "
+        "tokens a transformer decoded against its cache."
+    ),
+    "llm_prefill": (
+        "pantheongpu counts synthetic prompt-token iterations from loop "
+        "geometry; this counts prompt tokens a transformer prefilled through "
+        "every layer."
+    ),
+    "kv_cache_churn": (
+        "pantheongpu counts blocks x threads x loops of a hashed read/write "
+        "kernel over a flat buffer; this counts cache updates applied."
+    ),
+    "graph_replay": (
+        "pantheongpu counts blocks x threads x loops per launch of a captured "
+        "graph, or of the bare kernel under its mock fallback; this counts "
+        "completed executions from neuron-monitor's execution counter."
     ),
 }
 
