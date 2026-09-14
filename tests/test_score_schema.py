@@ -17,6 +17,16 @@ workloads whose units diverged are checked against
 Neuron workloads count real tokens and steps; the GPU ones report generic
 synthetic throughput under a shared kernel. Making the strings match would
 restore the join and compare unlike things.
+
+**Then the transcription was wrong a second time, and nothing changed to
+make it so.** It said all twelve AI workloads report ``ai-ops/s``. Four of
+them -- llm_decode, llm_prefill, kv_cache_churn, graph_replay -- were never in
+pantheongpu's shared harness and have never published ``ai-ops/s``, and
+allocation_fragmentation moved to ``alloc-events/s``. Every test here passed,
+because the registry and the transcription were written from the same
+belief. So the transcription is now checked against a tally of the reports
+pantheongpu actually published, which is evidence rather than a third copy
+of the belief.
 """
 
 import json
@@ -44,21 +54,27 @@ PANTHEONGPU_UNITS = {
     "all_reduce": "GB/s",
     "p2p_thrasher": "GB/s",
     "pcie_bandwidth": "GB/s",
-    "allocation_fragmentation": "allocation-events/s",
-    # Since v1.0.19 every AI workload reports the same synthetic unit.
-    "llm_decode": "ai-ops/s",
-    "llm_prefill": "ai-ops/s",
-    "kv_cache_churn": "ai-ops/s",
+    "allocation_fragmentation": "alloc-events/s",
+    # The shared AI harness reports one synthetic unit since v1.1.0.
     "fused_attention": "ai-ops/s",
     "quantized_gemm": "ai-ops/s",
     "serving_mix": "ai-ops/s",
     "speculative_decode": "ai-ops/s",
     "moe_router": "ai-ops/s",
     "transformer_train_step": "ai-ops/s",
-    "graph_replay": "ai-ops/s",
     "rag_embedding": "ai-ops/s",
     "vision_encoder": "ai-ops/s",
+    # Outside that harness, and never ai-ops/s at any version: semantic unit
+    # strings over counts derived from loop geometry.
+    "llm_decode": "tokens/s",
+    "llm_prefill": "prompt-tokens/s",
+    "kv_cache_churn": "cache-updates/s",
+    "graph_replay": "graph-steps/s",
 }
+
+PUBLISHED_UNITS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "validation-2026-09-13", "pantheongpu-published-units.json")
 
 TRN1 = [NeuronDevice(i, "trn1", "v2", 2, 32 * 1024**3, True) for i in range(2)]
 
@@ -99,9 +115,44 @@ def test_not_comparable_records_the_neuron_unit():
     """The table records what Neuron reports, so a reader sees both sides."""
     for name, unit in registry.NOT_COMPARABLE_WITH_GPU.items():
         assert _get(name).unit == unit
-        assert PANTHEONGPU_UNITS[name] == registry.GPU_SYNTHETIC_AI_UNIT
+        # Declared here means the join fails; that has to be true.
+        assert PANTHEONGPU_UNITS[name] != unit
         # These count real quantities; that is the whole reason they diverge.
         assert unit != registry.GPU_SYNTHETIC_AI_UNIT
+
+
+def _newest(versions):
+    return max(versions, key=lambda v: tuple(int(p) for p in v.split(".")))
+
+
+def test_transcription_matches_what_pantheongpu_published():
+    """Check the transcription against the reports, not against a belief.
+
+    The previous version of PANTHEONGPU_UNITS said four workloads reported
+    ``ai-ops/s`` that never had, and every test passed on it.
+    """
+    with open(PUBLISHED_UNITS, encoding="utf-8") as handle:
+        published = json.load(handle)["units_by_workload"]
+
+    assert set(published) == set(PANTHEONGPU_UNITS), (
+        "a shared name is published but not transcribed, or the reverse: "
+        f"{sorted(set(published) ^ set(PANTHEONGPU_UNITS))}"
+    )
+    for name, unit in PANTHEONGPU_UNITS.items():
+        newest = _newest(published[name])
+        assert set(published[name][newest]) == {unit}, (
+            f"{name}: pantheongpu {newest} published "
+            f"{published[name][newest]}, transcribed {unit!r}"
+        )
+
+
+@pytest.mark.parametrize(
+    "name", ["llm_decode", "llm_prefill", "kv_cache_churn", "graph_replay"])
+def test_ai_workloads_outside_the_gpu_harness_join_and_are_flagged(name):
+    """The register used to say these could not join. They always did."""
+    assert name not in registry.NOT_COMPARABLE_WITH_GPU
+    assert _get(name).unit == PANTHEONGPU_UNITS[name]
+    assert name in registry.SAME_UNIT_DIFFERENT_QUANTITY
 
 
 def test_comparable_workloads_still_join():

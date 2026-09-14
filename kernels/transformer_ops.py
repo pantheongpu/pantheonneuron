@@ -5,10 +5,10 @@ compiler lowers them, which is the point: these workloads measure the path a
 real model takes, and a hand-written NKI kernel would measure something no
 model actually runs.
 
-**Sharing primitives is not sharing a workload.** pantheongpu collapsed the
-units of twelve AI workloads into one `ai-ops/s` because ten of them shared
-a kernel body and six compiled to byte-identical SASS -- they were one
-measurement wearing twelve names. The workloads here compose these pieces
+**Sharing primitives is not sharing a workload.** pantheongpu reports nine AI
+workloads as one `ai-ops/s` because they share a harness: through v1.0.19
+ten shared one loop and six compiled to byte-identical SASS -- they were one
+measurement wearing ten names. The workloads here compose these pieces
 into genuinely different computations: prefill runs a 2048-token sequence
 through every layer while decode runs a single token against a cache, and
 those differ by three orders of magnitude in arithmetic per step. Anything
