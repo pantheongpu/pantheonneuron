@@ -112,6 +112,30 @@ def finite_only(value, dropped: typing.List[str], path: str = ""):
     return value
 
 
+def invocation(args) -> dict:
+    """What this run was asked to do, for the report.
+
+    A report named its workloads, their pinned problems and what each one
+    measured, and not the ``--duration`` or ``--repeat`` it was run with. The
+    row's "Duration (s)" is no substitute -- it spans compile and the profiler
+    search -- and neither is the measured window, since a workload bounded by
+    a pinned count stops when the count is reached whatever the flag said.
+    Two reports of the same workload at 300 s and 3600 s were therefore
+    indistinguishable from the file alone, which came to light when the first
+    multi-host passes had to be sorted by duration from their start times.
+
+    The flags as parsed, not ``sys.argv``: argv is whatever the caller typed,
+    which can carry a path.
+    """
+    return {
+        "test": args.test,
+        "duration_s": args.duration,
+        "repeat": args.repeat,
+        "monitor_period_s": args.monitor_period,
+        "device": args.device,
+    }
+
+
 def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str:
     os.makedirs(DATABASE_DIR, exist_ok=True)
     payload = dict(snapshot)
@@ -1974,6 +1998,7 @@ def main(argv=None) -> int:
     reserve_at = reservation_point(workloads)
 
     snapshot = get_system_snapshot(devices)
+    snapshot["invocation"] = invocation(args)
     run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results = []
 
