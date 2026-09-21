@@ -4,15 +4,17 @@ The registry's opening claim is that workload names match pantheongpu
 "wherever the underlying concept is the same, so a Neuron result and a GPU
 result for a given name are comparing like with like."
 
-`registry.NOT_COMPARABLE_WITH_GPU` records the twelve names where that broke
-down in a specific, mechanical way: pantheongpu v1.0.19 collapsed its AI
-workloads to a single `ai-ops/s`, so the **units** diverge and the join
-simply fails. `tests/test_score_schema.py` enforces exactly that reading —
-every entry must be a name whose GPU unit is `ai-ops/s`.
+`registry.NOT_COMPARABLE_WITH_GPU` records the nine names where that broke
+down in a specific, mechanical way: the **units** diverge and the join simply
+fails. Eight are in pantheongpu's shared AI harness, which since v1.1.0
+reports `ai-ops/s`; the ninth is `allocation_fragmentation`, `alloc-events/s`
+there against `allocation-events/s` here. `tests/test_score_schema.py`
+enforces exactly that reading — every entry's GPU unit must differ from its
+Neuron one.
 
-**This document is about a different category, which has no register: names
-where the unit matches, the join succeeds, and the two numbers are not
-measuring the same thing.** A failed join is visible. A successful join
+**This document is about a different category, now recorded in
+`registry.SAME_UNIT_DIFFERENT_QUANTITY`: names where the unit matches, the
+join succeeds, and the two numbers are not measuring the same thing.** A failed join is visible. A successful join
 between unlike quantities is not, which makes this the worse of the two.
 
 Found 2026-09-08 while checking whether the pinned 8192³ shape was a
@@ -64,15 +66,41 @@ path sits behind `PANTHEON_ENABLE_EXPERIMENTAL_WMMA` and a header check, with
 a non-matrix fallback that produces a number under the same name; and the
 issued-versus-retired difference still stands.
 
+## Four AI workloads were in the wrong register
+
+Found 2026-09-13 by tallying the units in pantheongpu's published reports
+instead of reading the transcription in `tests/test_score_schema.py`.
+`NOT_COMPARABLE_WITH_GPU` used to list twelve names, on the belief that
+pantheongpu moved every AI workload to `ai-ops/s`. Four never moved:
+
+| Workload | pantheongpu unit, every version | pantheongpu counts |
+|---|---|---|
+| `llm_decode` | `tokens/s` | blocks × threads × loops of a KV-cache gather kernel |
+| `llm_prefill` | `prompt-tokens/s` | synthetic prompt-token iterations from loop geometry |
+| `kv_cache_churn` | `cache-updates/s` | blocks × threads × loops of a hashed read/write kernel |
+| `graph_replay` | `graph-steps/s` | blocks × threads × loops per launch of a captured graph |
+
+Those are the unit strings this suite uses, so the four rows **joined**, and
+compared loop geometry against tokens decoded and executions completed,
+while the register said the join could not happen. They are
+`SAME_UNIT_DIFFERENT_QUANTITY` entries now. `allocation_fragmentation` failed
+the other way: pantheongpu's unit changed in v1.1.0, nothing declared it, and
+its row stopped joining without a word.
+
+Every test passed throughout, because the registry and the transcription it
+was checked against came from the same belief. The tally is committed as
+`data/validation-2026-09-13/pantheongpu-published-units.json` (7,326 reports,
+per version), and the test now checks the transcription against it.
+
 ## What has not been decided
 
 Nothing here changes what joins. `NOT_COMPARABLE_WITH_GPU` means "the units
 diverge" and these units do not, so forcing them into it would break both its
 tests and its meaning.
 
-The options, none of them taken:
+The options:
 
-1. **A second register** — `SAME_UNIT_DIFFERENT_QUANTITY` or similar —
+1. **A second register** — taken, as `registry.SAME_UNIT_DIFFERENT_QUANTITY` —
    letting the comparison tooling render "not comparable" for a row that
    would otherwise join silently. Additive, and honest about what is known.
 2. **Change the GPU kernels** so `tensor_virus` drives the matrix units, at

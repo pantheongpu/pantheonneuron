@@ -430,9 +430,10 @@ spends its Score labelling on.
 ### Why the AI workloads are separate workloads
 
 They share transformer primitives and compose them into deliberately
-different computations. pantheongpu collapsed twelve AI workloads into one
-`ai-ops/s` because ten shared a kernel body and six compiled to
-byte-identical SASS -- one measurement wearing twelve names. Here,
+different computations. pantheongpu reports nine AI workloads as one
+`ai-ops/s` because they share a harness: through v1.0.19 ten shared one
+loop and six compiled to byte-identical SASS -- one measurement wearing ten
+names. Here,
 `llm_prefill` runs a 2048-token prompt through every layer and is quadratic
 in sequence; `llm_decode` runs a single token against a cache and is linear
 in context, roughly three orders of magnitude less arithmetic per step; and

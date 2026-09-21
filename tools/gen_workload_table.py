@@ -158,12 +158,14 @@ def _prose():
         "",
         _not_comparable(),
         "",
-        "pantheongpu v1.0.19 replaced their units with a single "
-        f"`{registry.GPU_SYNTHETIC_AI_UNIT}`. Ten of its AI workloads shared "
-        "one kernel body and six compiled to byte-identical SASS, so what it "
-        "reports is generic synthetic throughput rather than the quantity each "
-        "name suggests. The Neuron implementations count the real thing — "
-        "tokens generated, cache updates applied, training steps completed.",
+        "Their units already keep them apart. All but one are in "
+        "pantheongpu's shared AI harness, which since v1.1.0 reports every "
+        f"name as `{registry.GPU_SYNTHETIC_AI_UNIT}` — thread-iterations per "
+        "second, the same count under each name. The Neuron implementations "
+        "count the real thing — tokens generated, cache updates applied, "
+        "training steps completed. The other is `allocation_fragmentation`: "
+        "pantheongpu reports `alloc-events/s` over a fixed duration, this "
+        "suite `allocation-events/s` over a pinned allocation count.",
         "",
         "## Where the units match and the quantities do not",
         "",
@@ -183,7 +185,7 @@ def _prose():
         "",
         "Nothing here changes what joins. See "
         "`docs/cross_platform_comparability.md` for the evidence and the "
-        "three options, none of them taken.",
+        "options.",
         "",
         f"Copying `{registry.GPU_SYNTHETIC_AI_UNIT}` here would restore the "
         "join and compare unlike quantities, so these keep their own units and "
