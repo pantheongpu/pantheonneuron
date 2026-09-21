@@ -510,3 +510,23 @@ def test_a_row_whose_monitor_never_started_says_why(monkeypatch):
 
     assert row["Telemetry"]["monitor_unavailable"].startswith("it exited immediately")
     assert "neuron-monitor did not run: it exited immediately (3)" in row["Detail"]
+
+
+# -- the report says what it was asked to do ----------------------------------
+
+def test_the_report_records_the_flags_it_ran_with(tmp_path, monkeypatch):
+    """Two reports at different --duration were indistinguishable from the file."""
+    monkeypatch.setattr(pantheon_neuron, "DATABASE_DIR", str(tmp_path))
+    code = pantheon_neuron.main(
+        ["--mock", "--test", "baseline_metrics", "--duration", "1", "--repeat", "2"])
+    assert code == 0
+    (path,) = list(tmp_path.glob("*.json"))
+    written = json.loads(path.read_text(encoding="utf-8"))["invocation"]
+    assert written == {"test": "baseline_metrics", "duration_s": 1, "repeat": 2,
+                       "monitor_period_s": 1.0, "device": "all"}
+
+
+def test_the_invocation_is_the_parsed_flags_not_argv():
+    """argv is whatever the caller typed, which can carry a path."""
+    body = sourcecheck.flat_function_code(pantheon_neuron.invocation)
+    assert "sys . argv" not in body
