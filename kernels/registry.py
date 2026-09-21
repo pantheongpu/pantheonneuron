@@ -338,7 +338,12 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("kv_cache_churn", "inference",
              "KV cache allocation and eviction under pressure.", _COMPUTE | _HBM,
              unit="cache-updates/s",
-             problem={"hidden": 2048, "heads": 16, "context": 2048,
+             # No "heads" key. It declared 16 until 2026-09-17 and nothing
+             # read it: the caches are shaped (layers, context, hidden) with
+             # no head dimension, so the byte count is identical at any head
+             # count and a reader comparing "heads" across platforms was
+             # comparing a number this run never expressed.
+             problem={"hidden": 2048, "context": 2048,
                       "layers": 8, "ring_slots": 8, "dtype": "bf16"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
@@ -375,7 +380,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("serving_mix", "inference",
              "Mixed prefill/decode traffic at serving ratios.", _COMPUTE,
              unit="requests/s",
-             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024, "decode": 256},
+             # hidden and layers are declared because the kernel runs them:
+             # serving_plan read problem.get("layers", 32) and
+             # problem.get("hidden", 4096), so the stack depth and width that
+             # set the Score sat outside the published problem until
+             # 2026-09-17. The values are the defaults they replace, so the
+             # declaration changed and the run did not.
+             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024,
+                      "decode": 256, "hidden": 4096, "layers": 32},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'requests_completed',
@@ -633,6 +645,57 @@ SCORE_DEPENDS_ON_PIN = {
         "quantity, not a disagreeing one"
     ),
 }
+
+# Problem keys a kernel honours without ever reading the dict, and how.
+#
+# ``problem`` is the published claim about what ran, and the check in
+# tests/test_problem_declarations.py enforces it by reading the kernel: every
+# declared key must be read from the dict. These keys are not, and are still
+# honoured -- by a literal equal to the declaration, by the shape of the run,
+# or across a process boundary the reader cannot follow.
+#
+# Declared rather than left to a looser check. The check exists because two
+# keys were not honoured at all: kv_cache_churn declared ``heads: 16`` that
+# nothing read, and serving_mix ran ``layers: 32`` and ``hidden: 4096`` that
+# nothing declared. A check that simply skipped unread keys would have passed
+# on both.
+PROBLEM_KEYS_NOT_READ_FROM_THE_DICT = {
+    "tensor_virus": {"op": "the kernel is a matmul; torch.matmul is the literal"},
+    "int_virus": {"op": "the kernel is a matmul; torch.matmul is the literal"},
+    "pulse_virus": {"op": "the kernel is a matmul; torch.matmul is the literal"},
+    "omni_virus": {
+        "op": "'mixed' names the dependent chain, not an operator to select",
+        "engines": "'all' describes the chain, which drives every engine by "
+                   "construction; engine_activity reports what the monitor saw",
+    },
+    "quantized_gemm": {
+        "op": "the kernel is a matmul; torch.matmul is the literal",
+        "dtype": "torch.int8 is the literal the operands are built with",
+    },
+    "memory_read": {"cores": "one worker in this process; the run shape, not an input"},
+    "memory_write": {"cores": "one worker in this process; the run shape, not an input"},
+    "memory_read_agg": {
+        "cores": "'all' is realised as the orchestrator's core_count argument",
+        "bytes": "passed to each worker as JSON (--problem) and read there by "
+                 "memory_read.run; see memory_agg.worker_command",
+        "dtype": "same worker hop as bytes",
+    },
+    "memory_write_agg": {
+        "cores": "'all' is realised as the orchestrator's core_count argument",
+        "bytes": "passed to each worker as JSON (--problem) and read there by "
+                 "memory_write.run; see memory_agg.worker_command",
+        "dtype": "same worker hop as bytes",
+    },
+    "all_reduce": {
+        "op": "the nccom-test argv carries the literal 'all_reduce'",
+        "cores": "'all' is realised by ranks_for() summing every device's cores",
+    },
+    "p2p_thrasher": {
+        "op": "the nccom-test argv carries the literal 'sendrecv'",
+        "cores": "'all' is realised by ranks_for() summing every device's cores",
+    },
+}
+
 
 # Counters a workload declares that its declared Score source cannot
 # supply. Every one of these is real and readable -- through
