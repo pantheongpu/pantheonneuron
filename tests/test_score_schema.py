@@ -490,3 +490,33 @@ def test_the_window_reaches_a_profiler_scored_row(monkeypatch):
                         {"elapsed_s": 10.0, "hbm_read_bytes": 8 << 30})
     provenance = pantheon_neuron._provenance(workload)
     assert provenance["elapsed_s"] == 10.0
+
+
+# -- pcie_bandwidth joins on the unit and not on the quantity -----------------
+
+def test_pcie_bandwidth_is_flagged_as_a_different_quantity():
+    """Same unit, same name, and a factor of up to two apart by definition.
+
+    pantheongpu reports concurrent bidirectional copies as one combined rate;
+    this kernel runs the directions one after the other, half the window
+    each, so bytes over the whole window is the mean of the two rates, not
+    their sum. Published side by side, the row read as "Trainium PCIe is
+    6-27x slower than every NVIDIA part", and most of that was definitions.
+    """
+    assert "pcie_bandwidth" in registry.SAME_UNIT_DIFFERENT_QUANTITY
+    reason = registry.SAME_UNIT_DIFFERENT_QUANTITY["pcie_bandwidth"]
+    for fact in ("concurrent", "sequential", "unpinned", "staging"):
+        assert fact in reason, f"the reason must say {fact!r}"
+    # Still joins -- the register warns, it does not drop the row.
+    assert _get("pcie_bandwidth").unit == PANTHEONGPU_UNITS["pcie_bandwidth"]
+
+
+def test_the_pcie_figure_really_is_a_mean_of_sequential_legs():
+    """The reason above is a claim about the kernel; check the kernel says it."""
+    import sourcecheck
+    from kernels import pcie_bandwidth
+    code = sourcecheck.flat_function_code(pcie_bandwidth.run)
+    # Each direction gets its own leg within the deadline, one after another...
+    assert 'for direction in plan [ "directions" ] :' in code
+    # ...and the Score divides all bytes by the whole window.
+    assert "total_moved / elapsed" in code

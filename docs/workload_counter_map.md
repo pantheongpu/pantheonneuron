@@ -81,7 +81,7 @@ Their units already keep them apart. All but one are in pantheongpu's shared AI 
 
 ## Where the units match and the quantities do not
 
-8 workloads join cleanly on (Test Name, Unit) and should not be read as a comparison. This is the worse of the two failure modes: a failed join is visible, a successful join between unlike quantities is not.
+9 workloads join cleanly on (Test Name, Unit) and should not be read as a comparison. This is the worse of the two failure modes: a failed join is visible, a successful join between unlike quantities is not.
 
 | Workload | Why the two numbers differ |
 |---|---|
@@ -91,6 +91,7 @@ Their units already keep them apart. All but one are in pantheongpu's shared AI 
 | `llm_decode` | pantheongpu counts synthetic token iterations -- blocks x threads x loops of a KV-cache gather kernel, counted as issued; this counts tokens a transformer decoded against its cache. |
 | `llm_prefill` | pantheongpu counts synthetic prompt-token iterations from loop geometry; this counts prompt tokens a transformer prefilled through every layer. |
 | `omni_virus` | pantheongpu sums analytic per-engine op counts; this drives four engines in one dependent chain and reads effective_flops. |
+| `pcie_bandwidth` | pantheongpu copies both directions concurrently on separate streams from 256 MiB pinned (hipHostMalloc) buffers and reports the combined rate; this times the directions sequentially, half the window each, so its figure is the mean of the two rates rather than their concurrent sum -- up to 2x apart by definition on a full-duplex link. It also copies from buffers pin_memory() leaves unpinned on this stack, at a pinned 1 GiB that sits past a d2h staging-buffer cliff measured at 16-64 MiB. |
 | `pulse_virus` | pantheongpu duty-cycles scalar fp32 fmaf chains; this duty-cycles a dense bf16 GEMM. |
 | `tensor_virus` | pantheongpu runs __hfma2 chains on the FP16 vector lanes with no matrix at all, counted analytically from occupancy; this is a dense systolic GEMM read from a hardware counter. |
 
