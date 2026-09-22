@@ -275,6 +275,10 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
     divergence = verify_against_analytic(result["profiler_gbps"], analytic)
     warnings = [
         divergence,
+        # Only when the figures broadly agree: past 15% the divergence
+        # message already says they differ, and saying it twice is noise.
+        None if divergence else profiler.verify_sustained_matches_burst(
+            result["profiler_gbps"], analytic),
         verify_write_dominates_read(
             result.get("hbm_write_bytes"), result.get("hbm_read_bytes")
         ),

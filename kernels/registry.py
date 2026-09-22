@@ -386,7 +386,12 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              # set the Score sat outside the published problem until
              # 2026-09-17. The values are the defaults they replace, so the
              # declaration changed and the run did not.
-             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024,
+             # prefill_batch and decode_batch, not one "batch": the kernel
+             # runs prefill one request at a time and decode eight-wide,
+             # which is what continuous batching does. The single key said
+             # the whole workload ran at 8 and a fifth of its steps ran at 1.
+             problem={"prefill_ratio": 0.2, "prefill_batch": 1,
+                      "decode_batch": 8, "prompt": 1024,
                       "decode": 256, "hidden": 4096, "layers": 32},
              score_source=ScoreSource(INTERNAL,
                  counters=(
@@ -748,9 +753,18 @@ COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
 # high-bandwidth device memory (HBM)" with "820 GiB/sec of bandwidth",
 # and "190 FP16/BF16/cFP8/TF32 TFLOPS" (Trainium1 adds 47.5 FP32).
 #
-# **The two parts are the same silicon per chip.** They differ in how
-# many chips an instance carries, not in what a chip does -- which the
-# repo already knew from the other direction: both report NeuronCore-v2.
+# **The two parts publish the same figures per chip**, and both report
+# NeuronCore-v2. They are not the same in what a chip *sustains*:
+# measured 2026-09-21 across three trn1.2xlarge and two inf2.xlarge at
+# one commit with one toolchain, inf2 reaches 0.723 of trn1's dense-GEMM
+# rate (56.85 against 78.60 TFLOPS) while memory bandwidth is identical
+# to three decimals. An earlier version of this comment said they
+# differed only in how many chips an instance carries, "not in what a
+# chip does". That was never measured, and it is wrong. The peaks below
+# stay as published -- Percent Of Peak is honest against them, and what
+# it now says is that inf2 delivers 60% of its advertised compute on
+# this kernel where trn1 delivers 83%. See
+# docs/inf2_sustains_less_than_trn1.md.
 #
 # UNITS. The doc says 820 **GiB**/sec and every Score here is decimal
 # GB/s (bytes / 1e9), so the ceiling is 820 * 2^30 / 1e9 = 880.5 GB/s.
@@ -868,6 +882,23 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "pantheongpu sums analytic per-engine op counts; this drives four "
         "engines in one dependent chain and reads effective_flops."
     ),
+    # Found 2026-09-22, and these were the rows the publication was to stand
+    # on. pantheongpu's memory_read is a whole GPU; this one is one
+    # NeuronCore of the device's two. The name join pairs a core against a
+    # device, so the Neuron figure is about half the device's by
+    # construction. The whole-device figure here is memory_read_agg -- and
+    # "_agg" means something else there too; see
+    # docs/cross_platform_comparability.md.
+    "memory_read": (
+        "pantheongpu's memory_read reads through a whole GPU; this is one "
+        "NeuronCore of the device's two, about half the device figure by "
+        "construction. The device-level figure here is memory_read_agg."
+    ),
+    "memory_write": (
+        "pantheongpu's memory_write writes through a whole GPU; this is one "
+        "NeuronCore of the device's two, about half the device figure by "
+        "construction. The device-level figure here is memory_write_agg."
+    ),
     # The four below were declared NOT_COMPARABLE_WITH_GPU until 2026-09-13,
     # on the belief that their GPU units had diverged. They never had.
     "llm_decode": (
@@ -889,14 +920,38 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "graph, or of the bare kernel under its mock fallback; this counts "
         "completed executions from neuron-monitor's execution counter."
     ),
+    "transformer_virus": (
+        "pantheongpu on NVIDIA runs wmma::mma_sync on register-resident "
+        "fragments filled with constants, with no memory traffic, no "
+        "attention and no FFN -- a Tensor Core issue-rate burner counted "
+        "analytically; this runs a whole transformer block (hidden 4096, 32 "
+        "heads, seq 2048) and reads effective_flops."
+    ),
+    # Found 2026-09-22 while checking which of the five comparable rows the
+    # publication could stand on. Three differences stack, and the first is
+    # definitional -- it holds on identical hardware.
+    "pcie_bandwidth": (
+        "pantheongpu copies both directions concurrently on separate streams "
+        "from 256 MiB pinned (hipHostMalloc) buffers and reports the combined "
+        "rate; this times the directions sequentially, half the window each, "
+        "so its figure is the mean of the two rates rather than their "
+        "concurrent sum -- up to 2x apart by definition on a full-duplex "
+        "link. It also copies from buffers pin_memory() leaves unpinned on "
+        "this stack, at a pinned 1 GiB that sits past a d2h staging-buffer "
+        "cliff measured at 16-64 MiB."
+    ),
 }
 
-# transformer_virus is deliberately absent. pantheongpu does use real matrix
-# instructions there (MFMA/WMMA), so the functional-unit objection does not
-# apply -- though the path sits behind an experimental flag with a
-# non-matrix fallback under the same name, and the issued-versus-retired
-# difference still stands. Listing it would overstate what is known; the
-# doc records the caveat.
+# transformer_virus was deliberately absent until 2026-09-22, on the
+# argument that pantheongpu uses real matrix instructions there, so the
+# functional-unit objection did not apply. That argument was right and was
+# not the whole question. On NVIDIA sm_70 and later -- the parts a
+# Trainium-against-NVIDIA comparison is about -- the kernel is
+# nvcuda::wmma::mma_sync on fragments filled with constants, in a loop that
+# never touches global memory: a Tensor Core issue-rate burner, which is why
+# an A100 reads 297.7 TFLOPS, 95% of its 312 dense-FP16 peak. Nothing in it
+# is a transformer. The flag-gated MFMA path and its fallback are the AMD
+# story; on NVIDIA the unit matches and the workload does not.
 
 # Nothing consumes this to change a join. It exists so the comparison
 # tooling can render a warning where a row would otherwise join silently,

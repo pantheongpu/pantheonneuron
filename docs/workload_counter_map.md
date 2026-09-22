@@ -81,7 +81,7 @@ Their units already keep them apart. All but one are in pantheongpu's shared AI 
 
 ## Where the units match and the quantities do not
 
-8 workloads join cleanly on (Test Name, Unit) and should not be read as a comparison. This is the worse of the two failure modes: a failed join is visible, a successful join between unlike quantities is not.
+12 workloads join cleanly on (Test Name, Unit) and should not be read as a comparison. This is the worse of the two failure modes: a failed join is visible, a successful join between unlike quantities is not.
 
 | Workload | Why the two numbers differ |
 |---|---|
@@ -90,9 +90,13 @@ Their units already keep them apart. All but one are in pantheongpu's shared AI 
 | `kv_cache_churn` | pantheongpu counts blocks x threads x loops of a hashed read/write kernel over a flat buffer; this counts cache updates applied. |
 | `llm_decode` | pantheongpu counts synthetic token iterations -- blocks x threads x loops of a KV-cache gather kernel, counted as issued; this counts tokens a transformer decoded against its cache. |
 | `llm_prefill` | pantheongpu counts synthetic prompt-token iterations from loop geometry; this counts prompt tokens a transformer prefilled through every layer. |
+| `memory_read` | pantheongpu's memory_read reads through a whole GPU; this is one NeuronCore of the device's two, about half the device figure by construction. The device-level figure here is memory_read_agg. |
+| `memory_write` | pantheongpu's memory_write writes through a whole GPU; this is one NeuronCore of the device's two, about half the device figure by construction. The device-level figure here is memory_write_agg. |
 | `omni_virus` | pantheongpu sums analytic per-engine op counts; this drives four engines in one dependent chain and reads effective_flops. |
+| `pcie_bandwidth` | pantheongpu copies both directions concurrently on separate streams from 256 MiB pinned (hipHostMalloc) buffers and reports the combined rate; this times the directions sequentially, half the window each, so its figure is the mean of the two rates rather than their concurrent sum -- up to 2x apart by definition on a full-duplex link. It also copies from buffers pin_memory() leaves unpinned on this stack, at a pinned 1 GiB that sits past a d2h staging-buffer cliff measured at 16-64 MiB. |
 | `pulse_virus` | pantheongpu duty-cycles scalar fp32 fmaf chains; this duty-cycles a dense bf16 GEMM. |
 | `tensor_virus` | pantheongpu runs __hfma2 chains on the FP16 vector lanes with no matrix at all, counted analytically from occupancy; this is a dense systolic GEMM read from a hardware counter. |
+| `transformer_virus` | pantheongpu on NVIDIA runs wmma::mma_sync on register-resident fragments filled with constants, with no memory traffic, no attention and no FFN -- a Tensor Core issue-rate burner counted analytically; this runs a whole transformer block (hidden 4096, 32 heads, seq 2048) and reads effective_flops. |
 
 Nothing here changes what joins. See `docs/cross_platform_comparability.md` for the evidence and the options.
 
@@ -121,7 +125,7 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `kv_cache_churn` | hidden=2048, context=2048, layers=8, ring_slots=8, dtype=bf16 |
 | `fused_attention` | heads=32, seq=2048, head_dim=128, dtype=bf16 |
 | `quantized_gemm` | op=matmul, shape=[4096, 4096, 4096], dtype=int8 |
-| `serving_mix` | prefill_ratio=0.2, batch=8, prompt=1024, decode=256, hidden=4096, layers=32 |
+| `serving_mix` | prefill_ratio=0.2, prefill_batch=1, decode_batch=8, prompt=1024, decode=256, hidden=4096, layers=32 |
 | `speculative_decode` | draft_len=4, hidden=4096, layers=32, dtype=bf16 |
 | `moe_router` | experts=8, top_k=2, hidden=4096, tokens=4096 |
 | `transformer_train_step` | hidden=4096, layers=4, batch=1, seq=2048, dtype=bf16 |

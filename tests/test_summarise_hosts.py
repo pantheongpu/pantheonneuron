@@ -88,3 +88,28 @@ def test_an_unreadable_file_is_skipped_not_fatal(tmp_path):
     _write(tmp_path, "a", "300x3", "1", [_row("memory_read", 270.0)])
     (tmp_path / "a" / "300x3" / "partial.json").write_text("{not json", encoding="utf-8")
     assert len(summarise_hosts.summarise(str(tmp_path))["rows"]) == 1
+
+
+def test_rows_that_differ_only_by_problem_say_how(tmp_path):
+    """Five sweep rows of one workload printed as five identical lines."""
+    for stamp, gib in (("1", 1), ("2", 8), ("3", 12)):
+        _write(tmp_path, "a", "sweep", stamp,
+               [_row("memory_read", 270.0 + gib, problem={"bytes": gib << 30, "dtype": "bf16"})])
+    rendered = summarise_hosts.render(summarise_hosts.summarise(str(tmp_path)))
+    for gib in (1, 8, 12):
+        assert f"memory_read bytes={gib}GiB" in rendered
+    # Only the key that differs is shown; the shared dtype is not.
+    assert "dtype=" not in rendered
+
+
+def test_a_lone_row_carries_no_label(tmp_path):
+    _write(tmp_path, "a", "300x3", "1", [_row("memory_read", 270.0)])
+    rendered = summarise_hosts.render(summarise_hosts.summarise(str(tmp_path)))
+    assert "memory_read bytes" not in rendered
+
+
+def test_swept_sizes_sort_numerically(tmp_path):
+    for stamp, gib in (("1", 12), ("2", 1), ("3", 2)):
+        _write(tmp_path, "a", "sweep", stamp, [_row("memory_read", 270.0, problem={"bytes": gib << 30})])
+    order = [row["problem"]["bytes"] >> 30 for row in summarise_hosts.summarise(str(tmp_path))["rows"]]
+    assert order == [1, 2, 12]

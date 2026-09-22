@@ -490,3 +490,96 @@ def test_the_window_reaches_a_profiler_scored_row(monkeypatch):
                         {"elapsed_s": 10.0, "hbm_read_bytes": 8 << 30})
     provenance = pantheon_neuron._provenance(workload)
     assert provenance["elapsed_s"] == 10.0
+
+
+# -- the memory rows: same quantity, different amount of hardware -------------
+
+@pytest.mark.parametrize("name", ["memory_read", "memory_write"])
+def test_single_core_memory_rows_are_flagged(name):
+    """One NeuronCore of two joined against a whole GPU.
+
+    pantheongpu's memory_read is a whole device. This one pins cores: 1, so
+    the name join put 273 GB/s of one Trainium1 core against 1,496 GB/s of a
+    whole A100 -- about half the device's figure by construction.
+    """
+    assert _get(name).problem["cores"] == 1, (
+        "if this workload now spans the device, the flag below is stale")
+    assert name in registry.SAME_UNIT_DIFFERENT_QUANTITY
+    assert "one NeuronCore" in registry.SAME_UNIT_DIFFERENT_QUANTITY[name]
+
+
+@pytest.mark.parametrize("name", ["memory_read_agg", "memory_write_agg"])
+def test_the_aggregate_memory_rows_are_device_level_and_still_join(name):
+    """These span every core, which is what makes them the device figure.
+
+    "_agg" means a data-pattern variant in pantheongpu and a core aggregate
+    here; the two converge on whole-device scope, and pantheongpu's own data
+    shows the pattern moves bandwidth under 0.3%. So these stay unflagged --
+    but only while they really do span every core.
+    """
+    assert _get(name).problem["cores"] == "all"
+    assert name not in registry.SAME_UNIT_DIFFERENT_QUANTITY
+    assert _get(name).unit == PANTHEONGPU_UNITS[name]
+
+
+def test_the_comparability_doc_no_longer_calls_the_core_rows_comparable():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "docs", "cross_platform_comparability.md")
+    with open(path, encoding="utf-8") as handle:
+        doc = handle.read()
+    row = next(line for line in doc.splitlines()
+               if line.startswith("| `memory_read` / `memory_write` |"))
+    assert "**Yes**" not in row
+    assert "one NeuronCore" in row
+# -- pcie_bandwidth joins on the unit and not on the quantity -----------------
+
+def test_pcie_bandwidth_is_flagged_as_a_different_quantity():
+    """Same unit, same name, and a factor of up to two apart by definition.
+
+    pantheongpu reports concurrent bidirectional copies as one combined rate;
+    this kernel runs the directions one after the other, half the window
+    each, so bytes over the whole window is the mean of the two rates, not
+    their sum. Published side by side, the row read as "Trainium PCIe is
+    6-27x slower than every NVIDIA part", and most of that was definitions.
+    """
+    assert "pcie_bandwidth" in registry.SAME_UNIT_DIFFERENT_QUANTITY
+    reason = registry.SAME_UNIT_DIFFERENT_QUANTITY["pcie_bandwidth"]
+    for fact in ("concurrent", "sequential", "unpinned", "staging"):
+        assert fact in reason, f"the reason must say {fact!r}"
+    # Still joins -- the register warns, it does not drop the row.
+    assert _get("pcie_bandwidth").unit == PANTHEONGPU_UNITS["pcie_bandwidth"]
+
+
+def test_the_pcie_figure_really_is_a_mean_of_sequential_legs():
+    """The reason above is a claim about the kernel; check the kernel says it."""
+    import sourcecheck
+    from kernels import pcie_bandwidth
+    code = sourcecheck.flat_function_code(pcie_bandwidth.run)
+    # Each direction gets its own leg within the deadline, one after another...
+    assert 'for direction in plan [ "directions" ] :' in code
+    # ...and the Score divides all bytes by the whole window.
+    assert "total_moved / elapsed" in code
+
+
+# -- transformer_virus: the right unit, the wrong workload --------------------
+
+def test_transformer_virus_is_flagged_as_a_different_quantity():
+    """On NVIDIA the GPU kernel is a Tensor Core burner, not a transformer.
+
+    Its NVIDIA path runs wmma::mma_sync on constant register-resident
+    fragments with no memory traffic; an A100 reads 95% of dense-FP16 peak.
+    This suite runs a whole block. The functional-unit argument that kept it
+    unflagged was right and was not the whole question.
+    """
+    reason = registry.SAME_UNIT_DIFFERENT_QUANTITY["transformer_virus"]
+    assert "mma_sync" in reason and "transformer block" in reason
+    assert _get("transformer_virus").unit == PANTHEONGPU_UNITS["transformer_virus"]
+
+
+def test_our_transformer_virus_really_runs_a_block():
+    """The reason is a claim about this kernel; check the kernel makes it true."""
+    import sourcecheck
+    from kernels import transformer_compute
+    code = sourcecheck.flat_function_code(transformer_compute.run_virus)
+    assert "transformer_ops . block ( hidden_states , params )" in code
+    assert "heads = heads" in code

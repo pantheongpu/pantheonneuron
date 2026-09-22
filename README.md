@@ -893,8 +893,11 @@ travels with every figure that has a published ceiling.
 **Ceilings verified 2026-09-10** against the AWS Neuron architecture
 documentation, which gives Trainium1 and Inferentia2 in identical words:
 two NeuronCore-v2 per chip, 32 GiB HBM at **820 GiB/s**, **190 TFLOPS**
-FP16/BF16/cFP8/TF32. They are the same silicon per chip; they differ in
-how many chips an instance carries.
+FP16/BF16/cFP8/TF32. Those published figures are per chip on both parts.
+What the parts *sustain* is not the same: inf2 reaches 0.723 of trn1's
+dense-GEMM rate at identical code and toolchain, with memory bandwidth
+identical, measured across five hosts on 2026-09-21. See
+[docs/inf2_sustains_less_than_trn1.md](docs/inf2_sustains_less_than_trn1.md).
 
 | workload | Score | cores it had | of its share |
 |---|--:|--:|--:|
@@ -982,8 +985,10 @@ page's* "9.8 TB/s" by 16 chips. The suspicion was backwards — 820 is
 correct, for both parts — and the smaller ceiling reported the bandwidth
 kernels at 83–88% of peak when they reach about 60%.
 
-The repo already knew they were the same silicon: both chips report
-NeuronCore-v2, which is what should have made the suspicion suspicious.
+The repo already knew both chips report NeuronCore-v2 and the same
+published HBM figure, which is what should have made the suspicion
+suspicious. (Equal *bandwidth* is what the 2026-09-21 passes confirmed,
+to three decimals. Equal compute is what they refuted.)
 
 What genuinely does not reconcile is the instance pages, and it is why
 the architecture page is the cited source: **both** trn1.32xlarge (16

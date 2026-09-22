@@ -26,7 +26,7 @@ never moved.
 One process per size. The Neuron runtime holds its cores for the life of the
 process, and the harness reserves a profiler core at start-up.
 
-    python tools/sweep_memory_size.py                    # 1,2,4,8,12 GiB, both
+    python tools/sweep_memory_size.py                    # per-workload defaults
     SIZES_GIB=2,8 DURATION=60 REPEAT=2 python tools/sweep_memory_size.py
 """
 
@@ -44,6 +44,23 @@ from kernels import registry, tiling  # noqa: E402
 
 SWEEPABLE = ("memory_read", "memory_write")
 GIB = 1024 ** 3
+
+# Default sizes per workload, because the two kernels cannot hold the same
+# buffers. A read allocates its source and nothing else, so it runs to 12 GiB
+# on a 16 GiB NeuronCore. A write's output *is* its buffer, and a pass's
+# destination is still resident when the next pass allocates its own -- the
+# constraint memory_write's own comments record, and the reason it pins 4 GiB.
+#
+# The first sweep used 1,2,4,8,12 GiB for both, on trn1.2xlarge 2026-09-22.
+# memory_read passed at every size, flat from 272.8 to 273.1 GB/s.
+# memory_write passed to 4 GiB and failed at 8 and 12 with "Not enough Neuron
+# memory on core 0 for size=8589934592" -- a constraint the kernel already
+# documented, asked for by a default that had not read it, at twenty minutes
+# of instance time per failed size.
+DEFAULT_SIZES_GIB = {
+    "memory_read": "1,2,4,8,12",
+    "memory_write": "1,2,4",
+}
 
 
 def sizes_from(text: str):
@@ -128,20 +145,22 @@ def main() -> int:
         _, _, name, total_bytes, duration, repeat = sys.argv
         return run_one(name, int(total_bytes), int(duration), int(repeat))
 
-    sizes = sizes_from(os.environ.get("SIZES_GIB", "1,2,4,8,12"))
+    override = os.environ.get("SIZES_GIB")
     duration = int(os.environ.get("DURATION", "60"))
     repeat = int(os.environ.get("REPEAT", "2"))
     names = [n.strip() for n in
              os.environ.get("WORKLOADS", ",".join(SWEEPABLE)).split(",")]
 
+    sizes = {name: sizes_from(override or DEFAULT_SIZES_GIB[name]) for name in names}
+
     # Refuse the whole sweep up front rather than an hour in.
     for name in names:
-        for total_bytes in sizes:
+        for total_bytes in sizes[name]:
             swept_problem(registry.resolve(name)[0], total_bytes)
 
     rows = []
     for name in names:
-        for total_bytes in sizes:
+        for total_bytes in sizes[name]:
             before = _reports()
             print(f"=== {name} at {total_bytes // GIB} GiB, {duration}s x {repeat}",
                   flush=True)
