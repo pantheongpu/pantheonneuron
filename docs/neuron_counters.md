@@ -45,7 +45,37 @@ pass recorded them as absent.
 | pantheongpu | Neuron source | Notes |
 |---|---|---|
 | `throttle_reason`, `throttle_time` | `throttle_active_nc0_time_ns` and 5 related | Per NeuronCore. Measured 774 ns active. |
-| `avg/min/max_clk` | `neuroncore_cycle_count` ÷ `total_time` | Derived, not reported: 209594 / 0.000149710075 s = **1.400 GHz**. |
+| `avg/min/max_clk` | **nothing** -- see below | `neuroncore_cycle_count` ÷ `total_time` cannot measure a clock: `total_time` *is* the cycle count divided by a fixed 1.4 GHz. |
+
+**There is no clock counter, and this table claimed one for three weeks.**
+The arithmetic above is circular. 209594 ÷ 1.4e9 = 0.000149710000, which is
+the `total_time` it was divided by; the quotient is 1.400 GHz by
+construction, and would be 1.400 GHz on a part running at half that. Caught
+2026-09-22 when the same division over four captures on two parts --
+trn1.2xlarge and inf2.xlarge, `memory_read` and `memory_write` -- returned
+1.4000 GHz every time, to four decimals, including on two parts that differ
+by 28% in sustained matmul throughput:
+
+| Part | Capture | Cycles | `total_time` (s) | Cycles ÷ time |
+|---|---|---|---|---|
+| trn1.2xlarge | `memory_read` | 46,957,112 | 0.033540796638 | 1.4000 GHz |
+| inf2.xlarge | `memory_read` | 46,969,544 | 0.033549676388 | 1.4000 GHz |
+| trn1.2xlarge | `memory_write` | 24,854,330 | 0.017753091394 | 1.4000 GHz |
+| inf2.xlarge | `memory_write` | 24,878,662 | 0.017770473764 | 1.4000 GHz |
+
+What the cycle count *can* support is a comparison against an independently
+measured wall clock. The bandwidth kernels provide one, because their Score
+divides bytes by this same `total_time` while the kernel separately divides
+the same bytes by `time.perf_counter`. Those agreed within 0.7% on all five
+hosts of the 2026-09-21 passes, which does say the cores were near 1.4 GHz
+*while a DMA-bound kernel ran* -- it says nothing about a compute-bound one.
+
+A consequence worth stating plainly: **`profiler_gbps` inherits the 1.4 GHz
+assumption.** It is a cycle count scaled by a constant, not a measured
+duration, so a part that clocked differently under load would report a
+proportionally wrong bandwidth with nothing in the row to show it. The
+analytic cross-check beside it is what makes that visible, which is why
+`verify_against_analytic` exists and why both figures reach the report.
 
 See [`data/probe-2026-08-26-tools/`](../data/probe-2026-08-26-tools/) for the
 full 108-counter set, including MFU/HFU/MBU, per-engine instruction counts
