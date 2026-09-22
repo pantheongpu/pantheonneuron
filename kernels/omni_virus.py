@@ -113,6 +113,27 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     # tanh gives 0.9052 against the 0.7616 it would give without the
     # vector stage -- a 19% difference the output carries.
     #
+    # WHAT THE MONITOR COUNTS THAT THIS COUNT DOES NOT. The Score is the
+    # monitor's effective_flops; the cross-check below counts the two
+    # matmuls, 4*tile^3. The two differed by 12% on every host of the
+    # 2026-09-21 pass, steadily, and the reason was unknown until it was
+    # captured: the compiler lowers the cumsum onto the Tensor Engine, and
+    # the monitor counts that work. Measured 2026-09-22 with
+    # tools/omni_flops.py, reading the hardware's own model_flops:
+    #
+    #   tile 8192 (pinned): 2,473,901,162,496 against 2,199,023,255,552,
+    #                       exactly tile^3/2 more -- ratio 1.125
+    #   tile 2048:            51,539,607,552 against     34,359,738,368,
+    #                       exactly 2*tile^3 more, a whole matmul -- 1.500
+    #
+    # So the gap is real work, correctly counted by the monitor, and the
+    # analytic figure cannot absorb it with one formula: the lowering costs
+    # a quarter of a matmul at 8192 and a whole one at 2048. What is
+    # declared instead is the expected ratio at the pinned shape --
+    # registry.MONITOR_OVER_KERNEL_EXPECTED -- so a row that drifts off
+    # 1.125 now says so, where before 1.12 was excused in a comment and a
+    # genuine 12% error would have looked the same.
+    #
     # Same shapes, same graph, same FLOP count.
     lhs = torch.full((tile, tile), 1.0 / tile, dtype=dtype, device=device)
     rhs = torch.ones((tile, tile), dtype=dtype, device=device)

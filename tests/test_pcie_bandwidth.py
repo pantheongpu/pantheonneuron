@@ -277,25 +277,38 @@ def test_the_docstring_records_what_the_sweep_settled():
     assert "the link is healthy" in doc
     assert "bandwidth-bound, not overhead-bound" in doc
     assert "signature of a staging" in doc  # wrapped in the docstring
-    # And that the pinned size sits in the degraded regime.
-    assert "pinned 1 GiB measures the degraded regime" in doc
+    # And that the size question the sweep left open is now settled, with
+    # the curve it was settled from.
+    assert "pinned 1 GiB measured the degraded regime" in doc
+    assert "the pin stays 1 GiB, because 16 MiB cannot be" in doc
+    # The cost of that choice has to stay visible beside it.
+    assert "the Score is about 3.7 GB/s where the link can do about 8.9" in doc
 
 
-def test_the_pinned_size_is_known_to_be_past_the_cliff():
-    """Recorded as arithmetic so the registry decision is informed.
+def test_the_pin_costs_bandwidth_and_the_docstring_says_why():
+    """The pin is the slow side of the cliff, on purpose, since 2026-09-22.
 
-    d2h holds ~2.9 GB/s to 16 MiB and collapses to 0.88 by 64 MiB, and the
-    pinned problem is 1024 MiB -- past the cliff in both directions.
+    16 MiB is where both directions peak, and it OOMs: the runtime's host
+    footprint grows about 5 MB per transfer at that size and a 60 s harness
+    run was killed at 31 GB on a 30 GB host, while 1 GiB is flat. Kept as
+    arithmetic over the measured curve so the trade stays checkable.
     """
     problem = {w.name: w.problem for w in registry.WORKLOADS}["pcie_bandwidth"]
-    pinned_mib = problem["bytes"] // 1024**2
-    assert pinned_mib == 1024
+    assert problem["bytes"] // 1024**2 == 1024
 
-    # Measured on trn1.2xlarge 2026-09-10.
-    d2h_small, d2h_large = 2.83, 1.09      # 16 MiB, 1024 MiB
-    h2d_peak, h2d_pinned = 11.55, 7.37
-    assert d2h_small > 2.5 * d2h_large, "the cliff is real"
-    assert h2d_pinned < h2d_peak, "h2d is past its peak at the pin too"
+    sweep_gbps = {          # MiB: (h2d, d2h), trn1.2xlarge 2026-09-22
+        1: (5.80, 2.28), 4: (8.05, 3.41), 16: (8.89, 3.93),
+        32: (6.59, 1.08), 64: (6.65, 1.08), 256: (5.79, 1.11),
+        1024: (6.84, 1.11),
+    }
+    best = max(sweep_gbps, key=lambda m: sweep_gbps[m][0])
+    assert best == 16, "both directions peak at 16 MiB"
+    assert sweep_gbps[16][1] > 3 * sweep_gbps[32][1], "the cliff is real"
+    # The pin is past the cliff, and that is the cost being accepted.
+    pinned = sweep_gbps[problem["bytes"] // 1024**2]
+    assert pinned[1] < sweep_gbps[16][1] / 3
+    # So the docstring must carry the reason, not just the number.
+    assert "host memory" in pcie_bandwidth.__doc__
 
 
 def test_the_filter_drops_a_module_docstring_after_a_shebang():

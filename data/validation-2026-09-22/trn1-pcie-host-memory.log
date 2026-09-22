@@ -1,0 +1,27 @@
+# Why pcie_bandwidth cannot pin 16 MiB: the runtime's host memory grows per transfer.
+# trn1.2xlarge, 2026-09-22 16:30-16:40 UTC. Measured after a 60 s harness run at a 16 MiB
+# pin was killed by the kernel's OOM killer:
+#
+#   Out of memory: Killed process 5917 (python3) total-vm:39566156kB, anon-rss:31175284kB
+#
+# on a 30 GiB host, 59 s into the run. The 1 GiB pin has never done this, including two
+# 3600 s legs on 2026-09-21 (8,610 to 9,956 passes each).
+#
+# Three loops, 15 s each, current resident set sampled every 500 passes (every 5 at 1 GiB):
+
+  size     loop                        passes   GB/s   resident set, GiB
+  16 MiB   resident.copy_(host)          7078   7.92   3.70 6.22 8.87 11.47 13.97 16.67 19.28 21.89 24.39 26.98 29.37 29.64 29.64 29.64
+  16 MiB   host.to(device) + del         5978   6.42   3.61 6.20 8.63 11.14 13.75 16.34 18.81 21.41 23.92 26.39 28.92
+   1 GiB   host.to(device) + del           97   6.90   3.98 3.98 3.98 3.98 4.02 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98 3.98
+
+# Both 16 MiB loops grow about 5 MB per transfer and do not give it back; the copy_ loop
+# plateaus only when it has taken the whole host. The 1 GiB loop is flat to two decimals.
+#
+# So this is NOT the in-place-write question the kernel's SUSPECT note asks about: copy_ and
+# to(device)+del behave identically. The difference is the pass rate -- about 400/s at 16
+# MiB against about 5/s at 1 GiB -- so whatever the runtime holds per transfer is reclaimed
+# fast enough at the lower rate and not at the higher.
+#
+# Consequence: a 16 MiB pin would exhaust the host on this suite's own 300 s and 3600 s
+# runs. The pin stays 1 GiB and kernels/pcie_bandwidth.py records the cost: the Score is
+# about 3.7 GB/s where the link can do about 8.9 one way.
