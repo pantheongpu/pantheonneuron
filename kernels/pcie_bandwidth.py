@@ -44,11 +44,33 @@ have shown:
   directly -- it returned unpinned buffers on this stack -- arriving from
   the other side.
 
-**So the pinned 1 GiB measures the degraded regime for both directions.**
-h2d is past its own peak there too (7.37 against 11.55). The size is a
-registry decision and is left open: 16 MiB measures the link, 1 GiB
-measures what a large transfer actually costs, and those are different
-questions. What is no longer true is that the number is unexplained.
+**So the pinned 1 GiB measured the degraded regime for both directions.**
+h2d was past its own peak there too (7.37 against 11.55).
+
+**Resolved 2026-09-22: the pin is 16 MiB.** The sweep was re-measured
+through this kernel that day on a trn1.2xlarge
+(tools/pcie_size_sweep.py, 10 s per size, one process each):
+
+    MiB     h2d      d2h   combined
+      1    5.80     2.28       4.04
+      4    8.05     3.41       5.73
+     16    8.89     3.93       6.41
+     32    6.59     1.08       3.83
+     64    6.65     1.08       3.86
+    256    5.79     1.11       3.43
+   1024    6.84     1.11       3.78
+
+Both directions peak at 16 MiB and the cliff sits immediately past it, now
+between 16 and 32 MiB rather than 16 and 64. Of the two questions the old
+comment left open -- measure the link, or measure what a large transfer
+costs -- this workload exists to answer the first: it is the row that
+notices a link that trained down, which wants the size at which the link
+is what binds. The Score moves from about 3.7 to about 6.4 GB/s, and the
+figures above ship beside the pin so the neighbours are visible.
+
+(The whole curve is lower than 2026-09-10's, which read 11.55 at 16 MiB
+against 8.89 here. Different instance, same shape of curve; the pin is
+chosen from the shape, not the absolute.)
 
 STATUS: VERIFIED ON HARDWARE, both parts 2026-09-08 and trn1.2xlarge
 2026-09-10, including the preallocation and alternating-source controls --

@@ -550,13 +550,20 @@ def _measure_started(workload, devices, duration: int, monitor,
             # trn1.2xlarge 2026-09-11 tensor_virus, int_virus and
             # transformer_virus sat within 0.2% of their kernels while
             # pulse_virus sat at 0.963, and 0.963 is not a warning-sized
-            # number. (omni_virus reads 1.12 for a stated reason: its
-            # kernel counts only the two matmuls of its chain.)
+            # number. (omni_virus reads 1.125 because the compiler lowers
+            # its cumsum onto the Tensor Engine and the monitor counts it,
+            # measured 2026-09-22 -- now declared and checked rather than
+            # excused: monitor_ratio_unexpected.)
             if isinstance(score, (int, float)) and score > 0:
+                ratio = round(declared / score, 4)
                 _LAST_RUN.setdefault(workload.name, {}).update({
                     "kernel_figure": round(score, 4),
-                    "declared_over_kernel": round(declared / score, 4),
+                    "declared_over_kernel": ratio,
                 })
+                unexpected = monitor_ratio_unexpected(
+                    workload, ratio, _LAST_RUN.get(workload.name) or {})
+                if unexpected:
+                    detail = "; ".join(filter(None, [detail, unexpected]))
             score = declared
             _LAST_RUN.setdefault(workload.name, {})["score_method"] = (
                 registry.MONITOR
@@ -821,6 +828,37 @@ def _median_provenance(rows, scores, published):
 # kernel issued -- and small disagreements are expected. It is the factor
 # of four that needs saying.
 OVERRIDE_DISAGREEMENT = 1.5
+
+
+def monitor_ratio_unexpected(workload, ratio, run_result) -> typing.Optional[str]:
+    """Hold the monitor-over-kernel ratio against what it should read.
+
+    **A ratio nobody has an expectation for cannot catch anything.**
+    omni_virus has read 1.12 since it was written and the code called it
+    "a stated reason", so a genuine 12% error on that row would have looked
+    exactly like the quirk. The expectation is now declared per workload,
+    measured, and checked: see registry.MONITOR_OVER_KERNEL_EXPECTED.
+
+    Skipped when a workload that declares an expectation did not run its
+    pinned shape, because the compiler's lowering -- which is what the gap
+    is -- costs a different amount at a different shape: omni_virus reads
+    1.125 at the pinned 8192 and 1.500 at 2048. The row already says it ran
+    a smaller shape.
+    """
+    if not isinstance(ratio, (int, float)):
+        return None
+    declared = registry.MONITOR_OVER_KERNEL_EXPECTED.get(workload.name)
+    if declared is not None and run_result.get("ran_pinned_shape") is False:
+        return None
+    expected, because = declared or (registry.MONITOR_OVER_KERNEL_DEFAULT, "")
+    if abs(ratio - expected) <= registry.MONITOR_OVER_KERNEL_TOLERANCE * expected:
+        return None
+    reason = f" ({because})" if because else ""
+    return (
+        f"the declared Score is {ratio:.4f} of the kernel's own figure, "
+        f"against {expected:.3f} expected{reason} -- one of the two is "
+        f"measuring something other than it should"
+    )
 
 
 # How far the monitor's execution span may exceed the kernel's own

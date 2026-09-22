@@ -290,7 +290,14 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("pcie_bandwidth", "interconnect",
              "Host-to-device and device-to-host transfer over PCIe.",
              unit="GB/s",
-             problem={"bytes": 1 << 30, "direction": "bidirectional"},
+             # 16 MiB, not the 1 GiB pinned until 2026-09-22. Both
+             # directions peak there and the staging cliff sits just past
+             # it: measured that day on trn1.2xlarge with
+             # tools/pcie_size_sweep.py, h2d 8.89 and d2h 3.93 GB/s at 16
+             # MiB against 6.84 and 1.11 at 1 GiB. The row exists to notice
+             # a link that trained down, which wants the size that measures
+             # the link.
+             problem={"bytes": 16 << 20, "direction": "bidirectional"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'bytes_transferred',
@@ -741,6 +748,51 @@ COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
     # documentation with nothing to notice.
     "pulse_virus": ("throttle_active_nc0_time_ns",),
 }
+
+# What a monitor-sourced Score should read against the kernel's own figure,
+# where that is not 1.0, and why.
+#
+# The pair is the second quantity for a monitor Score: the counter says what
+# the device retired, the kernel says what it issued, and the ratio is what
+# catches a Score that is wrong. It only catches anything if the expected
+# value is known. omni_virus has read 1.12 since it was written, with a
+# comment calling it "a stated reason" -- which left the row unable to
+# distinguish its own 12% quirk from a real 12% error.
+#
+# Measured 2026-09-22 with tools/omni_flops.py, which captures the graph and
+# reads the hardware's own model_flops:
+#
+#   tile 8192 (pinned): model_flops 2,473,901,162,496 against the kernel's
+#     4*tile^3 = 2,199,023,255,552 -- exactly tile^3/2 more, ratio 1.125
+#   tile 2048:          model_flops 51,539,607,552 against 34,359,738,368
+#     -- exactly 2*tile^3 more, a whole extra matmul, ratio 1.500
+#
+# The extra is the chain's cumsum: the compiler lowers it onto the Tensor
+# Engine and the monitor counts it, correctly. The kernel cannot simply add
+# the term, because its cost is shape-dependent -- a quarter of a matmul at
+# 8192, a whole one at 2048 -- so what is declared here is the expected
+# ratio at the pinned shape, and the check is skipped when a run did not use
+# that shape.
+MONITOR_OVER_KERNEL_EXPECTED = {
+    "omni_virus": (
+        1.125,
+        "the compiler lowers the chain's cumsum onto the Tensor Engine and "
+        "the monitor counts it: tile^3/2 beyond the kernel's two matmuls at "
+        "the pinned 8192, measured 2026-09-22",
+    ),
+}
+
+# Every other monitor-scored workload counts what it issues, and the two
+# figures should agree: tensor_virus 0.9999, int_virus 1.0002, pulse_virus
+# 0.9983, transformer_virus 0.9992, graph_replay 1.0001 across five hosts
+# on 2026-09-21.
+MONITOR_OVER_KERNEL_DEFAULT = 1.0
+
+# Wide enough that sampling ramp does not fire it -- omni_virus reads 1.1206
+# against its expected 1.125, a 0.4% shortfall -- and tight enough to catch
+# the 12% that went unnoticed.
+MONITOR_OVER_KERNEL_TOLERANCE = 0.05
+
 
 # Published peak figures, per accelerator chip. **VERIFIED 2026-09-10**
 # against the AWS Neuron architecture documentation.
