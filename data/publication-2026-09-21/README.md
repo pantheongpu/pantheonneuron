@@ -89,14 +89,33 @@ document:**
 
 | Part | Figure | Source |
 |---|---|---|
-| Trainium1, Inferentia2 | 820 GiB/s = 880.5 GB/s | AWS Neuron architecture docs; `registry.PART_PEAKS` |
+| Trainium1, Inferentia2 | 820 GiB/s = 880.5 GB/s | AWS Neuron architecture docs; `registry.PART_PEAKS`. **AWS's pages disagree; see below.** |
 | A10 | 600 GB/s | [NVIDIA A10 datasheet](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a10/pdf/datasheet-new/nvidia-a10-datasheet.pdf) |
 | L40S | 864GB/s | [NVIDIA L40S product page](https://www.nvidia.com/en-us/data-center/l40s/) |
 | A100 40GB SXM | 1,555GB/s | [NVIDIA A100 datasheet](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf), SXM 40GB column |
 | H100 PCIe | 2,000 GB/s | [NVIDIA H100 PCIe product brief PB-11133](https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/data-center/h100/PB-11133-001_v01.pdf), Table 2 |
 | H100 SXM | 3.35TB/s | [NVIDIA H100 product page](https://www.nvidia.com/en-us/data-center/h100/) |
 
-Three things the checking turned up:
+**AWS's own pages disagree about the Neuron figure, by 7.4%.** The
+architecture pages say "32 GiB of device memory (for storing model state),
+with 820 **GiB**/sec of bandwidth". The NKI architecture guide says "2 HBM
+stacks with a total device memory capacity of 32GiB and bandwidth of 820
+**GB/s**". Both read 2026-09-22. 820 GiB/s is 880.5 GB/s, so the two
+readings put Trainium1's measured 543.7 GB/s at either **61.8%** or
+**66.3%** of peak.
+
+This dataset uses the GiB reading, 880.5 GB/s, for three reasons: the
+architecture page is the source `registry.PART_PEAKS` cites, it states GiB
+in both of its copies, and it is the less flattering of the two -- where
+the pages cannot both be right, the reading that does not flatter the
+part is the one to publish. A third figure agrees with it: 16 DMA engines
+per NeuronCore-v2 at 27.2 GB/s is 870 GB/s across the chip's two cores,
+near 880.5 and above 820.
+
+Anything published from this data should carry the range rather than one
+number, because the discrepancy is AWS's and not ours to resolve.
+
+Three things the NVIDIA checking turned up:
 
 - **The A10G has no published memory bandwidth.** It is an AWS-specific
   part, not the A10: NVIDIA's documents cover the A10, and AWS's give only
