@@ -18,6 +18,12 @@ HEALTHY = [
     (272.9804, 271.6374), (275.0706, 276.1197),
     (272.9404, 271.3718), (274.8987, 274.2130),
     (272.9933, 271.1493), (274.5629, 274.1244),
+    # The same three trn1.2xlarge at --duration 3600: the case this exists
+    # for. trn1-a's memory_read drifted to 0.9902 over the hour, the lowest
+    # healthy ratio on record.
+    (273.28, 270.59), (274.52, 273.89),
+    (273.12, 271.46), (274.93, 275.52),
+    (272.86, 271.49), (275.18, 275.53),
 ]
 
 
