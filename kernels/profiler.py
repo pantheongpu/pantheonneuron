@@ -601,11 +601,12 @@ def execution_window(counters: typing.Mapping[str, typing.Any]
 
 # How far the sustained window may fall below the profiled execution before
 # the row says so. Every hardware run on record puts wall-clock over profiler
-# between 0.990 and 1.01: five hosts on 2026-09-21 at 300 s, three of them
-# again at 3600 s, and the 20 s runs of 2026-09-10 and 2026-09-11. The hour
-# is where the low end came from -- trn1.2xlarge memory_read went from 0.9955
-# at 300 s to 0.9902 at 3600 s, a half-percent drift -- so 3% is three times
-# the widest healthy deviation, measured over the window this exists for.
+# between 0.989 and 1.01: five hosts on 2026-09-21 at 300 s, three of them
+# again at 3600 s, a 60 s confirmation run of this check itself on
+# 2026-09-22, and the 20 s runs of 2026-09-10 and 2026-09-11. The low end is
+# trn1.2xlarge memory_read at 0.9894 (60 s) and 0.9902 (3600 s), about a
+# one-percent shortfall, so 3% is nearly three times the widest healthy
+# deviation.
 SUSTAINED_SHORTFALL = 0.03
 
 

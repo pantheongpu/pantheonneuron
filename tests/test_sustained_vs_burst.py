@@ -24,6 +24,9 @@ HEALTHY = [
     (273.28, 270.59), (274.52, 273.89),
     (273.12, 271.46), (274.93, 275.52),
     (272.86, 271.49), (275.18, 275.53),
+    # This branch's own confirmation run, trn1.2xlarge 2026-09-22, 60 s. The
+    # memory_read pair is the lowest healthy ratio on record, 0.9894.
+    (272.8049, 269.92), (275.0416, 274.10),
 ]
 
 
