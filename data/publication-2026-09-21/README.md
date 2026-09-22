@@ -117,6 +117,23 @@ datasheet" from figures recalled rather than checked. Checked, reads run
 83.5-98.4%; writes run 50.1-96.7%, and the range was only ever right for
 reads.
 
+**Why Trainium1 sits at 62% where the NVIDIA parts reach 84-98%.** The
+limit is not HBM: two NeuronCores read exactly twice what one does, so
+nothing is contended at 543.7 GB/s. Every byte reaches HBM through the 16
+DMA engines AWS documents per NeuronCore-v2 at 27.2 GB/s each -- 435 GB/s
+per core, about 870 for the chip -- and one core reaches 60-63% of that
+whatever the kernel does. Five hypotheses have been tested on hardware and
+refuted: transfer width, a second concurrent load, the consumer engine
+(all in `kernels/memory_read.py`), and on 2026-09-22 prefetch depth 2/4/8
+and explicit `nisa.dma_copy`, with an HBM-to-HBM copy showing the on-chip
+path is not the constraint either
+(`data/validation-2026-09-22/trn1-dma-levers.log`). What remains is
+per-engine efficiency or a core-to-HBM fabric limit, neither reachable from
+a kernel. A GPU keeps thousands of requests in flight from its
+multiprocessors; on Trainium the DMA engines are the only path, and AWS's
+own guidance -- 128 partitions, 4 KiB or more per partition row -- was
+already being followed.
+
 **The pinned size does not bias it.** The sweep ran `memory_read` from 1 to
 12 GiB: 273.07, 272.82, 272.84, 272.95, 273.04 GB/s. Flat. The 8 GiB pin
 compares fairly against GPU runs that size themselves from free memory.

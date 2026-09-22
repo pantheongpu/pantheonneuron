@@ -1,0 +1,73 @@
+/home/ubuntu/pn/tools/dma_levers.py:195: DeprecationWarning: Use torch_xla.device instead
+  device = xm.xla_device()
+2026-09-22 15:15:53.102553: W neuron/pjrt-api/neuronpjrt.cc:1781] Use PJRT C-API 0.79 as client did not specify a PJRT C-API version
+2026-Sep-22 15:16:01.0889 1600:3093 [0] int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t**):213 CCOM WARN NET/OFI Failed to initialize sendrecv protocol
+2026-Sep-22 15:16:01.0895 1600:3093 [0] int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t**):354 CCOM WARN NET/OFI aws-ofi-nccl initialization failed
+2026-Sep-22 15:16:01.0900 1600:3093 [0] ncclResult_t nccl_net_ofi_init_no_atexit_fini_v6(ncclDebugLogger_t):183 CCOM WARN NET/OFI Initializing plugin failed
+2026-Sep-22 15:16:01.0905 1600:3093 [0] net_plugin.cc:97 CCOM WARN OFI plugin initNet() failed is EFA enabled?
+/home/ubuntu/pn/tools/dma_levers.py:198: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+....
+Compiler status PASS
+2026-09-22 15:17:11.000470:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_16290800381487346997+e30acd3a.hlo_module.pb
+source 2 GiB as 524288 x 2048 bf16 (4 KiB per partition row), 20s per variant
+variant            GB/s  passes  elapsed  correct  note
+Neuron NKI - Kernel call: kernel(source = Tensor(shape: (524288, 2048), dtype: bfloat16))
+/home/ubuntu/pn/tools/dma_levers.py:158: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+.
+Compiler status PASS
+2026-09-22 15:17:29.000781:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_17752695019195390722+e30acd3a.hlo_module.pb
+/home/ubuntu/pn/tools/dma_levers.py:168: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+baseline         262.59    2448    20.02     True  
+Neuron NKI - Kernel call: kernel(source = Tensor(shape: (524288, 2048), dtype: bfloat16))
+sys:1: DeprecationWarning: Block dimension is deprecated. The leading dimension of SBUF tensor must be partition dimension
+/home/ubuntu/pn/tools/dma_levers.py:158: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+.
+Compiler status PASS
+2026-09-22 15:18:07.000909:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_5084706031473450449+e30acd3a.hlo_module.pb
+/home/ubuntu/pn/tools/dma_levers.py:168: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+prefetch_2       265.25    2473    20.02     True  
+Neuron NKI - Kernel call: kernel(source = Tensor(shape: (524288, 2048), dtype: bfloat16))
+sys:1: DeprecationWarning: Block dimension is deprecated. The leading dimension of SBUF tensor must be partition dimension
+/home/ubuntu/pn/tools/dma_levers.py:158: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+.
+Compiler status PASS
+2026-09-22 15:18:45.000593:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_1284594762737912148+e30acd3a.hlo_module.pb
+/home/ubuntu/pn/tools/dma_levers.py:168: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+prefetch_4       264.88    2469    20.02     True  
+Neuron NKI - Kernel call: kernel(source = Tensor(shape: (524288, 2048), dtype: bfloat16))
+sys:1: DeprecationWarning: Block dimension is deprecated. The leading dimension of SBUF tensor must be partition dimension
+/home/ubuntu/pn/tools/dma_levers.py:158: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+.
+Compiler status PASS
+2026-09-22 15:19:23.000152:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_14682611973300253306+e30acd3a.hlo_module.pb
+/home/ubuntu/pn/tools/dma_levers.py:168: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+prefetch_8       264.82    2469    20.02     True  
+Neuron NKI - Kernel call: kernel(source = Tensor(shape: (524288, 2048), dtype: bfloat16))
+/home/ubuntu/pn/tools/dma_levers.py:158: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+.
+Compiler status PASS
+2026-09-22 15:20:00.000734:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_4821791716087749737+e30acd3a.hlo_module.pb
+/home/ubuntu/pn/tools/dma_levers.py:168: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+dma_copy         265.25    2473    20.02     True  
+Neuron NKI - Kernel call: kernel(source = Tensor(shape: (524288, 2048), dtype: bfloat16))
+/home/ubuntu/pn/tools/dma_levers.py:158: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+.
+Compiler status PASS
+2026-09-22 15:20:23.000115:  1600  [INFO]: Compilation Successfully Completed for model.MODULE_7837910572160989660+e30acd3a.hlo_module.pb
+/home/ubuntu/pn/tools/dma_levers.py:168: DeprecationWarning: Use torch_xla.sync instead
+  xm.mark_step()
+hbm_to_hbm       307.92    1436    20.03     True  moves 2x bytes (read+write)
+
+best SBUF-bound variant: prefetch_2 at 265.25 GB/s, 1.010x the baseline (262.59 GB/s). Per-core DMA theoretical is 435 GB/s (16 x 27.2); baseline is 60.4% of it, best is 61.0%.

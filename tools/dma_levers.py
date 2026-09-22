@@ -27,8 +27,19 @@ failure in one prints and the rest still run.
 Not tested: `dge_mode=hwdge` needs NeuronCore-v3 or newer, and this part is v2.
 
 Bandwidth here is bytes over wall clock, not the profiler figure the harness
-publishes. On this kernel the two agree within 1% on every host of the
-2026-09-21 pass, and a lever worth having has to show more than 1%.
+publishes, and this tool's baseline is not comparable with the published 273
+GB/s: 2 GiB rather than 8, wall clock rather than the profiler, and one
+output allocated per pass. Measured 2026-09-22 it reads 262.59. Compare
+variants against that baseline, not against 273. A lever worth having has to
+beat it by more than 1%, since profiler and wall clock agree to within that
+on every host of the 2026-09-21 pass.
+
+RESULT, trn1.2xlarge 2026-09-22: none of them does. prefetch 2/4/8 read
+265.25, 264.88, 264.82 and dma_copy 265.25 -- 1% over baseline and flat in
+depth. hbm_to_hbm moves 307.92 GB/s across both directions, so SBUF is not
+the constraint. data/validation-2026-09-22/trn1-dma-levers.log has the
+reasoning; the ceiling is per-core DMA throughput at about 60% of the
+engines' rated aggregate.
 
     python tools/dma_levers.py                  # all variants, 2 GiB, 20 s each
     GIB=4 SECONDS=30 python tools/dma_levers.py
