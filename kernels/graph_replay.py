@@ -44,8 +44,17 @@ where a running total cannot fall and this counter did, to show which.
 **The window.** This workload is bounded by ``replays`` as well as by
 ``duration``. At the old pin of 60,000 the count bound first, at about
 20 seconds, and the harness run that verified the per-period reading had
-one whole ~5 s period to divide. The pin is now 200,000, past the default
---duration, so the caller's duration sets the window. The orchestrator
+one whole ~5 s period to divide. **At 200,000 the count still binds**: it
+stops the run at about 66 s on trn1.2xlarge and 88 s on inf2.xlarge,
+measured across five hosts 2026-09-21 at --duration 300, where every row
+ended at ~200,000 replays with four fifths of its requested window unused.
+Only a --duration below that lets the clock bind, which the default 30 s
+does. A previous version of this paragraph said the caller's duration sets
+the window, which was true at no pin this workload has shipped. The row
+says which bound applied: with no ``bounded_by`` of its own, the
+orchestrator's ``short_window`` check fires and the Detail reads "measured
+a 65.8s window of a requested 300s, so this run was bounded by its pinned
+problem rather than by --duration". The orchestrator
 also waits for one idle period before stopping the monitor, since the
 last busy period's tally only arrives when it closes. Until then the
 row's execution total read 45,709 for 60,000 replays.
