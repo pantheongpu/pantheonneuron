@@ -1,4 +1,4 @@
-# Inferentia2 sustains 72% of Trainium1's matmul rate, and the registry said they were the same
+# Inferentia2 sustains 72% of Trainium1's matmul rate because it throttles harder
 
 `registry.PART_PEAKS` carries the same compute ceiling for both parts, 190
 BF16 TFLOPS per chip, with a comment that reads:
@@ -70,24 +70,50 @@ itself a utilization limit.
 
 Both inf2 hosts agree, so it is not one machine.
 
-## What is still open
+## trn1 throttles too, and less -- by the right amount
 
-**The trn1 comparison is not in yet.** These captures say inf2 throttles;
-they do not yet say trn1 throttles less, and that is the claim the table at
-the top implies. The trn1 hosts were still running their 3600 s passes when
-this was written, and the same probe
-(`throttle_probe.sh` in the run directory) will run on one of them before it
-is terminated. Until then the cause is *consistent with* a utilization cap on
-inf2 and not established.
+The same probe on the trn1.2xlarge hosts after their passes, same graphs by
+module hash. The two parts carry the same throttle mechanism; they apply it
+to very different depths:
 
-**Cycles per execution turned out not to be a usable comparison.** Two
-captures of the same module on the two inf2 hosts returned 83,411,352 and
-273,732,448 cycles, so a single capture's cycle count is not a stable
-per-execution figure and cannot be differenced against trn1's.
+| Graph (module hash) | inf2 avg util limit | trn1 avg util limit | inf2 / trn1 |
+|---|---|---|---|
+| `MODULE_11435754646458375002` | 0.641 | 0.891 | **0.719** |
+| `MODULE_707385231116392439` | 0.563 | 0.765 | 0.736 |
+| `MODULE_13945462658086779221` | 0.564 | 0.761 | 0.741 |
+| `MODULE_13478107821426688942` | 0.633 | 0.825 | 0.767 |
 
-**The registry comment needs correcting either way.** Whatever the mechanism,
-"not in what a chip does" is false as measured: the same code on the same
-compiler reaches 72% of the rate on one part. `PART_PEAKS` itself stays as
-it is -- 190 TFLOPS is what AWS publishes for both, and `Percent Of Peak` is
-honest against the published figure. What it now shows is that inf2 delivers
-60% of its advertised compute on dense matmul where trn1 delivers 83%.
+(`throttle_avg_util_limit_nc0_percent`; inf2 from inf2-a, trn1 from trn1-b's
+clean run. trn1-c's one throttled capture of the first graph read 0.918.)
+
+The difference is the depth of `throttle_activity_1`: on inf2 it holds the
+core at a **0.63** utilization limit for 84-90% of a matmul graph's run; on
+trn1 the same activity applies a **0.875** limit for 15-38% of it. The
+limit ratios, 0.72-0.77, sit on the measured throughput ratios, 0.723 for
+the pure-GEMM kernels up to 0.834 for `transformer_virus`.
+
+**The cause is a utilization-limit throttle that inf2 applies far more
+deeply than trn1.** Not the clock, not the code, not the counters -- each of
+those was ruled out above -- and not a difference in the silicon's peak,
+which AWS publishes as equal and which the memory rows show equal in
+practice.
+
+## What follows from it
+
+**trn1 is throttled too.** Its 78.60 TFLOPS runs under an average 0.89
+utilization limit on the densest graph, so its 83% of published peak is
+itself capped. Neither part's `Percent Of Peak` is a statement about
+unthrottled silicon; both are statements about what the part sustains as
+AWS runs it, which is the thing a buyer gets.
+
+**Cycles per execution are not a usable comparison.** Two captures of the
+same module on the two inf2 hosts returned 83,411,352 and 273,732,448
+cycles, so a single capture's cycle count is not a stable per-execution
+figure.
+
+**The registry comment was corrected in #24 and stays correct.**
+`PART_PEAKS` keeps AWS's published 190 TFLOPS for both parts, and what
+`Percent Of Peak` now says -- inf2 delivers 60% of its advertised compute on
+dense matmul, trn1 83% -- is explained rather than merely observed.
+
+Evidence: `data/validation-2026-09-21/{inf2-a,inf2-b,trn1-b,trn1-c}-throttle-probe.log`.
