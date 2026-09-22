@@ -46,8 +46,29 @@ ENGINE_COUNTERS = (
 )
 
 
+def square_tile(problem: typing.Mapping[str, typing.Any]) -> int:
+    """The one dimension this kernel runs, or a refusal.
+
+    Only ``shape[0]`` sizes anything: the operands are ``tile x tile``, so a
+    non-square pin would run m^3 while the row advertised m x n x k.
+    ``ran_pinned_shape`` does report that afterwards, which is the wrong end
+    -- the run has happened and the Score is already wrong for the shape it
+    claims. A pin this kernel cannot express is a declaration error, so it
+    is refused here, before the toolchain gate, where it costs nothing and
+    can be checked without a device.
+    """
+    m, n, k = (int(value) for value in problem["shape"])
+    if not m == n == k:
+        raise ValueError(
+            f"omni_virus runs a square chain; the pinned shape {[m, n, k]} is "
+            f"not square, and only {m} would reach the operands"
+        )
+    return m
+
+
 def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     """Drive all four engines in one dependent chain."""
+    square_tile(problem)
     nki_backend.require_toolchain()
 
     import torch  # type: ignore

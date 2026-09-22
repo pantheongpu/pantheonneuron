@@ -1,0 +1,21 @@
+# Hardware confirmation for "Make three declarations describe the run they belong to".
+# trn1.2xlarge, 2026-09-22 09:16-09:18 UTC, after that host's publication pass finished.
+# Branch synced by git archive and hash-checked: inference_mix.py md5 5c7f4725 local and remote.
+# Each workload one process, --duration 30. Compared against the same host's 300 s pass
+# (2026-09-21, three repeats, median).
+#
+# The claim under test: the declarations changed and the runs did not.
+
+workload      status  30 s Score  300 s Score  ratio   Problem as now published
+serving_mix   PASS        2.4734       2.4805  0.9971  prefill_ratio 0.2, prefill_batch 1, decode_batch 8, prompt 1024, decode 256, hidden 4096, layers 32
+omni_virus    PASS       53.0524      54.0005  0.9824  op mixed, shape [8192, 8192, 8192], dtype bf16, engines all
+graph_replay  PASS     2960.3863    3035.1156  0.9754  hidden 2048, replays 200000, dtype bf16
+
+# serving_mix: identical within 0.3%. The published Problem now names both batches.
+# omni_virus: square_tile accepted the pinned square and the run proceeded as before.
+# graph_replay: at 30 s the clock binds, not the 200,000-replay count, and the row's
+#   Detail is empty -- short_window does not fire, which is what the corrected
+#   docstring says happens at the default duration. At 300 s the same host's rows
+#   stopped at ~65.9 s with short_window firing.
+# The 1.8% and 2.5% gaps are the shorter window (30 s of monitor samples against 300 s),
+# not the change: neither workload's tensors, loop bounds or counting changed.

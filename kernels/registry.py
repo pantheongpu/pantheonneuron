@@ -386,7 +386,12 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
              # set the Score sat outside the published problem until
              # 2026-09-17. The values are the defaults they replace, so the
              # declaration changed and the run did not.
-             problem={"prefill_ratio": 0.2, "batch": 8, "prompt": 1024,
+             # prefill_batch and decode_batch, not one "batch": the kernel
+             # runs prefill one request at a time and decode eight-wide,
+             # which is what continuous batching does. The single key said
+             # the whole workload ran at 8 and a fifth of its steps ran at 1.
+             problem={"prefill_ratio": 0.2, "prefill_batch": 1,
+                      "decode_batch": 8, "prompt": 1024,
                       "decode": 256, "hidden": 4096, "layers": 32},
              score_source=ScoreSource(INTERNAL,
                  counters=(
