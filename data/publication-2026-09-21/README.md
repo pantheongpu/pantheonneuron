@@ -68,21 +68,54 @@ same whole-GPU kernel, which its own reports show moves bandwidth under 0.3%,
 so either GPU row serves. The pairing crosses names, so no join on
 (Test Name, Unit) will produce it.
 
-| Part | Device read (GB/s) | Device write (GB/s) | Source |
-|---|---|---|---|
-| **Trainium1** | **543.7** | **537.2** | this pass, 3 hosts, spread < 0.05% |
-| Inferentia2 | 542.8 | 548.6 | this pass, 2 hosts |
-| A10G | 501.9 | 474.2 | pantheongpu reports, median |
-| L40S | 728.8 | 432.9 | pantheongpu reports, median |
-| A100-SXM4-40GB | 1496.2 | 1475.4 | pantheongpu reports, median |
-| H100 PCIe | 1968.9 | 1934.2 | pantheongpu reports, median |
-| H100 80GB HBM3 | 3044.0 | 3172.3 | pantheongpu reports, median |
+| Part | Device read (GB/s) | Device write (GB/s) | Published peak (GB/s) | Read % | Write % |
+|---|---|---|---|---|---|
+| **Trainium1** | **543.7** | **537.2** | 880.5 | **61.8%** | **61.0%** |
+| Inferentia2 | 542.8 | 548.6 | 880.5 | 61.6% | 62.3% |
+| A10 | 501.3 | 479.5 | 600 | 83.5% | 79.9% |
+| A10G | 501.9 | 474.2 | *none published* | -- | -- |
+| L40S | 728.8 | 432.9 | 864 | 84.4% | **50.1%** |
+| A100-SXM4-40GB | 1496.2 | 1475.4 | 1,555 | 96.2% | 94.9% |
+| H100 PCIe | 1968.9 | 1934.2 | 2,000 | 98.4% | 96.7% |
+| H100 80GB HBM3 (SXM) | 3044.0 | 3172.3 | 3,350 | 90.9% | 94.7% |
 
-Trainium1's 543.7 GB/s is **61.8%** of the 880.5 GB/s AWS publishes for the
-chip (820 GiB/s; `registry.PART_PEAKS`). The GPU rows are medians of
-pantheongpu's published reports as tallied 2026-09-22; their share of each
-datasheet figure is not computed here, because those figures have not been
-checked against NVIDIA's documents in this repo.
+Measured figures: this pass for the Neuron parts, and the median of
+pantheongpu's published reports for the GPUs, tallied 2026-09-22. Both
+suites count decimal gigabytes (bytes / 1e9), as NVIDIA and AWS quote them,
+so the percentages carry no GiB/GB error.
+
+**Published peaks, each checked on 2026-09-22 against the vendor's own
+document:**
+
+| Part | Figure | Source |
+|---|---|---|
+| Trainium1, Inferentia2 | 820 GiB/s = 880.5 GB/s | AWS Neuron architecture docs; `registry.PART_PEAKS` |
+| A10 | 600 GB/s | [NVIDIA A10 datasheet](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a10/pdf/datasheet-new/nvidia-a10-datasheet.pdf) |
+| L40S | 864GB/s | [NVIDIA L40S product page](https://www.nvidia.com/en-us/data-center/l40s/) |
+| A100 40GB SXM | 1,555GB/s | [NVIDIA A100 datasheet](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf), SXM 40GB column |
+| H100 PCIe | 2,000 GB/s | [NVIDIA H100 PCIe product brief PB-11133](https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/data-center/h100/PB-11133-001_v01.pdf), Table 2 |
+| H100 SXM | 3.35TB/s | [NVIDIA H100 product page](https://www.nvidia.com/en-us/data-center/h100/) |
+
+Three things the checking turned up:
+
+- **The A10G has no published memory bandwidth.** It is an AWS-specific
+  part, not the A10: NVIDIA's documents cover the A10, and AWS's give only
+  "24 GB of memory" per GPU. Its reports also show a 300 W power limit
+  against the A10's 150 W, so the A10's 600 GB/s cannot be assumed to apply.
+  The figure widely repeated for it is an inference, and is not used here.
+- **H100 PCIe's brief disagrees with itself.** It prints 2,000 GB/s peak
+  beside a 1,593 MHz clock and a 5,120-bit bus, which multiply to
+  2,039 GB/s. The printed figure is used; against 2,039 the percentages are
+  96.6% read and 94.9% write.
+- **L40S writes reach half its published bandwidth.** 432.9 GB/s against
+  864, while its reads reach 84.4%. That is a GPU-side finding, not a
+  Trainium one, and it is the only row here where read and write diverge by
+  more than a few points.
+
+An earlier summary of this comparison put the NVIDIA parts at "81-98% of
+datasheet" from figures recalled rather than checked. Checked, reads run
+83.5-98.4%; writes run 50.1-96.7%, and the range was only ever right for
+reads.
 
 **The pinned size does not bias it.** The sweep ran `memory_read` from 1 to
 12 GiB: 273.07, 272.82, 272.84, 272.95, 273.04 GB/s. Flat. The 8 GiB pin
