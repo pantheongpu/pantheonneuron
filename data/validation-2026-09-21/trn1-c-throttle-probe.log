@@ -1,0 +1,61 @@
+# neuron-profile capture of every graph the core suite compiled, trn1-c (trn1.2xlarge), 2026-09-22.
+#
+# Same probe as the inf2 logs beside it (scripts/throttle_probe.sh), run after the host's
+# publication pass, for the matching comparison.
+#
+# Partial: a follow-on job took the device after the second capture (a gating bug in the
+# run tooling, since fixed), so only MODULE_11435754646458375002 carries throttle counters.
+# That capture completed before the other job's workers reached the device.
+
+core phase window: 2026-09-21T22:07:25Z .. 2026-09-21T23:26:03Z
+graphs in window: 8
+== MODULE_7577120646689987001  size=123904  capture_wall=7.48s
+   dma_active_cycles = 2289436
+   hfu_estimated_percent = 0
+   mfu_estimated_percent = 0
+   mfu_hlo_estimated_percent = 0
+   mfu_hlo_max_achievable_estimated_percent = 0
+   mfu_inst_estimated_percent = 0
+   mfu_inst_max_achievable_estimated_percent = 0
+   mfu_max_achievable_estimated_percent = 0
+   model_flops = 0
+   neuroncore_cycle_count = 5467475
+   peak_flops_bandwidth_ratio = 223.78146341463415
+   tensor_engine_active_time = 4.81415e-07
+   tensor_engine_active_time_percent = 0.00012327097472061103
+   tensor_engine_instruction_count = 21
+   tensor_engine_instruction_time = 4.81415e-07
+   total_time = 0.003905339445
+== MODULE_11435754646458375002  size=7506944  capture_wall=45.33s
+   dma_active_cycles = 48571676
+   hardware_flops = 2783138807808
+   hfu_estimated_percent = 0.528404033964806
+   mfu_estimated_percent = 0.4696924803689339
+   mfu_hlo_estimated_percent = 0.4696924803689339
+   mfu_hlo_max_achievable_estimated_percent = 1
+   mfu_inst_estimated_percent = 0.5218805337432598
+   mfu_inst_max_achievable_estimated_percent = 1
+   mfu_max_achievable_estimated_percent = 1
+   model_flops = 2473901162496
+   neuroncore_cycle_count = 80369040
+   peak_flops_bandwidth_ratio = 223.78146341463415
+   tensor_engine_active_time = 0.051989339164
+   tensor_engine_active_time_percent = 0.9056356835511865
+   tensor_engine_instruction_count = 341272
+   tensor_engine_instruction_time = 0.098831394558
+   throttle_active_nc0_time_ns = 20700472
+   throttle_activity_0_active_time_nc0_percent = 0.21381715817647667
+   throttle_activity_0_avg_util_limit_nc0_percent = 0.875
+   throttle_activity_1_active_time_nc0_percent = 0.1467777227123433
+   throttle_activity_1_avg_util_limit_nc0_percent = 0.875
+   throttle_avg_util_limit_nc0_percent = 0.9179162794424669
+   throttle_unknown_active_time_nc0_percent = 0.6023957586647494
+   throttle_unknown_avg_util_limit_nc0_percent = 1
+   total_time = 0.057406460576
+   transpose_flops = 34359738368
+== MODULE_4535181946581749286: capture failed: neuron-profile exited 1: 2026-Sep-22 09:17:55.959928 107420:107428 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s
+== MODULE_707385231116392439: capture failed: neuron-profile exited 1: 2026-Sep-22 09:17:56.197309 107438:107449 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s
+== MODULE_8182168089578119579: capture failed: neuron-profile exited 1: 2026-Sep-22 09:17:56.542797 107456:107466 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s
+== MODULE_14727602382196641527: capture failed: neuron-profile exited 1: 2026-Sep-22 09:17:56.787192 107478:107478 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s
+== MODULE_13478107821426688942: capture failed: neuron-profile exited 1: 2026-Sep-22 09:17:57.065470 107490:107492 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s
+== MODULE_13945462658086779221: capture failed: neuron-profile exited 1: 2026-Sep-22 09:17:57.306203 107502:107511 ERROR   NRT:nrt_allocate_neuron_cores               Logical Neuron Core(s
