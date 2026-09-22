@@ -877,6 +877,23 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "pantheongpu sums analytic per-engine op counts; this drives four "
         "engines in one dependent chain and reads effective_flops."
     ),
+    # Found 2026-09-22, and these were the rows the publication was to stand
+    # on. pantheongpu's memory_read is a whole GPU; this one is one
+    # NeuronCore of the device's two. The name join pairs a core against a
+    # device, so the Neuron figure is about half the device's by
+    # construction. The whole-device figure here is memory_read_agg -- and
+    # "_agg" means something else there too; see
+    # docs/cross_platform_comparability.md.
+    "memory_read": (
+        "pantheongpu's memory_read reads through a whole GPU; this is one "
+        "NeuronCore of the device's two, about half the device figure by "
+        "construction. The device-level figure here is memory_read_agg."
+    ),
+    "memory_write": (
+        "pantheongpu's memory_write writes through a whole GPU; this is one "
+        "NeuronCore of the device's two, about half the device figure by "
+        "construction. The device-level figure here is memory_write_agg."
+    ),
     # The four below were declared NOT_COMPARABLE_WITH_GPU until 2026-09-13,
     # on the belief that their GPU units had diverged. They never had.
     "llm_decode": (

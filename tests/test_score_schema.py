@@ -492,6 +492,45 @@ def test_the_window_reaches_a_profiler_scored_row(monkeypatch):
     assert provenance["elapsed_s"] == 10.0
 
 
+# -- the memory rows: same quantity, different amount of hardware -------------
+
+@pytest.mark.parametrize("name", ["memory_read", "memory_write"])
+def test_single_core_memory_rows_are_flagged(name):
+    """One NeuronCore of two joined against a whole GPU.
+
+    pantheongpu's memory_read is a whole device. This one pins cores: 1, so
+    the name join put 273 GB/s of one Trainium1 core against 1,496 GB/s of a
+    whole A100 -- about half the device's figure by construction.
+    """
+    assert _get(name).problem["cores"] == 1, (
+        "if this workload now spans the device, the flag below is stale")
+    assert name in registry.SAME_UNIT_DIFFERENT_QUANTITY
+    assert "one NeuronCore" in registry.SAME_UNIT_DIFFERENT_QUANTITY[name]
+
+
+@pytest.mark.parametrize("name", ["memory_read_agg", "memory_write_agg"])
+def test_the_aggregate_memory_rows_are_device_level_and_still_join(name):
+    """These span every core, which is what makes them the device figure.
+
+    "_agg" means a data-pattern variant in pantheongpu and a core aggregate
+    here; the two converge on whole-device scope, and pantheongpu's own data
+    shows the pattern moves bandwidth under 0.3%. So these stay unflagged --
+    but only while they really do span every core.
+    """
+    assert _get(name).problem["cores"] == "all"
+    assert name not in registry.SAME_UNIT_DIFFERENT_QUANTITY
+    assert _get(name).unit == PANTHEONGPU_UNITS[name]
+
+
+def test_the_comparability_doc_no_longer_calls_the_core_rows_comparable():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "docs", "cross_platform_comparability.md")
+    with open(path, encoding="utf-8") as handle:
+        doc = handle.read()
+    row = next(line for line in doc.splitlines()
+               if line.startswith("| `memory_read` / `memory_write` |"))
+    assert "**Yes**" not in row
+    assert "one NeuronCore" in row
 # -- pcie_bandwidth joins on the unit and not on the quantity -----------------
 
 def test_pcie_bandwidth_is_flagged_as_a_different_quantity():
