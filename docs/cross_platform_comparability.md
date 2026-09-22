@@ -30,7 +30,7 @@ Read from `pantheongpu/kernels/*/`. Neuron figures are from the registry.
 | `int_virus` | Integer FMA chains. `ops = blocks × threads × loops × 32 × 4` | Dense uint8 GEMM on the Tensor Engine | **No** |
 | `pulse_virus` | Duty-cycled scalar `fmaf` chains — FP32 | Duty-cycled dense **bf16** GEMM | **No** |
 | `omni_virus` | `fp16_ops + fp32_ops + sfu_ops` per launch, summed analytically | Four engines in one dependent chain | **No** |
-| `transformer_virus` | MFMA/WMMA matrix instructions — real matrix units | Transformer block on the Tensor Engine | **Closest**, see below |
+| `transformer_virus` | On NVIDIA: `wmma::mma_sync` on constant register-resident fragments, no memory traffic -- a Tensor Core burner | A whole transformer block on the Tensor Engine | **No**, see below |
 | `memory_read` / `memory_write` | `bytes_transferred / seconds`, **whole GPU** | `hbm_read_bytes / total_time`, **one NeuronCore of two** | **No** -- same quantity, different scope; see below |
 
 Three differences stack on the first four rows:
@@ -57,14 +57,43 @@ shape at all; they size themselves from occupancy. So the pinned 8192³ is
 matched against nothing, and lowering or raising it costs nothing in
 comparability — which is what made the unroll fix a free choice.
 
-## `transformer_virus` is the arguable one
+## `transformer_virus` was the arguable one, and is not comparable either
 
 It is the only compute workload where pantheongpu uses genuine matrix
-instructions (`__builtin_amdgcn_mfma_f32_16x16x16f16`, rocwmma fragments), so
-the functional-unit objection does not apply. Two caveats remain: the matrix
-path sits behind `PANTHEON_ENABLE_EXPERIMENTAL_WMMA` and a header check, with
-a non-matrix fallback that produces a number under the same name; and the
-issued-versus-retired difference still stands.
+instructions, so the functional-unit objection does not apply, and this
+section used to leave it there with two caveats: the matrix path sits behind
+`PANTHEON_ENABLE_EXPERIMENTAL_WMMA` with a non-matrix fallback under the same
+name, and the issued-versus-retired difference stands.
+
+**Both caveats are about AMD.** The flag gates the MFMA and rocwmma paths. On
+NVIDIA sm_70 and later -- which is what a Trainium-against-NVIDIA comparison
+is about -- the kernel takes an unconditional `nvcuda::wmma` path. Read that
+path and the question changes from *which unit* to *what work*:
+
+```cpp
+wmma::fill_fragment(a, __float2half(1.01f * sign));
+wmma::fill_fragment(b, __float2half(0.99f * sign));
+for (int i = 0; i < iters; i++) {
+    #pragma unroll 16
+    for (int j = 0; j < 16; j++) wmma::mma_sync(c, a, b, c);
+    ...
+}
+```
+
+Fragments filled with constants, multiplied in a loop that never touches
+global memory, counted analytically. That is a Tensor Core issue-rate burner,
+and the numbers say so: an A100 reads 297.7 TFLOPS, 95% of its 312 dense-FP16
+peak. There is no attention, no softmax, no FFN -- nothing transformer about
+it but the name.
+
+This suite's `transformer_virus` runs an actual block: hidden 4096, 32 heads,
+seq 2048, attention and FFN, through the compiler, read from
+`effective_flops`. It reaches 53.3 TFLOPS on one Trainium1 core -- 56% of that
+core's share of peak -- because a real block spends time outside the matmuls.
+
+Same name, same unit, matrix units on both sides; one is peak MMA issue rate
+and the other is transformer-block throughput. Now in
+`registry.SAME_UNIT_DIFFERENT_QUANTITY`.
 
 ## Four AI workloads were in the wrong register
 

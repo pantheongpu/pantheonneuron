@@ -559,3 +559,27 @@ def test_the_pcie_figure_really_is_a_mean_of_sequential_legs():
     assert 'for direction in plan [ "directions" ] :' in code
     # ...and the Score divides all bytes by the whole window.
     assert "total_moved / elapsed" in code
+
+
+# -- transformer_virus: the right unit, the wrong workload --------------------
+
+def test_transformer_virus_is_flagged_as_a_different_quantity():
+    """On NVIDIA the GPU kernel is a Tensor Core burner, not a transformer.
+
+    Its NVIDIA path runs wmma::mma_sync on constant register-resident
+    fragments with no memory traffic; an A100 reads 95% of dense-FP16 peak.
+    This suite runs a whole block. The functional-unit argument that kept it
+    unflagged was right and was not the whole question.
+    """
+    reason = registry.SAME_UNIT_DIFFERENT_QUANTITY["transformer_virus"]
+    assert "mma_sync" in reason and "transformer block" in reason
+    assert _get("transformer_virus").unit == PANTHEONGPU_UNITS["transformer_virus"]
+
+
+def test_our_transformer_virus_really_runs_a_block():
+    """The reason is a claim about this kernel; check the kernel makes it true."""
+    import sourcecheck
+    from kernels import transformer_compute
+    code = sourcecheck.flat_function_code(transformer_compute.run_virus)
+    assert "transformer_ops . block ( hidden_states , params )" in code
+    assert "heads = heads" in code
