@@ -52,7 +52,7 @@ def test_override_changes_what_the_registry_resolves(name, restore_registry):
 def test_every_default_size_is_a_whole_number_of_tiles(name):
     """Otherwise the default sweep would refuse itself on hardware."""
     workload = registry.resolve(name)[0]
-    for total in sweep_memory_size.sizes_from("1,2,4,8,12"):
+    for total in sweep_memory_size.sizes_from(sweep_memory_size.DEFAULT_SIZES_GIB[name]):
         assert sweep_memory_size.swept_problem(workload, total)["bytes"] == total
 
 
@@ -71,3 +71,25 @@ def test_a_workload_that_pins_no_byte_count_is_refused():
 def test_the_pinned_problems_are_untouched_by_importing_the_tool():
     assert registry.resolve("memory_read")[0].problem["bytes"] == 8 * GIB
     assert registry.resolve("memory_write")[0].problem["bytes"] == 4 * GIB
+
+
+def test_every_sweepable_workload_has_default_sizes():
+    assert set(sweep_memory_size.DEFAULT_SIZES_GIB) == set(sweep_memory_size.SWEEPABLE)
+
+
+def test_write_defaults_stop_where_the_part_ran_out_of_memory():
+    """memory_write failed at 8 and 12 GiB on trn1.2xlarge 2026-09-22.
+
+    Its destination is still resident when the next pass allocates, so two
+    full buffers must fit on one 16 GiB core. The defaults asked for sizes the
+    kernel's own comments say cannot run.
+    """
+    sizes = sweep_memory_size.sizes_from(sweep_memory_size.DEFAULT_SIZES_GIB["memory_write"])
+    assert max(sizes) <= 4 * GIB
+    assert 4 * GIB in sizes, "the pinned size must stay in the sweep"
+
+
+def test_read_defaults_span_the_measured_range_and_the_pin():
+    sizes = sweep_memory_size.sizes_from(sweep_memory_size.DEFAULT_SIZES_GIB["memory_read"])
+    assert 8 * GIB in sizes, "the pinned size must stay in the sweep"
+    assert max(sizes) == 12 * GIB
