@@ -1,0 +1,15 @@
+# Hardware confirmation for "Say so when a memory run slows down and its burst Score cannot see it".
+# trn1.2xlarge, 2026-09-22 09:59-10:07 UTC, after that host's publication pass and size sweep.
+# Branch synced by git archive and hash-checked on the host (kernels/profiler.py).
+# Each workload one process, --duration 60.
+#
+# The claim under test: on healthy hardware the new one-sided check stays silent.
+
+workload      status  profiler Score  wall-clock  ratio   Detail
+memory_read   PASS          272.8049      269.92  0.9894  (empty)
+memory_write  PASS          275.0416      274.10  0.9966  (empty)
+
+# Both rows PASS with an empty Detail: the check ran and did not fire.
+# 0.9894 is the lowest healthy ratio on record -- a 1.06% shortfall, inside the
+# 3% threshold with nearly threefold margin -- and the stated healthy range in
+# kernels/profiler.py is corrected to it rather than left at the 0.990 it said.

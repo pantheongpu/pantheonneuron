@@ -597,3 +597,45 @@ def execution_window(counters: typing.Mapping[str, typing.Any]
     if isinstance(active, (int, float)) and 0 < active <= total_time:
         return float(active), "total_active_time"
     return float(total_time), "total_time"
+
+
+# How far the sustained window may fall below the profiled execution before
+# the row says so. Every hardware run on record puts wall-clock over profiler
+# between 0.989 and 1.01: five hosts on 2026-09-21 at 300 s, three of them
+# again at 3600 s, a 60 s confirmation run of this check itself on
+# 2026-09-22, and the 20 s runs of 2026-09-10 and 2026-09-11. The low end is
+# trn1.2xlarge memory_read at 0.9894 (60 s) and 0.9902 (3600 s), about a
+# one-percent shortfall, so 3% is nearly three times the widest healthy
+# deviation.
+SUSTAINED_SHORTFALL = 0.03
+
+
+def verify_sustained_matches_burst(
+        profiler_gbps: typing.Optional[float],
+        analytic_gbps: typing.Optional[float]) -> typing.Optional[str]:
+    """Say so when the run slowed down and the Score could not see it.
+
+    **The profiler Score is one execution.** ``neuron-profile capture``
+    replays the NEFF once -- about 33 ms for memory_read's 8 GiB -- so a
+    --duration 3600 run publishes the same Score as a 300 s run by
+    construction; the hour reaches only the analytic figure, bytes over the
+    whole window.
+
+    ``verify_against_analytic`` compares the two, but symmetrically and at
+    15%, because it was written for loads optimised away, where they diverge
+    by a large factor. It cannot see the failure that matters for a long
+    run: a device that throttles ten minutes in, whose sustained figure
+    falls while the Score keeps reporting the burst. This check is one-sided
+    and tight for that reason. It warns; the Score stays the declared source.
+    """
+    if not profiler_gbps or not analytic_gbps:
+        return None
+    shortfall = 1.0 - analytic_gbps / profiler_gbps
+    if shortfall <= SUSTAINED_SHORTFALL:
+        return None
+    return (
+        f"the sustained window averaged {analytic_gbps:.1f} GB/s, "
+        f"{shortfall:.1%} below the {profiler_gbps:.1f} GB/s of the single "
+        f"profiled execution the Score comes from -- the Score is a burst "
+        f"figure and this run slowed over its window"
+    )
