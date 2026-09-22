@@ -321,9 +321,12 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
             )
         return result
 
-    bound = verify_consumer_not_binding(result.get("consumer_engine_active"))
-    if bound:
-        result["warning"] = bound
+    found = [warning for warning in (
+        profiler.verify_sustained_matches_burst(result["profiler_gbps"], analytic),
+        verify_consumer_not_binding(result.get("consumer_engine_active")),
+    ) if warning]
+    if found:
+        result["warning"] = "; ".join(found)
     return result
 
 
