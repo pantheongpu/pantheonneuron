@@ -882,6 +882,23 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "pantheongpu sums analytic per-engine op counts; this drives four "
         "engines in one dependent chain and reads effective_flops."
     ),
+    # Found 2026-09-22, and these were the rows the publication was to stand
+    # on. pantheongpu's memory_read is a whole GPU; this one is one
+    # NeuronCore of the device's two. The name join pairs a core against a
+    # device, so the Neuron figure is about half the device's by
+    # construction. The whole-device figure here is memory_read_agg -- and
+    # "_agg" means something else there too; see
+    # docs/cross_platform_comparability.md.
+    "memory_read": (
+        "pantheongpu's memory_read reads through a whole GPU; this is one "
+        "NeuronCore of the device's two, about half the device figure by "
+        "construction. The device-level figure here is memory_read_agg."
+    ),
+    "memory_write": (
+        "pantheongpu's memory_write writes through a whole GPU; this is one "
+        "NeuronCore of the device's two, about half the device figure by "
+        "construction. The device-level figure here is memory_write_agg."
+    ),
     # The four below were declared NOT_COMPARABLE_WITH_GPU until 2026-09-13,
     # on the belief that their GPU units had diverged. They never had.
     "llm_decode": (
@@ -903,14 +920,38 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "graph, or of the bare kernel under its mock fallback; this counts "
         "completed executions from neuron-monitor's execution counter."
     ),
+    "transformer_virus": (
+        "pantheongpu on NVIDIA runs wmma::mma_sync on register-resident "
+        "fragments filled with constants, with no memory traffic, no "
+        "attention and no FFN -- a Tensor Core issue-rate burner counted "
+        "analytically; this runs a whole transformer block (hidden 4096, 32 "
+        "heads, seq 2048) and reads effective_flops."
+    ),
+    # Found 2026-09-22 while checking which of the five comparable rows the
+    # publication could stand on. Three differences stack, and the first is
+    # definitional -- it holds on identical hardware.
+    "pcie_bandwidth": (
+        "pantheongpu copies both directions concurrently on separate streams "
+        "from 256 MiB pinned (hipHostMalloc) buffers and reports the combined "
+        "rate; this times the directions sequentially, half the window each, "
+        "so its figure is the mean of the two rates rather than their "
+        "concurrent sum -- up to 2x apart by definition on a full-duplex "
+        "link. It also copies from buffers pin_memory() leaves unpinned on "
+        "this stack, at a pinned 1 GiB that sits past a d2h staging-buffer "
+        "cliff measured at 16-64 MiB."
+    ),
 }
 
-# transformer_virus is deliberately absent. pantheongpu does use real matrix
-# instructions there (MFMA/WMMA), so the functional-unit objection does not
-# apply -- though the path sits behind an experimental flag with a
-# non-matrix fallback under the same name, and the issued-versus-retired
-# difference still stands. Listing it would overstate what is known; the
-# doc records the caveat.
+# transformer_virus was deliberately absent until 2026-09-22, on the
+# argument that pantheongpu uses real matrix instructions there, so the
+# functional-unit objection did not apply. That argument was right and was
+# not the whole question. On NVIDIA sm_70 and later -- the parts a
+# Trainium-against-NVIDIA comparison is about -- the kernel is
+# nvcuda::wmma::mma_sync on fragments filled with constants, in a loop that
+# never touches global memory: a Tensor Core issue-rate burner, which is why
+# an A100 reads 297.7 TFLOPS, 95% of its 312 dense-FP16 peak. Nothing in it
+# is a transformer. The flag-gated MFMA path and its fallback are the AMD
+# story; on NVIDIA the unit matches and the workload does not.
 
 # Nothing consumes this to change a join. It exists so the comparison
 # tooling can render a warning where a row would otherwise join silently,

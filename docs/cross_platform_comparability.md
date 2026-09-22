@@ -30,8 +30,8 @@ Read from `pantheongpu/kernels/*/`. Neuron figures are from the registry.
 | `int_virus` | Integer FMA chains. `ops = blocks × threads × loops × 32 × 4` | Dense uint8 GEMM on the Tensor Engine | **No** |
 | `pulse_virus` | Duty-cycled scalar `fmaf` chains — FP32 | Duty-cycled dense **bf16** GEMM | **No** |
 | `omni_virus` | `fp16_ops + fp32_ops + sfu_ops` per launch, summed analytically | Four engines in one dependent chain | **No** |
-| `transformer_virus` | MFMA/WMMA matrix instructions — real matrix units | Transformer block on the Tensor Engine | **Closest**, see below |
-| `memory_read` / `memory_write` | `bytes_transferred / seconds` | `hbm_read_bytes / total_time` | **Yes** |
+| `transformer_virus` | On NVIDIA: `wmma::mma_sync` on constant register-resident fragments, no memory traffic -- a Tensor Core burner | A whole transformer block on the Tensor Engine | **No**, see below |
+| `memory_read` / `memory_write` | `bytes_transferred / seconds`, **whole GPU** | `hbm_read_bytes / total_time`, **one NeuronCore of two** | **No** -- same quantity, different scope; see below |
 
 Three differences stack on the first four rows:
 
@@ -57,14 +57,43 @@ shape at all; they size themselves from occupancy. So the pinned 8192³ is
 matched against nothing, and lowering or raising it costs nothing in
 comparability — which is what made the unroll fix a free choice.
 
-## `transformer_virus` is the arguable one
+## `transformer_virus` was the arguable one, and is not comparable either
 
 It is the only compute workload where pantheongpu uses genuine matrix
-instructions (`__builtin_amdgcn_mfma_f32_16x16x16f16`, rocwmma fragments), so
-the functional-unit objection does not apply. Two caveats remain: the matrix
-path sits behind `PANTHEON_ENABLE_EXPERIMENTAL_WMMA` and a header check, with
-a non-matrix fallback that produces a number under the same name; and the
-issued-versus-retired difference still stands.
+instructions, so the functional-unit objection does not apply, and this
+section used to leave it there with two caveats: the matrix path sits behind
+`PANTHEON_ENABLE_EXPERIMENTAL_WMMA` with a non-matrix fallback under the same
+name, and the issued-versus-retired difference stands.
+
+**Both caveats are about AMD.** The flag gates the MFMA and rocwmma paths. On
+NVIDIA sm_70 and later -- which is what a Trainium-against-NVIDIA comparison
+is about -- the kernel takes an unconditional `nvcuda::wmma` path. Read that
+path and the question changes from *which unit* to *what work*:
+
+```cpp
+wmma::fill_fragment(a, __float2half(1.01f * sign));
+wmma::fill_fragment(b, __float2half(0.99f * sign));
+for (int i = 0; i < iters; i++) {
+    #pragma unroll 16
+    for (int j = 0; j < 16; j++) wmma::mma_sync(c, a, b, c);
+    ...
+}
+```
+
+Fragments filled with constants, multiplied in a loop that never touches
+global memory, counted analytically. That is a Tensor Core issue-rate burner,
+and the numbers say so: an A100 reads 297.7 TFLOPS, 95% of its 312 dense-FP16
+peak. There is no attention, no softmax, no FFN -- nothing transformer about
+it but the name.
+
+This suite's `transformer_virus` runs an actual block: hidden 4096, 32 heads,
+seq 2048, attention and FFN, through the compiler, read from
+`effective_flops`. It reaches 53.3 TFLOPS on one Trainium1 core -- 56% of that
+core's share of peak -- because a real block spends time outside the matmuls.
+
+Same name, same unit, matrix units on both sides; one is peak MMA issue rate
+and the other is transformer-block throughput. Now in
+`registry.SAME_UNIT_DIFFERENT_QUANTITY`.
 
 ## Four AI workloads were in the wrong register
 
@@ -91,6 +120,60 @@ Every test passed throughout, because the registry and the transcription it
 was checked against came from the same belief. The tally is committed as
 `data/validation-2026-09-13/pantheongpu-published-units.json` (7,326 reports,
 per version), and the test now checks the transcription against it.
+
+## The memory rows name different scopes, and "_agg" means two different things
+
+Found 2026-09-22, and it matters more than anything above, because these are
+the rows a publication would stand on. This table said `memory_read` and
+`memory_write` compared cleanly. They measure the same *quantity* -- bytes
+moved through HBM per second, both from measurement -- over different
+*amounts of hardware*:
+
+| Name | pantheongpu | pantheonneuron |
+|---|---|---|
+| `memory_read` | whole GPU, standard pattern | **one NeuronCore** of the device's two |
+| `memory_write` | whole GPU, standard pattern | **one NeuronCore** of the device's two |
+| `memory_read_agg` | whole GPU, **rail-to-rail** data pattern (`0x00000000`/`0xFFFFFFFF`, `--init_pattern rail_to_rail`) | **all NeuronCores**, bandwidth summed |
+| `memory_write_agg` | whole GPU, **crosstalk** data pattern (`--init_pattern crosstalk`) | **all NeuronCores**, bandwidth summed |
+
+In pantheongpu `_agg` is the same binary run with an aggressive data pattern
+(`pantheon.py`: `"memory_read_agg": {"bin": "memory_read", "args":
+["--init_pattern", "rail_to_rail"]}`). Here it is an aggregate across cores.
+Same suffix, unrelated meanings.
+
+So the join on (Test Name, Unit) pairs:
+
+- **`memory_read`**: one Trainium1 core, 273 GB/s, against a whole A100,
+  1,496 GB/s. The Neuron figure is about half its device's by construction.
+  Now in `registry.SAME_UNIT_DIFFERENT_QUANTITY`, with `memory_write`.
+- **`memory_read_agg`**: the whole Trainium1 device, 543.7 GB/s, against a
+  whole A100 reading a stress pattern. The scope matches. Whether the pattern
+  matters is answerable from pantheongpu's own data, since it runs both:
+
+| GPU | `memory_read` | `memory_read_agg` | `memory_write` | `memory_write_agg` |
+|---|---|---|---|---|
+| A100-SXM4-40GB | 1496.2 | 1495.5 | 1475.4 | 1473.9 |
+| H100 80GB HBM3 | 3044.0 | 3047.5 | 3172.3 | 3177.6 |
+| L40S | 728.8 | 728.8 | 432.9 | 432.8 |
+| RTX PRO 6000 | 1533.2 | 1533.2 | 1446.3 | 1446.3 |
+
+(Medians over pantheongpu's published reports, tallied 2026-09-22.) The data
+pattern moves bandwidth by under 0.3% on every part. So `memory_*_agg` joins
+device against device and the result stands -- **by accident**, because two
+unrelated meanings of `_agg` happen to converge on the same scope.
+
+**What a device-level comparison should use**: Neuron `memory_*_agg` against
+GPU `memory_*` (or `memory_*_agg`; the table shows it makes no difference).
+That pairing crosses names, so no join on (Test Name, Unit) will ever produce
+it, and the comparison tooling has to be told.
+
+For the record, the per-device figures, measured 2026-09-21 across three
+trn1.2xlarge, spread across hosts under 0.05%:
+
+| Trainium1, whole device | GB/s | Share of 880.5 GB/s published |
+|---|---|---|
+| `memory_read_agg` | 543.7 | 61.8% |
+| `memory_write_agg` | 537.2 | 61.0% |
 
 ## What has not been decided
 
