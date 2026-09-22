@@ -915,6 +915,13 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "graph, or of the bare kernel under its mock fallback; this counts "
         "completed executions from neuron-monitor's execution counter."
     ),
+    "transformer_virus": (
+        "pantheongpu on NVIDIA runs wmma::mma_sync on register-resident "
+        "fragments filled with constants, with no memory traffic, no "
+        "attention and no FFN -- a Tensor Core issue-rate burner counted "
+        "analytically; this runs a whole transformer block (hidden 4096, 32 "
+        "heads, seq 2048) and reads effective_flops."
+    ),
     # Found 2026-09-22 while checking which of the five comparable rows the
     # publication could stand on. Three differences stack, and the first is
     # definitional -- it holds on identical hardware.
@@ -930,12 +937,16 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
     ),
 }
 
-# transformer_virus is deliberately absent. pantheongpu does use real matrix
-# instructions there (MFMA/WMMA), so the functional-unit objection does not
-# apply -- though the path sits behind an experimental flag with a
-# non-matrix fallback under the same name, and the issued-versus-retired
-# difference still stands. Listing it would overstate what is known; the
-# doc records the caveat.
+# transformer_virus was deliberately absent until 2026-09-22, on the
+# argument that pantheongpu uses real matrix instructions there, so the
+# functional-unit objection did not apply. That argument was right and was
+# not the whole question. On NVIDIA sm_70 and later -- the parts a
+# Trainium-against-NVIDIA comparison is about -- the kernel is
+# nvcuda::wmma::mma_sync on fragments filled with constants, in a loop that
+# never touches global memory: a Tensor Core issue-rate burner, which is why
+# an A100 reads 297.7 TFLOPS, 95% of its 312 dense-FP16 peak. Nothing in it
+# is a transformer. The flag-gated MFMA path and its fallback are the AMD
+# story; on NVIDIA the unit matches and the workload does not.
 
 # Nothing consumes this to change a join. It exists so the comparison
 # tooling can render a warning where a row would otherwise join silently,
