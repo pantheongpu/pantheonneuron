@@ -1,0 +1,109 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 09:55:12",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110204416
+  },
+  "run_id": "20260922_095518",
+  "completed_at": "2026-09-22 09:55:30",
+  "test_results": [
+    {
+      "Test Name": "memory_write",
+      "Suite": "memory",
+      "Status": "FAIL",
+      "Detail": "2 of 2 repeats failed: RuntimeError: Bad StatusOr access: RESOURCE_EXHAUSTED: AllocBuffer: error condition NRT_RESOURCE == rt_status: Not enough Neuron memory on core 0 for size=8589934592",
+      "Duration (s)": 9.81,
+      "Devices": [
+        0
+      ],
+      "Score": null,
+      "Unit": "GB/s",
+      "Percent Of Peak": null,
+      "Peak": {
+        "peak": 440.25,
+        "peak_field": "hbm_gbps",
+        "peak_source": "AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS",
+        "peak_verified": true,
+        "cores_used": 1,
+        "cores_available": 2,
+        "duty_cycle": null
+      },
+      "Score Method": null,
+      "Measurement": null,
+      "Repeats": {
+        "attempted": 2,
+        "scored": 0
+      },
+      "Problem": {
+        "bytes": 8589934592,
+        "dtype": "bf16",
+        "cores": 1
+      },
+      "Telemetry": {
+        "samples": 10,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 3,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 5.93,
+            "mean_all_samples": 0.61,
+            "samples": 0,
+            "mean": 0.0
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 53414543,
+          "peak": 107086876
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.015926,
+          "p99_peak": 0.029628
+        },
+        "execution_samples": 10,
+        "executions_total": 3,
+        "execution_active_periods": 2,
+        "execution_block_periods": 1,
+        "execution_samples_used": 0,
+        "execution_rate_absent": "the device was busy across 2 sampling period(s) and none of them throughout, so no period measures the rate -- run longer",
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

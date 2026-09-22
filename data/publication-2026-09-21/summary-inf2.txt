@@ -1,0 +1,29 @@
+hosts: inf2-a, inf2-b
+
+group    workload                   unit                         median  within cv  between cv  passed
+300x3    all_reduce                 GB/s                              -          -           -  0/2
+300x3    allocation_fragmentation   allocation-events/s            2093     0.0042      0.0046  2/2
+300x3    baseline_metrics           -                                 -          -           -  2/2
+300x3    fused_attention            attention-tiles/s              5947     0.0004      0.0000  2/2
+300x3    graph_replay               graph-steps/s                  2268     0.0011      0.0024  2/2
+300x3    int_virus                  TOPS                          56.97     0.0000      0.0003  2/2
+300x3    kv_cache_churn             cache-updates/s           9.599e+04     0.0003      0.0007  2/2
+300x3    llm_decode                 tokens/s                      17.51     0.0002      0.0002  2/2
+300x3    llm_prefill                prompt-tokens/s                3196     0.0000      0.0000  2/2
+300x3    memory_read                GB/s                            273     0.0004      0.0001  2/2
+300x3    memory_read_agg            GB/s                          542.8     0.0001      0.0005  2/2
+300x3    memory_write               GB/s                          274.7     0.0036      0.0009  2/2
+300x3    memory_write_agg           GB/s                          548.6     0.0002      0.0003  2/2
+300x3    moe_router                 routed-tokens/s            2.43e+05     0.0003      0.0006  2/2
+300x3    omni_virus                 TFLOPS                        42.42     0.0000      0.0001  2/2
+300x3    p2p_thrasher               GB/s                              -          -           -  0/2
+300x3    pcie_bandwidth             GB/s                           2.19     0.0022      0.0025  2/2
+300x3    pulse_virus                TFLOPS                        29.04     0.0001      0.0002  2/2
+300x3    quantized_gemm             quantized-ops/s           1.497e+13     0.0005      0.0003  2/2
+300x3    rag_embedding              embedding-vectors/s           766.6     0.0000      0.0003  2/2
+300x3    serving_mix                requests/s                    2.236     0.0001      0.0000  2/2
+300x3    speculative_decode         verified-tokens/s             73.66     0.0002      0.0005  2/2
+300x3    tensor_virus               TFLOPS                        56.84     0.0006      0.0004  2/2
+300x3    transformer_train_step     train-steps/s                     -          -           -  0/2
+300x3    transformer_virus          TFLOPS                        44.41     0.0003      0.0003  2/2
+300x3    vision_encoder             image-tiles/s             5.452e+04     0.0000      0.0000  2/2

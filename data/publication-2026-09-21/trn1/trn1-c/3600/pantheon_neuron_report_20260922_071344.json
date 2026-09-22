@@ -1,0 +1,110 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 07:13:39",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110208512
+  },
+  "run_id": "20260922_071344",
+  "completed_at": "2026-09-22 08:13:51",
+  "test_results": [
+    {
+      "Test Name": "pcie_bandwidth",
+      "Suite": "interconnect",
+      "Status": "PASS",
+      "Detail": "d2h ran at 1.1 GB/s against 5.9 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link",
+      "Duration (s)": 3606.47,
+      "Devices": [
+        0
+      ],
+      "Score": 3.5199,
+      "Unit": "GB/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "analytic_gbps": 3.5199350551175033,
+        "elapsed_s": 3600.4569829340035,
+        "landing_value": 2.0,
+        "buffers": "preallocated",
+        "per_direction": {
+          "h2d": {
+            "bytes": 10683731148800,
+            "elapsed_s": 1800.0114552609957,
+            "gbps": 5.9353684208920185,
+            "passes": 9950
+          },
+          "d2h": {
+            "bytes": 1989643599872,
+            "elapsed_s": 1800.4455011680038,
+            "gbps": 1.105084046465865,
+            "passes": 1853
+          }
+        },
+        "bytes_transferred": 12673374748672
+      },
+      "Repeats": null,
+      "Problem": {
+        "bytes": 1073741824,
+        "direction": "bidirectional"
+      },
+      "Telemetry": {
+        "samples": 3607,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 0,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1074305062,
+          "peak": 2149240384
+        },
+        "execution_samples": 3606,
+        "executions_total": 0,
+        "execution_rate_absent": "no period across 3606 samples completed an execution, so the device completed nothing measurable",
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

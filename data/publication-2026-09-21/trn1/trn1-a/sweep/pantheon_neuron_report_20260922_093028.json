@@ -1,0 +1,116 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 09:30:23",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110204416
+  },
+  "run_id": "20260922_093028",
+  "completed_at": "2026-09-22 09:44:10",
+  "test_results": [
+    {
+      "Test Name": "memory_read",
+      "Suite": "memory",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 107.4,
+      "Devices": [
+        0
+      ],
+      "Score": 273.0432,
+      "Unit": "GB/s",
+      "Percent Of Peak": 62.02,
+      "Peak": {
+        "peak": 440.25,
+        "peak_field": "hbm_gbps",
+        "peak_source": "AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS",
+        "peak_verified": true,
+        "cores_used": 1,
+        "cores_available": 2,
+        "duty_cycle": null
+      },
+      "Score Method": "neuron-profile",
+      "Measurement": null,
+      "Repeats": {
+        "attempted": 2,
+        "scored": 2,
+        "min": 272.9718,
+        "max": 273.1146,
+        "median": 273.0432,
+        "stdev": 0.101,
+        "cv": 0.0004,
+        "trend": null
+      },
+      "Problem": {
+        "bytes": 12884901888,
+        "dtype": "bf16",
+        "cores": 1
+      },
+      "Telemetry": {
+        "samples": 108,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 1268,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 55.31,
+            "samples": 59,
+            "mean": 99.32
+          },
+          "1": {
+            "peak": 4.93,
+            "mean_all_samples": 0.05,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 12451825700,
+          "peak": 13003167940
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.047351,
+          "p99_peak": 0.049386
+        },
+        "execution_samples": 108,
+        "executions_total": 1268,
+        "execution_active_periods": 62,
+        "execution_block_periods": 61,
+        "execution_samples_used": 59,
+        "execution_span_s": 59.0002,
+        "executions_per_s": 21.050759719130983,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

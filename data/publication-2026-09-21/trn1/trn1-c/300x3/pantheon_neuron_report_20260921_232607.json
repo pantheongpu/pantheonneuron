@@ -1,0 +1,172 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-21 23:26:03",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110208512
+  },
+  "run_id": "20260921_232607",
+  "completed_at": "2026-09-21 23:41:18",
+  "test_results": [
+    {
+      "Test Name": "all_reduce",
+      "Suite": "interconnect",
+      "Status": "SKIPPED",
+      "Detail": "needs 2 devices, 1 selected",
+      "Duration (s)": 0.0,
+      "Devices": [
+        0
+      ],
+      "Score": null,
+      "Unit": "GB/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": null,
+      "Measurement": null,
+      "Repeats": null,
+      "Problem": {
+        "op": "all_reduce",
+        "bytes_min": 1048576,
+        "bytes_max": 8388608,
+        "dtype": "fp32",
+        "cores": "all"
+      },
+      "Telemetry": {
+        "samples": 0
+      }
+    },
+    {
+      "Test Name": "p2p_thrasher",
+      "Suite": "interconnect",
+      "Status": "SKIPPED",
+      "Detail": "needs 2 devices, 1 selected",
+      "Duration (s)": 0.0,
+      "Devices": [
+        0
+      ],
+      "Score": null,
+      "Unit": "GB/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": null,
+      "Measurement": null,
+      "Repeats": null,
+      "Problem": {
+        "op": "sendrecv",
+        "bytes": 67108864,
+        "dtype": "fp32",
+        "cores": "all"
+      },
+      "Telemetry": {
+        "samples": 0
+      }
+    },
+    {
+      "Test Name": "pcie_bandwidth",
+      "Suite": "interconnect",
+      "Status": "PASS",
+      "Detail": "d2h ran at 1.1 GB/s against 6.2 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link",
+      "Duration (s)": 300.99,
+      "Devices": [
+        0
+      ],
+      "Score": 3.688,
+      "Unit": "GB/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "analytic_gbps": 3.6879855672284383,
+        "elapsed_s": 300.462553925001,
+        "landing_value": 2.0,
+        "buffers": "preallocated",
+        "per_direction": {
+          "h2d": {
+            "bytes": 936302870528,
+            "elapsed_s": 150.13326110799972,
+            "gbps": 6.2364786031954775,
+            "passes": 872
+          },
+          "d2h": {
+            "bytes": 171798691840,
+            "elapsed_s": 150.32926445000157,
+            "gbps": 1.1428160210092626,
+            "passes": 160
+          }
+        },
+        "bytes_transferred": 1108101562368
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 3.6782,
+        "max": 3.7157,
+        "median": 3.688,
+        "stdev": 0.0194,
+        "cv": 0.0053,
+        "trend": null
+      },
+      "Problem": {
+        "bytes": 1073741824,
+        "direction": "bidirectional"
+      },
+      "Telemetry": {
+        "samples": 302,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 0,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1071943123,
+          "peak": 1075498560
+        },
+        "execution_samples": 302,
+        "executions_total": 0,
+        "execution_rate_absent": "no period across 302 samples completed an execution, so the device completed nothing measurable",
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

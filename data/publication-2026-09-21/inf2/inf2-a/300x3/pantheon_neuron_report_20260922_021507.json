@@ -1,0 +1,62 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 02:15:03",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "inf2",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": false
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 2,
+    "logical_cores": 4
+  },
+  "ram_info": {
+    "total_bytes": 16378847232
+  },
+  "run_id": "20260922_021507",
+  "completed_at": "2026-09-22 02:15:07",
+  "test_results": [
+    {
+      "Test Name": "transformer_train_step",
+      "Suite": "training",
+      "Status": "SKIPPED",
+      "Detail": "device 0 (inf2) lacks: training",
+      "Duration (s)": 0.0,
+      "Devices": [
+        0
+      ],
+      "Score": null,
+      "Unit": "train-steps/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": null,
+      "Measurement": null,
+      "Repeats": null,
+      "Problem": {
+        "hidden": 4096,
+        "layers": 4,
+        "batch": 1,
+        "seq": 2048,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 02:11:56",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110204416
+  },
+  "run_id": "20260922_021200",
+  "completed_at": "2026-09-22 02:16:44",
+  "test_results": [
+    {
+      "Test Name": "allocation_fragmentation",
+      "Suite": "runtime",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 40.35,
+      "Devices": [
+        0
+      ],
+      "Score": 2125.8196,
+      "Unit": "allocation-events/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "allocation_events": 40000,
+        "retained_blocks": 832,
+        "retained_element": 1.0,
+        "elapsed_s": 18.81627234500047,
+        "bounded_by": "allocations",
+        "measured_window_s": 18.816
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 2019.22,
+        "max": 2390.0207,
+        "median": 2125.8196,
+        "stdev": 190.9009,
+        "cv": 0.0876,
+        "trend": null
+      },
+      "Problem": {
+        "allocations": 40000,
+        "size_min": 4096,
+        "size_max": 16777216
+      },
+      "Telemetry": {
+        "samples": 41,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 40013,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 5.95,
+            "mean_all_samples": 2.31,
+            "samples": 20,
+            "mean": 4.57
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1169916455,
+          "peak": 2300475788
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.000136,
+          "p99_peak": 0.002191
+        },
+        "execution_samples": 40,
+        "executions_total": 40013,
+        "execution_active_periods": 32,
+        "execution_block_periods": 22,
+        "execution_samples_used": 20,
+        "execution_span_s": 20.0008,
+        "executions_per_s": 1983.0716188959561,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "graph_replay",
+      "Suite": "runtime",
+      "Status": "PASS",
+      "Detail": "measured a 65.9s window of a requested 300s, so this run was bounded by its pinned problem rather than by --duration; raising the duration will not steady the Score",
+      "Duration (s)": 65.91,
+      "Devices": [
+        0
+      ],
+      "Score": 3035.1156,
+      "Unit": "graph-steps/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "neuron-monitor",
+      "Measurement": {
+        "kernel_figure": 3035.0296,
+        "declared_over_kernel": 1.0,
+        "elapsed_s": 65.8972154050025
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 3034.247,
+        "max": 3046.1202,
+        "median": 3035.1156,
+        "stdev": 6.6185,
+        "cv": 0.0022,
+        "trend": null
+      },
+      "Problem": {
+        "hidden": 2048,
+        "replays": 200000,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 68,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 200001,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 79.19,
+            "mean_all_samples": 74.4,
+            "samples": 64,
+            "mean": 76.78
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 167808498,
+          "peak": 170399948
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 53787343866587,
+            "samples_all": 66,
+            "mean_all_samples": 52060229562145,
+            "samples": 64,
+            "mean": 52143166404596
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.000269,
+          "p99_peak": 0.000288
+        },
+        "execution_samples": 68,
+        "executions_total": 200001,
+        "execution_active_periods": 66,
+        "execution_block_periods": 66,
+        "execution_samples_used": 64,
+        "execution_span_s": 64.0009,
+        "executions_per_s": 3035.1155990369534,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0,
+        "execution_tail_reported": true
+      }
+    }
+  ]
+}

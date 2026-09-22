@@ -1,0 +1,215 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 02:16:24",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110208512
+  },
+  "run_id": "20260922_021628",
+  "completed_at": "2026-09-22 02:48:44",
+  "test_results": [
+    {
+      "Test Name": "rag_embedding",
+      "Suite": "ai_auxiliary",
+      "Status": "PASS",
+      "Detail": "repeats agree to cv 0 on a Score that one more completed unit would move by 3.898e-06 -- the repeats sit within one completed unit of each other, so this is the counter's resolution rather than the workload's stability",
+      "Duration (s)": 300.29,
+      "Devices": [
+        0
+      ],
+      "Score": 854.4561,
+      "Unit": "embedding-vectors/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.20501280499957,
+        "flops_issued": 10121966606352384,
+        "implied_tflops": 33.71684740296853,
+        "embedding_element": 0.03125,
+        "expected_embedding_element": 0.03125,
+        "vectors_embedded": 256512
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 854.4474,
+        "max": 854.5224,
+        "median": 854.4561,
+        "stdev": 0.041,
+        "cv": 0.0,
+        "trend": null
+      },
+      "Problem": {
+        "dim": 1024,
+        "batch": 64,
+        "seq": 128,
+        "layers": 12,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 301,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 4005,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 97.83,
+            "samples": 298,
+            "mean": 98.19
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 746354555,
+          "peak": 746662890
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 33779591447647,
+            "samples_all": 300,
+            "mean_all_samples": 33153870493785,
+            "samples": 298,
+            "mean": 33164623114115
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.074789,
+          "p99_peak": 0.074818
+        },
+        "execution_samples": 301,
+        "executions_total": 4005,
+        "execution_active_periods": 300,
+        "execution_block_periods": 300,
+        "execution_samples_used": 298,
+        "execution_span_s": 297.9998,
+        "executions_per_s": 13.352358295356867,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "vision_encoder",
+      "Suite": "ai_auxiliary",
+      "Status": "PASS",
+      "Detail": "repeats agree to cv 0 on a Score that one more completed unit would move by 5.72e-08 -- the repeats sit within one completed unit of each other, so this is the counter's resolution rather than the workload's stability",
+      "Duration (s)": 400.28,
+      "Devices": [
+        0
+      ],
+      "Score": 58154.7767,
+      "Unit": "image-tiles/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.6069144659996,
+        "flops_issued": 5499276125798400,
+        "implied_tflops": 18.293910955333,
+        "image_tiles": 17481728
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 58154.4718,
+        "max": 58155.6631,
+        "median": 58154.7767,
+        "stdev": 0.6189,
+        "cv": 0.0,
+        "trend": null
+      },
+      "Problem": {
+        "resolution": 224,
+        "patch": 14,
+        "batch": 64,
+        "layers": 12,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 401,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 1069,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 69.8,
+            "samples": 300,
+            "mean": 93.02
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 825640154,
+          "peak": 856017204
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 18374290246058,
+            "samples_all": 302,
+            "mean_all_samples": 17027997022854,
+            "samples": 300,
+            "mean": 17089805997319
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.280695,
+          "p99_peak": 0.281658
+        },
+        "execution_samples": 401,
+        "executions_total": 1069,
+        "execution_active_periods": 303,
+        "execution_block_periods": 302,
+        "execution_samples_used": 300,
+        "execution_span_s": 299.9998,
+        "executions_per_s": 3.550002154082139,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

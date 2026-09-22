@@ -1,0 +1,529 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-21 22:07:26",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110208512
+  },
+  "run_id": "20260921_220730",
+  "completed_at": "2026-09-21 23:26:02",
+  "test_results": [
+    {
+      "Test Name": "tensor_virus",
+      "Suite": "core",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 300.5,
+      "Devices": [
+        0
+      ],
+      "Score": 78.6234,
+      "Unit": "TFLOPS",
+      "Percent Of Peak": 82.76,
+      "Peak": {
+        "peak": 95.0,
+        "peak_field": "bf16_tflops",
+        "peak_source": "AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS",
+        "peak_verified": true,
+        "cores_used": 1,
+        "cores_available": 2,
+        "duty_cycle": null
+      },
+      "Score Method": "neuron-monitor",
+      "Measurement": {
+        "kernel_figure": 78.6256,
+        "declared_over_kernel": 1.0,
+        "elapsed_s": 300.0298468439996,
+        "flops_issued": 23590021973934080,
+        "product_verified_ratio": 1.0
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 78.5834,
+        "max": 78.631,
+        "median": 78.6234,
+        "stdev": 0.0256,
+        "cv": 0.0003,
+        "trend": null
+      },
+      "Problem": {
+        "op": "matmul",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ],
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 301,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 21438,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 98.89,
+            "samples": 298,
+            "mean": 99.29
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 915698097,
+          "peak": 918373548
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 79186369003026,
+            "samples_all": 300,
+            "mean_all_samples": 78568089259783,
+            "samples": 298,
+            "mean": 78623395080772
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.013909,
+          "p99_peak": 0.013949
+        },
+        "execution_samples": 301,
+        "executions_total": 21438,
+        "execution_active_periods": 300,
+        "execution_block_periods": 300,
+        "execution_samples_used": 298,
+        "execution_span_s": 297.9997,
+        "executions_per_s": 71.51013957162287,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "int_virus",
+      "Suite": "core",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 327.48,
+      "Devices": [
+        0
+      ],
+      "Score": 78.8438,
+      "Unit": "TOPS",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "neuron-monitor",
+      "Measurement": {
+        "kernel_figure": 78.8432,
+        "declared_over_kernel": 1.0,
+        "elapsed_s": 300.03833692900025,
+        "flops_issued": 23655992671600640,
+        "product_verified_ratio": 1.0
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 78.8363,
+        "max": 78.8513,
+        "median": 78.8438,
+        "stdev": 0.0075,
+        "cv": 0.0001,
+        "trend": null
+      },
+      "Problem": {
+        "op": "matmul",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ],
+        "dtype": "uint8"
+      },
+      "Telemetry": {
+        "samples": 328,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 21509,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 99.83,
+            "mean_all_samples": 90.83,
+            "samples": 298,
+            "mean": 99.32
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 746509886,
+          "peak": 793551996
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 79246490723504,
+            "samples_all": 300,
+            "mean_all_samples": 78831324123484,
+            "samples": 298,
+            "mean": 78843811954443
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.013872,
+          "p99_peak": 0.01391
+        },
+        "execution_samples": 328,
+        "executions_total": 21509,
+        "execution_active_periods": 300,
+        "execution_block_periods": 300,
+        "execution_samples_used": 298,
+        "execution_span_s": 298.0001,
+        "executions_per_s": 71.70802643115609,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "pulse_virus",
+      "Suite": "core",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 300.52,
+      "Devices": [
+        0
+      ],
+      "Score": 39.939,
+      "Unit": "TFLOPS",
+      "Percent Of Peak": 84.08,
+      "Peak": {
+        "peak": 47.5,
+        "peak_field": "bf16_tflops",
+        "peak_source": "AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS",
+        "peak_verified": true,
+        "cores_used": 1,
+        "cores_available": 2,
+        "duty_cycle": 0.5
+      },
+      "Score Method": "neuron-monitor",
+      "Measurement": {
+        "kernel_figure": 40.0063,
+        "declared_over_kernel": 0.9983,
+        "elapsed_s": 300.0372416649998,
+        "flops_issued": 12003368440430592,
+        "observed_duty": 0.5095793989357843,
+        "product_verified_ratio": 1.0
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 39.9278,
+        "max": 39.939,
+        "median": 39.939,
+        "stdev": 0.0065,
+        "cv": 0.0002,
+        "trend": null
+      },
+      "Problem": {
+        "op": "matmul",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ],
+        "dtype": "bf16",
+        "duty_cycle": 0.5,
+        "period_s": 2
+      },
+      "Telemetry": {
+        "samples": 151,
+        "sample_period_s": 2.0,
+        "execution_errors": 0,
+        "total_executions": 10898,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 52.05,
+            "mean_all_samples": 50.11,
+            "samples": 148,
+            "mean": 50.44
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 790883368,
+          "peak": 927769724
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 41215722738810,
+            "samples_all": 150,
+            "mean_all_samples": 39941471581473,
+            "samples": 148,
+            "mean": 39938982460515
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.013913,
+          "p99_peak": 0.013948
+        },
+        "execution_samples": 151,
+        "executions_total": 10898,
+        "execution_active_periods": 150,
+        "execution_block_periods": 150,
+        "execution_samples_used": 148,
+        "execution_span_s": 296.0003,
+        "executions_per_s": 36.32428927248963,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "transformer_virus",
+      "Suite": "core",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 365.46,
+      "Devices": [
+        0
+      ],
+      "Score": 53.254,
+      "Unit": "TFLOPS",
+      "Percent Of Peak": 56.06,
+      "Peak": {
+        "peak": 95.0,
+        "peak_field": "bf16_tflops",
+        "peak_source": "AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS",
+        "peak_verified": true,
+        "cores_used": 1,
+        "cores_available": 2,
+        "duty_cycle": null
+      },
+      "Score Method": "neuron-monitor",
+      "Measurement": {
+        "kernel_figure": 53.2744,
+        "declared_over_kernel": 0.9996,
+        "elapsed_s": 300.0460669719996,
+        "flops_issued": 15984768764084224
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 53.2523,
+        "max": 53.2579,
+        "median": 53.254,
+        "stdev": 0.0029,
+        "cv": 0.0001,
+        "trend": null
+      },
+      "Problem": {
+        "hidden": 4096,
+        "heads": 32,
+        "seq": 2048,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 366,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 17895,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 81.51,
+            "samples": 299,
+            "mean": 99.42
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1038865959,
+          "peak": 1145488606
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 53573560540201,
+            "samples_all": 301,
+            "mean_all_samples": 53087209035961,
+            "samples": 299,
+            "mean": 53253962527548
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.016647,
+          "p99_peak": 0.016725
+        },
+        "execution_samples": 366,
+        "executions_total": 17895,
+        "execution_active_periods": 302,
+        "execution_block_periods": 301,
+        "execution_samples_used": 299,
+        "execution_span_s": 299.0006,
+        "executions_per_s": 59.6353313938747,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "omni_virus",
+      "Suite": "core",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 366.08,
+      "Devices": [
+        0
+      ],
+      "Score": 54.0639,
+      "Unit": "TFLOPS",
+      "Percent Of Peak": 56.91,
+      "Peak": {
+        "peak": 95.0,
+        "peak_field": "bf16_tflops",
+        "peak_source": "AWS Neuron architecture docs, neuron-hardware/trainium.html, read 2026-09-10: two NeuronCore-v2, 32GiB HBM at 820 GiB/sec, 190 FP16/BF16/cFP8/TF32 TFLOPS, 47.5 FP32 TFLOPS",
+        "peak_verified": true,
+        "cores_used": 1,
+        "cores_available": 2,
+        "duty_cycle": null
+      },
+      "Score Method": "neuron-monitor",
+      "Measurement": {
+        "kernel_figure": 48.1638,
+        "declared_over_kernel": 1.1225,
+        "elapsed_s": 300.1043993080002,
+        "tile": 8192,
+        "ran_pinned_shape": true,
+        "flops_issued": 14454179858743296,
+        "expected_output": 30376049.384085067
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 54.0624,
+        "max": 54.0706,
+        "median": 54.0639,
+        "stdev": 0.0044,
+        "cv": 0.0001,
+        "trend": null
+      },
+      "Problem": {
+        "op": "mixed",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ],
+        "dtype": "bf16",
+        "engines": "all"
+      },
+      "Telemetry": {
+        "samples": 367,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 6575,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 81.44,
+            "samples": 299,
+            "mean": 99.58
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1361473074,
+          "peak": 1422326830
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 54299549745696,
+            "samples_all": 301,
+            "mean_all_samples": 53909681006312,
+            "samples": 299,
+            "mean": 54063878341050
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.04544,
+          "p99_peak": 0.045629
+        },
+        "execution_samples": 367,
+        "executions_total": 6575,
+        "execution_active_periods": 302,
+        "execution_block_periods": 301,
+        "execution_samples_used": 299,
+        "execution_span_s": 298.9997,
+        "executions_per_s": 21.9030353149684,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}
