@@ -915,6 +915,19 @@ SAME_UNIT_DIFFERENT_QUANTITY = {
         "graph, or of the bare kernel under its mock fallback; this counts "
         "completed executions from neuron-monitor's execution counter."
     ),
+    # Found 2026-09-22 while checking which of the five comparable rows the
+    # publication could stand on. Three differences stack, and the first is
+    # definitional -- it holds on identical hardware.
+    "pcie_bandwidth": (
+        "pantheongpu copies both directions concurrently on separate streams "
+        "from 256 MiB pinned (hipHostMalloc) buffers and reports the combined "
+        "rate; this times the directions sequentially, half the window each, "
+        "so its figure is the mean of the two rates rather than their "
+        "concurrent sum -- up to 2x apart by definition on a full-duplex "
+        "link. It also copies from buffers pin_memory() leaves unpinned on "
+        "this stack, at a pinned 1 GiB that sits past a d2h staging-buffer "
+        "cliff measured at 16-64 MiB."
+    ),
 }
 
 # transformer_virus is deliberately absent. pantheongpu does use real matrix
