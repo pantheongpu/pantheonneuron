@@ -1,0 +1,45 @@
+# Do any DMA levers lift the per-core HBM read ceiling? No.
+# trn1.2xlarge, 2026-09-22 15:11-15:21 UTC. tools/dma_levers.py at 075dcce, synced by
+# git archive and hash-checked on the host (dma_levers.py md5 15d519dc local and remote).
+# GIB=2 SECONDS=20, one process, wall-clock bytes over time, every variant verified.
+#
+# Baseline for context: memory_read publishes 273 GB/s per NeuronCore by neuron-profile at
+# its pinned 8 GiB, and exactly 2x that across two cores (543.7 GB/s, five hosts
+# 2026-09-21) against the 880.5 GB/s AWS publishes for the chip. AWS documents 16 DMA
+# engines per NeuronCore-v2 at 27.2 GB/s each: 435 GB/s per core.
+#
+# This tool's own baseline reads 262.59 GB/s -- 2 GiB rather than 8, wall clock rather than
+# the profiler, and one output allocated per pass -- so compare the variants against it,
+# not against 273.
+
+variant            GB/s  passes  elapsed  correct  note
+baseline         262.59    2448    20.02     True
+prefetch_2       265.25    2473    20.02     True   1.010x baseline
+prefetch_4       264.88    2469    20.02     True   1.009x
+prefetch_8       264.82    2469    20.02     True   1.008x
+dma_copy         265.25    2473    20.02     True   1.010x
+hbm_to_hbm       307.92    1436    20.03     True   moves 2x bytes (read+write), ~154 each way
+
+# THREE HYPOTHESES, ALL REFUTED.
+#
+# 1. Not enough DMA transfers in flight. Refuted: depth 2, 4 and 8 land within 0.2% of each
+#    other. A kernel short of in-flight transfers would get faster with depth; this does not.
+# 2. nl.load's queue assignment serialises the transfers. Refuted: nisa.dma_copy, which the
+#    compiler assigns itself, reads the same 265.25 -- identical to prefetch_2 to two
+#    decimals.
+# 3. The SBUF partition layout is the constraint. Refuted, and this is the informative one:
+#    an HBM-to-HBM copy never touches SBUF and moves 307.92 GB/s counting both directions,
+#    about 154 each way. Reading into SBUF at 262 is *faster* than a copy that must also
+#    write back, so the on-chip path is not what limits reads.
+#
+# What is left is a per-core limit on total DMA throughput at about 60% of the engines'
+# rated aggregate: per-engine efficiency on 4 KiB descriptors, or a fabric limit between a
+# core and the HBM stacks. Neither is reachable from a kernel, and the kernel already
+# follows AWS's stated rule (128 partitions, 4 KiB or more per partition row).
+#
+# Also already refuted on hardware, before this run (kernels/memory_read.py): transfer width
+# (16 KiB per partition 269.8, 4 KiB 269.5, 1 KiB 208), a second concurrent load per
+# iteration (268.8), and the consumer (vector engine at 65%, wider loads change nothing).
+#
+# Conclusion: 543.7 GB/s per chip, 62% of the published figure, is what this suite can
+# measure. Five hypotheses tested and rejected, not effort not spent.

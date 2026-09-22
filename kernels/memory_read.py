@@ -57,6 +57,20 @@ product exact):
   lift it -- trn1.2xlarge 2026-09-11, 2 GiB: two independent loads per
   iteration 268.8, one 16384-wide load 271.1, against 269.5 for this
   kernel. Whatever the ceiling is, it is per core and it is not issue rate.
+- **Five levers refuted, and the ceiling is not in the kernel.** AWS
+  documents 16 DMA engines per NeuronCore-v2 at 27.2 GB/s each, so 435
+  GB/s per core; this kernel reaches 60-63% of that and nothing moves it.
+  Beyond the width and concurrency tests above, trn1.2xlarge 2026-09-22 at
+  2 GiB (tools/dma_levers.py, wall clock, every variant verified):
+  prefetch 2/4/8 tiles in flight 265.25, 264.88, 264.82 against a 262.59
+  baseline -- 1%, and flat in depth, which a kernel short of in-flight
+  transfers would not be; nisa.dma_copy instead of nl.load 265.25,
+  identical to prefetch_2. An HBM-to-HBM copy that never touches SBUF
+  moves 307.92 GB/s counting both directions, about 154 each way, so
+  reading into SBUF is *faster* than a copy and the partition layout is
+  not the constraint either. What is left is per-engine efficiency or a
+  core-to-HBM fabric limit, neither reachable from a kernel. See
+  data/validation-2026-09-22/trn1-dma-levers.log.
 - **The kernel is not a floor.** The compiler's own reduction over the
   same bytes is 1.55x slower. That is the opposite of tensor_virus, where
   torch.matmul was 2.53x the hand-written kernel.
