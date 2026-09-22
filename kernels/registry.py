@@ -766,12 +766,26 @@ COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
 # this kernel where trn1 delivers 83%. See
 # docs/inf2_sustains_less_than_trn1.md.
 #
-# UNITS. The doc says 820 **GiB**/sec and every Score here is decimal
-# GB/s (bytes / 1e9), so the ceiling is 820 * 2^30 / 1e9 = 880.5 GB/s.
-# Storing the GiB figure and converting at the point of use would invite
-# the 7% error every time; the conversion is done once, here, and the
-# original is kept beside it so the citation can be checked without
-# undoing arithmetic.
+# UNITS, AND AWS'S OWN PAGES DISAGREE. The architecture pages say 820
+# **GiB**/sec ("32 GiB of device memory (for storing model state), with 820
+# GiB/sec of bandwidth", both the general/ and about-neuron/ copies, read
+# 2026-09-22). The NKI architecture guide says 820 **GB/s** ("2 HBM stacks
+# with a total device memory capacity of 32GiB and bandwidth of 820 GB/s",
+# nki/guides/architecture/trainium_inferentia2_arch.html, same day). Those
+# differ by 7.4%: 880.5 against 820.
+#
+# This table keeps the GiB reading, 880.5 GB/s, because the architecture
+# page is the cited source and says GiB twice. It is also the less
+# flattering choice -- the measured 543.7 GB/s is 61.8% of 880.5 and 66.3%
+# of 820 -- and where the two readings cannot both be right, the one that
+# does not flatter is the one to publish. Every Score here is decimal GB/s
+# (bytes / 1e9), so the conversion is done once, here, with the original
+# beside it.
+#
+# A 16-engine DMA argument favours the GiB reading: AWS documents 16 DMA
+# engines per NeuronCore-v2 at 27.2 GB/s, which is 870 GB/s for the chip's
+# two cores -- near 880.5, and above 820. See
+# docs/inf2_sustains_less_than_trn1.md and tools/dma_levers.py.
 #
 # WHAT DID NOT RECONCILE, recorded because it is the reason to trust the
 # architecture page over the marketing one. The instance pages say "9.8
