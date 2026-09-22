@@ -290,14 +290,17 @@ WORKLOADS: typing.Tuple[Workload, ...] = (
     Workload("pcie_bandwidth", "interconnect",
              "Host-to-device and device-to-host transfer over PCIe.",
              unit="GB/s",
-             # 16 MiB, not the 1 GiB pinned until 2026-09-22. Both
-             # directions peak there and the staging cliff sits just past
-             # it: measured that day on trn1.2xlarge with
-             # tools/pcie_size_sweep.py, h2d 8.89 and d2h 3.93 GB/s at 16
-             # MiB against 6.84 and 1.11 at 1 GiB. The row exists to notice
-             # a link that trained down, which wants the size that measures
-             # the link.
-             problem={"bytes": 16 << 20, "direction": "bidirectional"},
+             # Stays 1 GiB, and 2026-09-22 is when that stopped being an
+             # open question. 16 MiB is where both directions peak (h2d
+             # 8.89, d2h 3.93 against 6.84 and 1.11 at 1 GiB) and it is
+             # unusable: at 16 MiB the runtime's host memory grows about 5
+             # MB per transfer, 3.6 GiB to 28.9 over 6,000 passes, and a 60
+             # s harness run was OOM-killed at 31 GB on a 30 GB host. At 1
+             # GiB it is flat -- 3.98 GiB across 97 passes -- because the
+             # pass rate is 80x lower. A pin that cannot survive this
+             # suite's own durations is not an improvement. See
+             # kernels/pcie_bandwidth.py.
+             problem={"bytes": 1 << 30, "direction": "bidirectional"},
              score_source=ScoreSource(INTERNAL,
                  counters=(
                      'bytes_transferred',

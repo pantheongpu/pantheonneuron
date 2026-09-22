@@ -47,9 +47,9 @@ have shown:
 **So the pinned 1 GiB measured the degraded regime for both directions.**
 h2d was past its own peak there too (7.37 against 11.55).
 
-**Resolved 2026-09-22: the pin is 16 MiB.** The sweep was re-measured
-through this kernel that day on a trn1.2xlarge
-(tools/pcie_size_sweep.py, 10 s per size, one process each):
+**Resolved 2026-09-22: the pin stays 1 GiB, because 16 MiB cannot be
+run.** The sweep was re-measured through this kernel that day on a
+trn1.2xlarge (tools/pcie_size_sweep.py, 10 s per size, one process each):
 
     MiB     h2d      d2h   combined
       1    5.80     2.28       4.04
@@ -61,16 +61,35 @@ through this kernel that day on a trn1.2xlarge
    1024    6.84     1.11       3.78
 
 Both directions peak at 16 MiB and the cliff sits immediately past it, now
-between 16 and 32 MiB rather than 16 and 64. Of the two questions the old
-comment left open -- measure the link, or measure what a large transfer
-costs -- this workload exists to answer the first: it is the row that
-notices a link that trained down, which wants the size at which the link
-is what binds. The Score moves from about 3.7 to about 6.4 GB/s, and the
-figures above ship beside the pin so the neighbours are visible.
+between 16 and 32 MiB rather than 16 and 64. On that evidence alone the pin
+should move: this is the row that notices a link that trained down, and
+that wants the size at which the link is what binds.
+
+**It cannot move, and the reason is host memory.** At 16 MiB the runtime's
+host footprint grows about 5 MB per transfer and does not come back:
+measured 3.61, 6.20, 8.63 ... 28.92 GiB across 6,000 passes in 15 s, and a
+60 s harness run at that pin was OOM-killed -- "Out of memory: Killed
+process ... anon-rss:31175284kB" on a 30 GB host. At the 1 GiB pin the
+same loop is flat: 3.98 GiB across 97 passes, unchanged to two decimals.
+
+The difference is the pass rate, not the code. 1 GiB moves about 5 passes
+a second and 16 MiB about 400, and whatever the runtime holds per transfer
+is reclaimed fast enough at the former and not at the latter. Both
+`resident.copy_(host)` and `host.to(device)` with an explicit `del` grow
+identically, so this is not the in-place-write question the SUSPECT note
+below asks about -- that note stands, and this is not it.
+
+So a 16 MiB pin would OOM this suite's own 300 s and 3600 s runs, and the
+pinned 1 GiB survives them (8,610 to 9,956 passes per hour-long leg on
+2026-09-21, no failures). A pin that cannot survive the durations the
+suite uses is not an improvement, however much better it measures in 10
+seconds. The sweep above ships beside the pin so the cost of that choice
+is visible: the Score is about 3.7 GB/s where the link can do about 8.9
+one way.
 
 (The whole curve is lower than 2026-09-10's, which read 11.55 at 16 MiB
-against 8.89 here. Different instance, same shape of curve; the pin is
-chosen from the shape, not the absolute.)
+against 8.89 here. Different instance, same shape; the conclusion rests
+on the shape.)
 
 STATUS: VERIFIED ON HARDWARE, both parts 2026-09-08 and trn1.2xlarge
 2026-09-10, including the preallocation and alternating-source controls --

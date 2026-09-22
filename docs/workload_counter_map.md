@@ -119,7 +119,7 @@ A Score is comparable across platforms only if both ran the same problem, so sha
 | `memory_write_agg` | bytes=4294967296, dtype=bf16, cores=all |
 | `all_reduce` | op=all_reduce, bytes_min=1048576, bytes_max=8388608, dtype=fp32, cores=all |
 | `p2p_thrasher` | op=sendrecv, bytes=67108864, dtype=fp32, cores=all |
-| `pcie_bandwidth` | bytes=16777216, direction=bidirectional |
+| `pcie_bandwidth` | bytes=1073741824, direction=bidirectional |
 | `llm_decode` | hidden=4096, layers=32, batch=1, context=2048, dtype=bf16 |
 | `llm_prefill` | hidden=4096, layers=32, batch=1, prompt=2048, dtype=bf16 |
 | `kv_cache_churn` | hidden=2048, context=2048, layers=8, ring_slots=8, dtype=bf16 |

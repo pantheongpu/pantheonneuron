@@ -1,0 +1,80 @@
+# What omni_virus issues, and where its 12% cross-check gap comes from.
+# trn1.2xlarge, 2026-09-22 16:05-16:14 UTC, tools/omni_flops.py at c9538b1 (hash-checked
+# on the host). Captures the chain at tile 2048 and the pinned 8192 with neuron-profile and
+# prints the hardware model_flops against each candidate analytic formula.
+#
+# ANSWER: the compiler lowers the chain cumsum onto the Tensor Engine and the monitor counts
+# it. The extra is exactly tile^3/2 at 8192 (ratio 1.125) and exactly 2*tile^3 at 2048
+# (ratio 1.500) -- shape-dependent, so one formula cannot absorb it, which is why the
+# expected ratio is declared per workload instead (registry.MONITOR_OVER_KERNEL_EXPECTED).
+
+
+######## tile 2048
+....
+  candidate analytic counts, one pass:
+           34359738368  two_matmuls (current)
+           34376515584  + elementwise + tanh + sequential cumsum
+           38667288576  + cumsum as triangular MACs
+           42962255872  + cumsum as triangular FLOPs (2x MACs)
+           51539607552  three full matmuls
+  MODULE_7098222022655765781+e30acd3a:
+    model_flops = 51539607552
+    hardware_flops = 69793218560
+    transpose_flops = 1073741824
+    tensor_engine_instruction_count = 8755
+    tensor_engine_active_time_percent = 0.37159096661807967
+    vector_engine_active_time_percent = 0.01164329717987506
+    scalar_engine_active_time_percent = 0.0432238776041087
+    gpsimd_engine_active_time_percent = 0.016607826086661566
+    neuroncore_cycle_count = 4923985
+    mfu_estimated_percent = 0.15971452361807273
+    ratios of hardware's model_flops to each candidate:
+      1.5000  two_matmuls (current)
+      1.4993  + elementwise + tanh + sequential cumsum
+      1.3329  + cumsum as triangular MACs
+      1.1996  + cumsum as triangular FLOPs (2x MACs)
+      1.0000  three full matmuls
+  MODULE_9204911996436537906+e30acd3a:
+    model_flops = 0
+    tensor_engine_instruction_count = 21
+    tensor_engine_active_time_percent = 0.00022394392670555625
+    vector_engine_active_time_percent = 0.0022596303156466667
+    scalar_engine_active_time_percent = 0.00015864197427682483
+    gpsimd_engine_active_time_percent = 0.0009505247691715753
+    neuroncore_cycle_count = 3031927
+    mfu_estimated_percent = 0
+
+######## tile 8192
+....
+  candidate analytic counts, one pass:
+         2199023255552  two_matmuls (current)
+         2199291691008  + elementwise + tanh + sequential cumsum
+         2474102489088  + cumsum as triangular MACs
+         2748980396032  + cumsum as triangular FLOPs (2x MACs)
+         3298534883328  three full matmuls
+  MODULE_11435754646458375002+e30acd3a:
+    model_flops = 2473901162496
+    hardware_flops = 2783138807808
+    transpose_flops = 34359738368
+    tensor_engine_instruction_count = 341272
+    tensor_engine_active_time_percent = 0.9549225223946816
+    vector_engine_active_time_percent = 0.1302464302212546
+    scalar_engine_active_time_percent = 0.03241966219573211
+    gpsimd_engine_active_time_percent = 0.0015001830034336965
+    neuroncore_cycle_count = 119912696
+    mfu_estimated_percent = 0.3148018390350696
+    ratios of hardware's model_flops to each candidate:
+      1.1250  two_matmuls (current)
+      1.1249  + elementwise + tanh + sequential cumsum
+      0.9999  + cumsum as triangular MACs
+      0.8999  + cumsum as triangular FLOPs (2x MACs)
+      0.7500  three full matmuls
+  MODULE_8182168089578119579+e30acd3a:
+    model_flops = 0
+    tensor_engine_instruction_count = 21
+    tensor_engine_active_time_percent = 0.0001414351735212442
+    vector_engine_active_time_percent = 0.0015106622568405673
+    scalar_engine_active_time_percent = 0.00010135521997348231
+    gpsimd_engine_active_time_percent = 0.0007055036048968987
+    neuroncore_cycle_count = 4765279
+    mfu_estimated_percent = 0

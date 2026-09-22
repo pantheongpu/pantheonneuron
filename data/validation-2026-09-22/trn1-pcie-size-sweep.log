@@ -1,0 +1,19 @@
+# pcie_bandwidth transfer-size sweep through the current kernel.
+# trn1.2xlarge, 2026-09-22 16:14-16:17 UTC, tools/pcie_size_sweep.py, 10 s per size, one
+# process each.
+#
+# Both directions peak at 16 MiB; the staging cliff sits between 16 and 32 MiB. On this
+# evidence alone the pin should move from 1 GiB to 16 MiB -- and it cannot, because of the
+# host-memory growth measured in trn1-pcie-host-memory.log beside this.
+
+   MiB  h2d GB/s  d2h GB/s  combined  h2d passes d2h passes  warning
+     1      5.80      2.28      4.04       27681      10855  
+     4      8.05      3.41      5.73        9596       4068  
+    16      8.89      3.93      6.41        2651       1172  
+    32      6.59      1.08      3.83         982        162  d2h ran at 1.1 GB/s against 6.6 the other way at 32 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link
+    64      6.65      1.08      3.86         496         81  d2h ran at 1.1 GB/s against 6.6 the other way at 64 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link
+   256      5.79      1.11      3.43         108         21  d2h ran at 1.1 GB/s against 5.8 the other way at 256 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link
+  1024      6.84      1.11      3.78          32          6  d2h ran at 1.1 GB/s against 6.8 the other way at 1024 MiB per transfer -- past the staging cliff a size sweep measured on trn1.2xlarge 2026-09-10, where d2h held ~2.9 GB/s up to 16 MiB and ~1 GB/s past 64 MiB: a transfer-size effect, not the link
+
+h2d peaks at 16 MiB (8.89 GB/s); d2h peaks at 16 MiB (3.934 GB/s).
+The pinned 1024 MiB reads h2d 6.839, d2h 1.114, combined 3.776 GB/s.

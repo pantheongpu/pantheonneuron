@@ -1,0 +1,16 @@
+# Hardware confirmation for the monitor-over-kernel ratio check.
+# trn1.2xlarge, 2026-09-22 16:27-16:45 UTC, one process each, --duration 60, from the
+# branch (registry.py md5 c4264e0d local and remote).
+#
+# The check compares declared_over_kernel against a declared expectation
+# (registry.MONITOR_OVER_KERNEL_EXPECTED, default 1.0) and writes to Detail when they
+# disagree by more than 5%. It must stay silent on healthy hardware.
+
+workload       status  Score          ratio   Detail
+omni_virus     PASS    54.0619 TFLOPS 1.1223  (empty)    expected 1.125, the cumsum lowering
+tensor_virus   PASS    78.4612 TFLOPS 1.0000  (empty)    expected 1.000, the default
+
+# Both silent, on the row with an expectation and the row on the default. omni_virus reads
+# 1.1223 against 1.125 expected, a 0.25% shortfall from monitor sampling ramp, well inside
+# the 5% tolerance -- and a drift to 1.0 or 1.25 would now be reported, where before 1.12
+# was excused in a comment and a real 12% error looked identical.
