@@ -748,9 +748,18 @@ COUNTERS_THE_DECLARED_SOURCE_CANNOT_SUPPLY = {
 # high-bandwidth device memory (HBM)" with "820 GiB/sec of bandwidth",
 # and "190 FP16/BF16/cFP8/TF32 TFLOPS" (Trainium1 adds 47.5 FP32).
 #
-# **The two parts are the same silicon per chip.** They differ in how
-# many chips an instance carries, not in what a chip does -- which the
-# repo already knew from the other direction: both report NeuronCore-v2.
+# **The two parts publish the same figures per chip**, and both report
+# NeuronCore-v2. They are not the same in what a chip *sustains*:
+# measured 2026-09-21 across three trn1.2xlarge and two inf2.xlarge at
+# one commit with one toolchain, inf2 reaches 0.723 of trn1's dense-GEMM
+# rate (56.85 against 78.60 TFLOPS) while memory bandwidth is identical
+# to three decimals. An earlier version of this comment said they
+# differed only in how many chips an instance carries, "not in what a
+# chip does". That was never measured, and it is wrong. The peaks below
+# stay as published -- Percent Of Peak is honest against them, and what
+# it now says is that inf2 delivers 60% of its advertised compute on
+# this kernel where trn1 delivers 83%. See
+# docs/inf2_sustains_less_than_trn1.md.
 #
 # UNITS. The doc says 820 **GiB**/sec and every Score here is decimal
 # GB/s (bytes / 1e9), so the ceiling is 820 * 2^30 / 1e9 = 880.5 GB/s.
