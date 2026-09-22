@@ -70,6 +70,16 @@ def key_of(group: str, row):
     return (group, row["Test Name"], row.get("Unit"), problem)
 
 
+def _order(item):
+    """Group, workload, then Problem values numerically: 2 GiB before 12."""
+    (group, name, unit, problem), _ = item
+    values = json.loads(problem) or {}
+    return (group, name, str(unit), [
+        (key, 0, value) if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else (key, 1, str(value))
+        for key, value in sorted(values.items())])
+
+
 def summarise(results_dir: str):
     hosts = _subdirectories(results_dir)
     table = {}
@@ -83,7 +93,7 @@ def summarise(results_dir: str):
                 entry[host] = row
 
     summary = []
-    for (group, name, unit, problem), per_host in sorted(table.items()):
+    for (group, name, unit, problem), per_host in sorted(table.items(), key=_order):
         scored = {
             host: row["Score"] for host, row in per_host.items()
             if row.get("Status") == "PASS"
@@ -112,8 +122,40 @@ def summarise(results_dir: str):
     return {"hosts": hosts, "rows": summary}
 
 
+def _distinguishers(rows):
+    """For rows sharing (group, workload), the Problem keys that differ.
+
+    Rows are keyed on Problem so a size sweep never averages 1 GiB with 12,
+    and the first rendering dropped the Problem -- five memory_read sweep rows
+    printed as five identical lines. Only the keys that actually differ are
+    shown, so a table of pinned problems stays as narrow as it was.
+    """
+    by_name = {}
+    for row in rows:
+        by_name.setdefault((row["group"], row["workload"]), []).append(row)
+    labels = {}
+    for siblings in by_name.values():
+        if len(siblings) < 2:
+            continue
+        keys = sorted({key for row in siblings for key in (row["problem"] or {})})
+        differing = [key for key in keys
+                     if len({repr((row["problem"] or {}).get(key)) for row in siblings}) > 1]
+        for row in siblings:
+            labels[id(row)] = " ".join(
+                f"{key}={_compact((row['problem'] or {}).get(key))}" for key in differing)
+    return labels
+
+
+def _compact(value):
+    """Byte counts as GiB when they divide evenly; anything else as is."""
+    if isinstance(value, int) and value >= 1 << 30 and value % (1 << 30) == 0:
+        return f"{value >> 30}GiB"
+    return value
+
+
 def render(summary) -> str:
     lines = [f"hosts: {', '.join(summary['hosts'])}", ""]
+    labels = _distinguishers(summary["rows"])
     header = (f"{'group':8} {'workload':26} {'unit':20} {'median':>14} "
               f"{'within cv':>10} {'between cv':>11}  passed")
     lines.append(header)
@@ -121,7 +163,8 @@ def render(summary) -> str:
         passed = sum(1 for status in row["hosts"].values() if status == "PASS")
         median = row["median_of_hosts"]
         lines.append(
-            f"{row['group']:8} {row['workload']:26} {row['unit'] or '-':20} "
+            f"{row['group']:8} {(row['workload'] + ' ' + labels.get(id(row), '')).strip():26} "
+            f"{row['unit'] or '-':20} "
             f"{'-' if median is None else format(median, '.4g'):>14} "
             f"{_cv(row['worst_within_host_cv']):>10} "
             f"{_cv(row['between_host_cv']):>11}  {passed}/{len(row['hosts'])}")
