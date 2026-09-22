@@ -795,10 +795,12 @@ def test_the_step_runs_the_stack_not_a_block():
 
 
 @pytest.mark.parametrize("bad", [
-    {"prefill_ratio": 0.2, "batch": 0, "prompt": 8, "decode": 8},
-    {"prefill_ratio": 0.2, "batch": 8, "prompt": 0, "decode": 8},
-    {"prefill_ratio": 0.2, "batch": 8, "prompt": 8, "decode": 0},
-    {"prefill_ratio": 0.2, "batch": 8, "prompt": 8, "decode": 8, "layers": 0},
+    {"prefill_ratio": 0.2, "prefill_batch": 1, "decode_batch": 0, "prompt": 8, "decode": 8},
+    {"prefill_ratio": 0.2, "prefill_batch": 0, "decode_batch": 8, "prompt": 8, "decode": 8},
+    {"prefill_ratio": 0.2, "prefill_batch": 1, "decode_batch": 8, "prompt": 0, "decode": 8},
+    {"prefill_ratio": 0.2, "prefill_batch": 1, "decode_batch": 8, "prompt": 8, "decode": 0},
+    {"prefill_ratio": 0.2, "prefill_batch": 1, "decode_batch": 8, "prompt": 8,
+     "decode": 8, "layers": 0},
 ])
 def test_serving_plan_rejects_impossible_problems(bad):
     with pytest.raises(ValueError, match="must be positive"):
@@ -808,7 +810,8 @@ def test_serving_plan_rejects_impossible_problems(bad):
 def test_serving_plan_still_rejects_a_bad_ratio():
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         inference_mix.serving_plan(
-            {"prefill_ratio": 1.5, "batch": 8, "prompt": 8, "decode": 8})
+            {"prefill_ratio": 1.5, "prefill_batch": 1, "decode_batch": 8,
+             "prompt": 8, "decode": 8})
 
 
 def test_speculative_decode_verifies_through_the_target_model():
@@ -1929,3 +1932,50 @@ def test_the_reference_window_is_bounded():
     code = sourcecheck.flat_function_code(inference_mix.run_quantized_gemm)
     assert "min ( duration , BF16_REFERENCE_S )" in code
     assert 0 < inference_mix.BF16_REFERENCE_S <= 15
+
+
+# -- declarations that describe the run --------------------------------------
+
+def test_serving_mix_declares_both_batches_because_it_runs_both():
+    """One "batch" key said 8 while a fifth of the steps ran at 1.
+
+    prefill runs a request at a time and decode runs eight-wide; that is what
+    continuous batching does and what the loop always did. The row published
+    `batch: 8` for the whole workload.
+    """
+    problem = PROBLEMS["serving_mix"]
+    assert problem["prefill_batch"] == 1
+    assert problem["decode_batch"] == 8
+    assert "batch" not in problem, "the ambiguous key must be gone"
+
+
+def test_serving_mix_shapes_each_tensor_from_its_own_batch():
+    plan = inference_mix.serving_plan(PROBLEMS["serving_mix"])
+    code = sourcecheck.flat_function_code(inference_mix.run_serving_mix)
+    assert "torch . ones ( ( prefill_batch , prompt , hidden )" in code
+    assert "torch . ones ( ( batch , 1 , hidden )" in code
+    # And the FLOP accounting follows the tensor it describes.
+    assert plan["prefill_flops"] == plan["layers"] * transformer_ops.block_flops(
+        plan["hidden"], plan["prompt"], plan["prefill_batch"])
+
+
+@pytest.mark.parametrize("shape", [[8192, 4096, 8192], [1024, 1024, 2048],
+                                   [4096, 8192, 8192]])
+def test_omni_virus_refuses_a_pin_it_cannot_run(shape):
+    """Only shape[0] reaches the operands, so a non-square pin is a lie.
+
+    ran_pinned_shape reported this after the fact, which is the wrong end:
+    the Score is already wrong for the shape the row advertises.
+    """
+    with pytest.raises(ValueError, match="square"):
+        omni_virus.square_tile({"shape": shape})
+
+
+def test_omni_virus_accepts_the_pinned_square():
+    assert omni_virus.square_tile(PROBLEMS["omni_virus"]) == 8192
+
+
+def test_omni_virus_refuses_before_reaching_for_a_device():
+    """A declaration error should not need hardware to surface."""
+    code = sourcecheck.flat_function_code(omni_virus.run)
+    assert code.index("square_tile ( problem )") < code.index("require_toolchain")

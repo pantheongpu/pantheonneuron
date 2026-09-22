@@ -589,26 +589,35 @@ def serving_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, t
     Pure, so the accounting can be checked without a device.
     """
     ratio = float(problem["prefill_ratio"])
-    batch = int(problem["batch"])
+    # decode_batch, not batch. The key was "batch" and it only ever shaped
+    # the decode tensor: prefill runs one request at a time, which is what
+    # continuous batching does and what the loop below has always done. A
+    # row publishing `batch: 8` said the whole workload ran eight-wide, and
+    # a fifth of its steps ran one-wide. Two keys, each naming what it sets.
+    batch = int(problem["decode_batch"])
+    prefill_batch = int(problem["prefill_batch"])
     prompt = int(problem["prompt"])
     decode = int(problem["decode"])
     layers = int(problem.get("layers", 32))
     hidden = int(problem.get("hidden", 4096))
 
-    for label, value in (("batch", batch), ("prompt", prompt),
+    for label, value in (("decode_batch", batch), ("prefill_batch", prefill_batch),
+                         ("prompt", prompt),
                          ("decode", decode), ("layers", layers)):
         if value <= 0:
             raise ValueError(f"{label} must be positive, got {value}")
 
     return {
         "period": interleave_period(ratio),
-        "batch": batch, "prompt": prompt, "decode": decode,
+        "batch": batch, "prefill_batch": prefill_batch,
+        "prompt": prompt, "decode": decode,
         "layers": layers, "hidden": hidden,
         "blocks_per_step": layers,
         # A decode request is done when it has produced `decode` tokens,
         # and every decode step produces one per sequence in flight.
         "decode_steps_per_request": -(-decode // batch),
-        "prefill_flops": layers * transformer_ops.block_flops(hidden, prompt),
+        "prefill_flops": layers * transformer_ops.block_flops(
+            hidden, prompt, prefill_batch),
         "decode_flops": layers * transformer_ops.block_flops(hidden, 1, batch),
     }
 
@@ -669,13 +678,14 @@ def run_serving_mix(problem: typing.Mapping[str, typing.Any],
 
     plan = serving_plan(problem)
     batch, prompt = plan["batch"], plan["prompt"]
+    prefill_batch = plan["prefill_batch"]
     layers, hidden = plan["layers"], plan["hidden"]
     period = plan["period"]
 
     dtype = torch.bfloat16
     device = xm.xla_device()
     params = transformer_ops.weights(hidden, dtype, device, heads=32)
-    prompt_batch = torch.ones((1, prompt, hidden), dtype=dtype, device=device)
+    prompt_batch = torch.ones((prefill_batch, prompt, hidden), dtype=dtype, device=device)
     decode_batch = torch.ones((batch, 1, hidden), dtype=dtype, device=device)
     xm.mark_step()
 
