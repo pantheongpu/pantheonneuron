@@ -217,6 +217,49 @@
           "skipped": [
             "all_reduce", "p2p_thrasher"
           ]
+        },
+        {
+          "date": "2026-09-21",
+          "evidence": "data/publication-2026-09-21/README.md",
+          "note": "Publication pass, group 300x3: three trn1.2xlarge at 3ae6426, one harness process per suite, --duration 300 --repeat 3. 23 PASS on all three hosts (baseline_metrics not listed), 0 FAIL, 2 SKIPPED. 21 of 23 scored workloads agree across hosts within 0.2%; allocation_fragmentation 6.9% and pcie_bandwidth 2.5% do not. Per-host reports under data/publication-2026-09-21/trn1/.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus",
+            "transformer_train_step", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher"
+          ]
+        },
+        {
+          "date": "2026-09-22",
+          "evidence": "data/publication-2026-09-21/README.md",
+          "note": "Publication pass, group 3600: the same three hosts, --duration 3600, one repeat. memory_read, memory_write, pcie_bandwidth and transformer_virus PASS on all three; memory_read 273.1 GB/s against 273.0 at 300 s. memory_read_agg and memory_write_agg FAIL on all three with 'core 0 timed out; core 1 timed out': the aggregate's worker budget was a fixed 1800 s, a harness bug fixed in #25 -- see the 3600-fixed entry. Same hosts also ran the size sweep (group sweep): memory_read flat 272.8-273.1 GB/s from 1 to 12 GiB; memory_write PASS to 4 GiB, and out of device memory at 8 and 12, the constraint its pin exists for (#32).",
+          "passed": [
+            "memory_read", "memory_write", "pcie_bandwidth",
+            "transformer_virus"
+          ],
+          "failed": [
+            "memory_read_agg", "memory_write_agg"
+          ],
+          "skipped": []
+        },
+        {
+          "date": "2026-09-22",
+          "evidence": "data/validation-2026-09-22/trn1-agg-timeout-confirm.log",
+          "note": "Publication pass, group 3600-fixed: memory_read_agg and memory_write_agg at --duration 3600 on one of the pass's trn1.2xlarge, from the #25 branch (memory_agg.py hash-checked on the host). Both PASS over the full hour: 543.5251 GB/s over 3600.07 s and 536.79 GB/s over 3600.04 s, against 543.74 and 537.25 at 300 s on the same host. The same flag had failed on all three hosts with the old fixed 1800 s worker budget.",
+          "passed": [
+            "memory_read_agg", "memory_write_agg"
+          ],
+          "failed": [],
+          "skipped": []
         }
       ]
     },
@@ -245,6 +288,25 @@
           "date": "2026-09-11",
           "evidence": "data/validation-2026-09-11/inf2-full-pass.log",
           "note": "First full pass on inf2.xlarge: --test all --duration 30 on c5cf396, 23 PASS (baseline_metrics, which carries no Score, not listed), 0 FAIL, 3 SKIPPED (the two collectives need 2 devices; transformer_train_step needs training). memory_read and memory_write are analytic here -- this code still turned the profiler reservation off for any selection with an aggregate. The same instance then ran the collectives module's fixed nccom-test invocation on its one device: data/validation-2026-09-11/inf2-nccom-invocation.log (core-to-core, not NeuronLink; the workloads themselves still skip).",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher", "transformer_train_step"
+          ]
+        },
+        {
+          "date": "2026-09-21",
+          "evidence": "data/publication-2026-09-21/README.md",
+          "note": "Publication pass, group 300x3: two inf2.xlarge at 3ae6426, one harness process per suite, --duration 300 --repeat 3. 22 PASS on both hosts (baseline_metrics not listed), 0 FAIL, 3 SKIPPED (transformer_train_step: no training on this part). 19 of 22 scored workloads agree across hosts within 0.1%, all within 0.5%. Compute runs at 0.723 of trn1's dense-GEMM rate under a deeper utilization-limit throttle; see docs/inf2_sustains_less_than_trn1.md. Per-host reports under data/publication-2026-09-21/inf2/.",
           "passed": [
             "allocation_fragmentation", "fused_attention",
             "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",

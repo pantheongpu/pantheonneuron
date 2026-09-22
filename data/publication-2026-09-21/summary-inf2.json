@@ -1,0 +1,654 @@
+{
+  "hosts": [
+    "inf2-a",
+    "inf2-b"
+  ],
+  "rows": [
+    {
+      "group": "300x3",
+      "workload": "all_reduce",
+      "unit": "GB/s",
+      "problem": {
+        "bytes_max": 8388608,
+        "bytes_min": 1048576,
+        "cores": "all",
+        "dtype": "fp32",
+        "op": "all_reduce"
+      },
+      "hosts": {
+        "inf2-a": "SKIPPED",
+        "inf2-b": "SKIPPED"
+      },
+      "scores": {},
+      "score_methods": [],
+      "median_of_hosts": null,
+      "worst_within_host_cv": null,
+      "between_host_cv": null
+    },
+    {
+      "group": "300x3",
+      "workload": "allocation_fragmentation",
+      "unit": "allocation-events/s",
+      "problem": {
+        "allocations": 40000,
+        "size_max": 16777216,
+        "size_min": 4096
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 2100.2966,
+        "inf2-b": 2086.6127
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 2093.45465,
+      "worst_within_host_cv": 0.0042,
+      "between_host_cv": 0.004622014851422071
+    },
+    {
+      "group": "300x3",
+      "workload": "baseline_metrics",
+      "unit": null,
+      "problem": null,
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {},
+      "score_methods": [
+        "None"
+      ],
+      "median_of_hosts": null,
+      "worst_within_host_cv": null,
+      "between_host_cv": null
+    },
+    {
+      "group": "300x3",
+      "workload": "fused_attention",
+      "unit": "attention-tiles/s",
+      "problem": {
+        "dtype": "bf16",
+        "head_dim": 128,
+        "heads": 32,
+        "seq": 2048
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 5946.6959,
+        "inf2-b": 5946.566
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 5946.63095,
+      "worst_within_host_cv": 0.0004,
+      "between_host_cv": 1.5446253794523213e-05
+    },
+    {
+      "group": "300x3",
+      "workload": "graph_replay",
+      "unit": "graph-steps/s",
+      "problem": {
+        "dtype": "bf16",
+        "hidden": 2048,
+        "replays": 200000
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 2271.991,
+        "inf2-b": 2264.2245
+      },
+      "score_methods": [
+        "neuron-monitor"
+      ],
+      "median_of_hosts": 2268.10775,
+      "worst_within_host_cv": 0.0011,
+      "between_host_cv": 0.0024212892073074777
+    },
+    {
+      "group": "300x3",
+      "workload": "int_virus",
+      "unit": "TOPS",
+      "problem": {
+        "dtype": "uint8",
+        "op": "matmul",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ]
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 56.9833,
+        "inf2-b": 56.9606
+      },
+      "score_methods": [
+        "neuron-monitor"
+      ],
+      "median_of_hosts": 56.97195,
+      "worst_within_host_cv": 0.0,
+      "between_host_cv": 0.00028174082040258234
+    },
+    {
+      "group": "300x3",
+      "workload": "kv_cache_churn",
+      "unit": "cache-updates/s",
+      "problem": {
+        "context": 2048,
+        "dtype": "bf16",
+        "hidden": 2048,
+        "layers": 8,
+        "ring_slots": 8
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 95946.1581,
+        "inf2-b": 96040.6338
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 95993.39595,
+      "worst_within_host_cv": 0.0003,
+      "between_host_cv": 0.000695927125675802
+    },
+    {
+      "group": "300x3",
+      "workload": "llm_decode",
+      "unit": "tokens/s",
+      "problem": {
+        "batch": 1,
+        "context": 2048,
+        "dtype": "bf16",
+        "hidden": 4096,
+        "layers": 32
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 17.5119,
+        "inf2-b": 17.5164
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 17.51415,
+      "worst_within_host_cv": 0.0002,
+      "between_host_cv": 0.0001816805563124436
+    },
+    {
+      "group": "300x3",
+      "workload": "llm_prefill",
+      "unit": "prompt-tokens/s",
+      "problem": {
+        "batch": 1,
+        "dtype": "bf16",
+        "hidden": 4096,
+        "layers": 32,
+        "prompt": 2048
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 3195.4523,
+        "inf2-b": 3195.6243
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 3195.5383,
+      "worst_within_host_cv": 0.0,
+      "between_host_cv": 3.806005591111337e-05
+    },
+    {
+      "group": "300x3",
+      "workload": "memory_read",
+      "unit": "GB/s",
+      "problem": {
+        "bytes": 8589934592,
+        "cores": 1,
+        "dtype": "bf16"
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 272.9404,
+        "inf2-b": 272.9933
+      },
+      "score_methods": [
+        "neuron-profile"
+      ],
+      "median_of_hosts": 272.96685,
+      "worst_within_host_cv": 0.0004,
+      "between_host_cv": 0.0001370347671328734
+    },
+    {
+      "group": "300x3",
+      "workload": "memory_read_agg",
+      "unit": "GB/s",
+      "problem": {
+        "bytes": 8589934592,
+        "cores": "all",
+        "dtype": "bf16"
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 542.9901,
+        "inf2-b": 542.5722
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 542.78115,
+      "worst_within_host_cv": 0.0001,
+      "between_host_cv": 0.0005444181763826553
+    },
+    {
+      "group": "300x3",
+      "workload": "memory_write",
+      "unit": "GB/s",
+      "problem": {
+        "bytes": 4294967296,
+        "cores": 1,
+        "dtype": "bf16"
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 274.8987,
+        "inf2-b": 274.5629
+      },
+      "score_methods": [
+        "neuron-profile"
+      ],
+      "median_of_hosts": 274.73080000000004,
+      "worst_within_host_cv": 0.0036,
+      "between_host_cv": 0.0008642877213710546
+    },
+    {
+      "group": "300x3",
+      "workload": "memory_write_agg",
+      "unit": "GB/s",
+      "problem": {
+        "bytes": 4294967296,
+        "cores": "all",
+        "dtype": "bf16"
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 548.69,
+        "inf2-b": 548.4196
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 548.5548,
+      "worst_within_host_cv": 0.0002,
+      "between_host_cv": 0.00034855528314202953
+    },
+    {
+      "group": "300x3",
+      "workload": "moe_router",
+      "unit": "routed-tokens/s",
+      "problem": {
+        "experts": 8,
+        "hidden": 4096,
+        "tokens": 4096,
+        "top_k": 2
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 243066.6078,
+        "inf2-b": 242866.2901
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 242966.44895,
+      "worst_within_host_cv": 0.0003,
+      "between_host_cv": 0.0005829858594625598
+    },
+    {
+      "group": "300x3",
+      "workload": "omni_virus",
+      "unit": "TFLOPS",
+      "problem": {
+        "dtype": "bf16",
+        "engines": "all",
+        "op": "mixed",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ]
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 42.4203,
+        "inf2-b": 42.414
+      },
+      "score_methods": [
+        "neuron-monitor"
+      ],
+      "median_of_hosts": 42.41715,
+      "worst_within_host_cv": 0.0,
+      "between_host_cv": 0.00010502291458696314
+    },
+    {
+      "group": "300x3",
+      "workload": "p2p_thrasher",
+      "unit": "GB/s",
+      "problem": {
+        "bytes": 67108864,
+        "cores": "all",
+        "dtype": "fp32",
+        "op": "sendrecv"
+      },
+      "hosts": {
+        "inf2-a": "SKIPPED",
+        "inf2-b": "SKIPPED"
+      },
+      "scores": {},
+      "score_methods": [],
+      "median_of_hosts": null,
+      "worst_within_host_cv": null,
+      "between_host_cv": null
+    },
+    {
+      "group": "300x3",
+      "workload": "pcie_bandwidth",
+      "unit": "GB/s",
+      "problem": {
+        "bytes": 1073741824,
+        "direction": "bidirectional"
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 2.1861,
+        "inf2-b": 2.1939
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 2.1900000000000004,
+      "worst_within_host_cv": 0.0022,
+      "between_host_cv": 0.002518462508335658
+    },
+    {
+      "group": "300x3",
+      "workload": "pulse_virus",
+      "unit": "TFLOPS",
+      "problem": {
+        "dtype": "bf16",
+        "duty_cycle": 0.5,
+        "op": "matmul",
+        "period_s": 2,
+        "shape": [
+          8192,
+          8192,
+          8192
+        ]
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 29.0442,
+        "inf2-b": 29.0368
+      },
+      "score_methods": [
+        "neuron-monitor"
+      ],
+      "median_of_hosts": 29.0405,
+      "worst_within_host_cv": 0.0001,
+      "between_host_cv": 0.0001801825099698978
+    },
+    {
+      "group": "300x3",
+      "workload": "quantized_gemm",
+      "unit": "quantized-ops/s",
+      "problem": {
+        "dtype": "int8",
+        "op": "matmul",
+        "shape": [
+          4096,
+          4096,
+          4096
+        ]
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 14968098885260.92,
+        "inf2-b": 14962539868796.328
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 14965319377028.625,
+      "worst_within_host_cv": 0.0005,
+      "between_host_cv": 0.00026266183432571645
+    },
+    {
+      "group": "300x3",
+      "workload": "rag_embedding",
+      "unit": "embedding-vectors/s",
+      "problem": {
+        "batch": 64,
+        "dim": 1024,
+        "dtype": "bf16",
+        "layers": 12,
+        "seq": 128
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 766.7275,
+        "inf2-b": 766.4471
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 766.5872999999999,
+      "worst_within_host_cv": 0.0,
+      "between_host_cv": 0.0002586433944897053
+    },
+    {
+      "group": "300x3",
+      "workload": "serving_mix",
+      "unit": "requests/s",
+      "problem": {
+        "batch": 8,
+        "decode": 256,
+        "hidden": 4096,
+        "layers": 32,
+        "prefill_ratio": 0.2,
+        "prompt": 1024
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 2.2357,
+        "inf2-b": 2.2356
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 2.2356499999999997,
+      "worst_within_host_cv": 0.0001,
+      "between_host_cv": 3.1628688801379455e-05
+    },
+    {
+      "group": "300x3",
+      "workload": "speculative_decode",
+      "unit": "verified-tokens/s",
+      "problem": {
+        "draft_len": 4,
+        "dtype": "bf16",
+        "hidden": 4096,
+        "layers": 32
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 73.6895,
+        "inf2-b": 73.6395
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 73.6645,
+      "worst_within_host_cv": 0.0002,
+      "between_host_cv": 0.0004799508455134476
+    },
+    {
+      "group": "300x3",
+      "workload": "tensor_virus",
+      "unit": "TFLOPS",
+      "problem": {
+        "dtype": "bf16",
+        "op": "matmul",
+        "shape": [
+          8192,
+          8192,
+          8192
+        ]
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 56.8535,
+        "inf2-b": 56.8204
+      },
+      "score_methods": [
+        "neuron-monitor"
+      ],
+      "median_of_hosts": 56.83695,
+      "worst_within_host_cv": 0.0006,
+      "between_host_cv": 0.0004117961019596043
+    },
+    {
+      "group": "300x3",
+      "workload": "transformer_train_step",
+      "unit": "train-steps/s",
+      "problem": {
+        "batch": 1,
+        "dtype": "bf16",
+        "hidden": 4096,
+        "layers": 4,
+        "seq": 2048
+      },
+      "hosts": {
+        "inf2-a": "SKIPPED",
+        "inf2-b": "SKIPPED"
+      },
+      "scores": {},
+      "score_methods": [],
+      "median_of_hosts": null,
+      "worst_within_host_cv": null,
+      "between_host_cv": null
+    },
+    {
+      "group": "300x3",
+      "workload": "transformer_virus",
+      "unit": "TFLOPS",
+      "problem": {
+        "dtype": "bf16",
+        "heads": 32,
+        "hidden": 4096,
+        "seq": 2048
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 44.4157,
+        "inf2-b": 44.3978
+      },
+      "score_methods": [
+        "neuron-monitor"
+      ],
+      "median_of_hosts": 44.40675,
+      "worst_within_host_cv": 0.0003,
+      "between_host_cv": 0.0002850289963404743
+    },
+    {
+      "group": "300x3",
+      "workload": "vision_encoder",
+      "unit": "image-tiles/s",
+      "problem": {
+        "batch": 64,
+        "dtype": "bf16",
+        "layers": 12,
+        "patch": 14,
+        "resolution": 224
+      },
+      "hosts": {
+        "inf2-a": "PASS",
+        "inf2-b": "PASS"
+      },
+      "scores": {
+        "inf2-a": 54523.4825,
+        "inf2-b": 54521.3648
+      },
+      "score_methods": [
+        "workload"
+      ],
+      "median_of_hosts": 54522.42365,
+      "worst_within_host_cv": 0.0,
+      "between_host_cv": 2.7464663715758812e-05
+    }
+  ]
+}

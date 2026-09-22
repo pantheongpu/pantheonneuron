@@ -1,0 +1,72 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 02:48:15",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110204416
+  },
+  "run_id": "20260922_024819",
+  "completed_at": "2026-09-22 03:03:21",
+  "test_results": [
+    {
+      "Test Name": "baseline_metrics",
+      "Suite": "baseline",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 300.1,
+      "Devices": [
+        0
+      ],
+      "Score": null,
+      "Unit": null,
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": null,
+      "Measurement": null,
+      "Repeats": {
+        "attempted": 3,
+        "scored": 0
+      },
+      "Problem": null,
+      "Telemetry": {
+        "samples": 301,
+        "sample_period_s": null,
+        "execution_errors": 0,
+        "total_executions": 0,
+        "neuroncore_utilization": {},
+        "execution_samples": 0,
+        "execution_rate_absent": "no sample carried the completion counter",
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

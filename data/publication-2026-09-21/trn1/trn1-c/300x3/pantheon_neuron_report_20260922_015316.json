@@ -1,0 +1,128 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 01:53:12",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "trn1",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": true
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 4,
+    "logical_cores": 8
+  },
+  "ram_info": {
+    "total_bytes": 33110208512
+  },
+  "run_id": "20260922_015316",
+  "completed_at": "2026-09-22 02:11:39",
+  "test_results": [
+    {
+      "Test Name": "transformer_train_step",
+      "Suite": "training",
+      "Status": "PASS",
+      "Detail": "the sampled parameter is unchanged at 6.10352e-05 after the whole run -- an SGD step at this learning rate moves a bf16 weight by a small fraction of one ulp, so the optimiser rounds to no change and the model never updates. The Score still measures what a training step costs; it does not measure training; repeats agree to cv 0 on a Score that one more completed unit would move by 0.0009124 -- the repeats sit within one completed unit of each other, so this is the counter's resolution rather than the workload's stability",
+      "Duration (s)": 498.95,
+      "Devices": [
+        0
+      ],
+      "Score": 3.6466,
+      "Unit": "train-steps/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.5551120839991,
+        "flops_issued": 11749381254414336,
+        "implied_tflops": 39.092268878563004,
+        "parameter_before": 6.103515625e-05,
+        "parameter_after": 6.103515625e-05,
+        "parameter_moved": false,
+        "expected_loss": 8.365378984274171,
+        "steps_completed": 1096
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 3.6465,
+        "max": 3.6467,
+        "median": 3.6466,
+        "stdev": 0.0001,
+        "cv": 0.0,
+        "trend": null
+      },
+      "Problem": {
+        "hidden": 4096,
+        "layers": 4,
+        "batch": 1,
+        "seq": 2048,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 499,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 1099,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 56.62,
+            "samples": 300,
+            "mean": 93.56
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 7157868477,
+          "peak": 10638432928
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 38377440858388,
+            "samples_all": 302,
+            "mean_all_samples": 35822810405025,
+            "samples": 300,
+            "mean": 35898655606254
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.273184,
+          "p99_peak": 0.274346
+        },
+        "execution_samples": 498,
+        "executions_total": 1099,
+        "execution_active_periods": 303,
+        "execution_block_periods": 302,
+        "execution_samples_used": 300,
+        "execution_span_s": 299.9997,
+        "executions_per_s": 3.643337484831387,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}

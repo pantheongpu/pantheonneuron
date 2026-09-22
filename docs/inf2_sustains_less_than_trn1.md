@@ -72,31 +72,52 @@ Both inf2 hosts agree, so it is not one machine.
 
 ## trn1 throttles too, and less -- by the right amount
 
-The same probe on the trn1.2xlarge hosts after their passes, same graphs by
-module hash. The two parts carry the same throttle mechanism; they apply it
-to very different depths:
+The same probe on all three trn1.2xlarge hosts after their passes, same
+graphs by module hash. The two parts carry the same throttle mechanism and
+apply it to very different depths. `throttle_avg_util_limit_nc0_percent`:
 
-| Graph (module hash) | inf2 avg util limit | trn1 avg util limit | inf2 / trn1 |
-|---|---|---|---|
-| `MODULE_11435754646458375002` | 0.641 | 0.891 | **0.719** |
-| `MODULE_707385231116392439` | 0.563 | 0.765 | 0.736 |
-| `MODULE_13945462658086779221` | 0.564 | 0.761 | 0.741 |
-| `MODULE_13478107821426688942` | 0.633 | 0.825 | 0.767 |
+| Graph (module hash) | FLOPs / execution | inf2-a | inf2-b | trn1-a | trn1-b | inf2 / trn1 |
+|---|---|---|---|---|---|---|
+| `MODULE_707385231116392439` | 2^40 = 2 x 8192^3 | 0.563 | 0.563 | 0.766 | 0.765 | **0.736** |
+| `MODULE_13945462658086779221` | 8192^3 | 0.564 | 0.564 | 0.762 | 0.761 | 0.741 |
+| `MODULE_13478107821426688942` | 9.77e11 | 0.633 | 0.633 | 0.826 | 0.825 | 0.767 |
 
-(`throttle_avg_util_limit_nc0_percent`; inf2 from inf2-a, trn1 from trn1-b's
-clean run. trn1-c's one throttled capture of the first graph read 0.918.)
+**These three reproduce to three decimals on every host of each part**, which
+is what lets them carry a quantitative claim. The first is exactly one pinned
+bf16 GEMM -- 2^40 FLOPs is 2 x 8192^3 -- and its ratio, 0.736, sits within
+2% of the measured `tensor_virus` and `pulse_virus` ratios (0.723, 0.727),
+the two workloads that run that GEMM.
 
 The difference is the depth of `throttle_activity_1`: on inf2 it holds the
 core at a **0.63** utilization limit for 84-90% of a matmul graph's run; on
-trn1 the same activity applies a **0.875** limit for 15-38% of it. The
-limit ratios, 0.72-0.77, sit on the measured throughput ratios, 0.723 for
-the pure-GEMM kernels up to 0.834 for `transformer_virus`.
+trn1 the same activity applies a **0.875** limit for 15-38% of it.
 
 **The cause is a utilization-limit throttle that inf2 applies far more
 deeply than trn1.** Not the clock, not the code, not the counters -- each of
 those was ruled out above -- and not a difference in the silicon's peak,
 which AWS publishes as equal and which the memory rows show equal in
 practice.
+
+### One graph does not reproduce, and an earlier version of this section led with it
+
+`MODULE_11435754646458375002`, the densest graph (2.78e12 hardware FLOPs per
+execution), was the first row of this table as merged in #31, with a ratio of
+0.719. A single capture of it is not reproducible:
+
+| Host | avg util limit | cycles |
+|---|---|---|
+| inf2-a | 0.641 | 83,411,352 |
+| inf2-b | *no throttle counters at all* | 273,732,448 |
+| trn1-a | 0.971 | -- |
+| trn1-b | 0.891 | -- |
+| trn1-c | 0.918 | -- |
+
+The throughput of every workload was identical to 0.02% across the three trn1
+hosts, so this spread is in the one-execution capture, not in the hardware.
+The 0.719 was one host's reading of a graph whose readings range across
+0.66-0.72 depending on which trn1 host is the denominator, and on one inf2
+host it carried no throttle data at all. It is kept here as evidence and not
+used as a figure.
 
 ## What follows from it
 
@@ -106,14 +127,13 @@ itself capped. Neither part's `Percent Of Peak` is a statement about
 unthrottled silicon; both are statements about what the part sustains as
 AWS runs it, which is the thing a buyer gets.
 
-**Cycles per execution are not a usable comparison.** Two captures of the
-same module on the two inf2 hosts returned 83,411,352 and 273,732,448
-cycles, so a single capture's cycle count is not a stable per-execution
-figure.
+**Single captures of the densest graph are not a usable comparison** --
+not its cycle count, not its throttle counters -- for the reasons in the
+table above. The three reproducible graphs are.
 
 **The registry comment was corrected in #24 and stays correct.**
 `PART_PEAKS` keeps AWS's published 190 TFLOPS for both parts, and what
 `Percent Of Peak` now says -- inf2 delivers 60% of its advertised compute on
 dense matmul, trn1 83% -- is explained rather than merely observed.
 
-Evidence: `data/validation-2026-09-21/{inf2-a,inf2-b,trn1-b,trn1-c}-throttle-probe.log`.
+Evidence: `data/validation-2026-09-21/{inf2-a,inf2-b,trn1-a,trn1-b,trn1-c}-throttle-probe.log`.

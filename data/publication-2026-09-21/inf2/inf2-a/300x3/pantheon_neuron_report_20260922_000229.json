@@ -1,0 +1,750 @@
+{
+  "pantheon_neuron_version": "0.1.0",
+  "timestamp": "2026-09-22 00:02:24",
+  "os_info": {
+    "system": "Linux",
+    "release": "6.8.0-1046-aws",
+    "arch": "x86_64"
+  },
+  "toolchain": {
+    "neuronxcc": "2.23.6484.0+3b612583",
+    "torch_neuronx": "2.8.0.2.12.22436+0f1dac25",
+    "nki": "2.23.6484.0+3b612583"
+  },
+  "devices": [
+    {
+      "index": 0,
+      "arch": "inf2",
+      "neuroncore_version": "v2",
+      "neuroncores": 2,
+      "hbm_bytes": 34359738368,
+      "supports_training": false
+    }
+  ],
+  "cpu_info": {
+    "physical_cores": 2,
+    "logical_cores": 4
+  },
+  "ram_info": {
+    "total_bytes": 16378847232
+  },
+  "run_id": "20260922_000229",
+  "completed_at": "2026-09-22 02:15:02",
+  "test_results": [
+    {
+      "Test Name": "llm_decode",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 470.68,
+      "Devices": [
+        0
+      ],
+      "Score": 17.5119,
+      "Unit": "tokens/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.1381166090014,
+        "flops_issued": 73366631350272,
+        "implied_tflops": 0.244442899086519,
+        "tokens_generated": 5256
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 17.5098,
+        "max": 17.5178,
+        "median": 17.5119,
+        "stdev": 0.0041,
+        "cv": 0.0002,
+        "trend": null
+      },
+      "Problem": {
+        "hidden": 4096,
+        "layers": 32,
+        "batch": 1,
+        "context": 2048,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 471,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 5258,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 62.73,
+            "samples": 299,
+            "mean": 98.41
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 2114211572,
+          "peak": 2176525124
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 245289818809,
+            "samples_all": 301,
+            "mean_all_samples": 240700614513,
+            "samples": 299,
+            "mean": 241329920226
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.056804,
+          "p99_peak": 0.057022
+        },
+        "execution_samples": 471,
+        "executions_total": 5258,
+        "execution_active_periods": 302,
+        "execution_block_periods": 301,
+        "execution_samples_used": 299,
+        "execution_span_s": 299.0006,
+        "executions_per_s": 17.511673229577276,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "llm_prefill",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "repeats agree to cv 0 on a Score that one more completed unit would move by 1.037e-06 -- the repeats sit within one completed unit of each other, so this is the counter's resolution rather than the workload's stability",
+      "Duration (s)": 302.53,
+      "Devices": [
+        0
+      ],
+      "Score": 3195.4523,
+      "Unit": "prompt-tokens/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 301.86900423599945,
+        "flops_issued": 13464619393744896,
+        "implied_tflops": 44.60417997476261,
+        "prompt_tokens": 964608
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 3195.3956,
+        "max": 3195.6837,
+        "median": 3195.4523,
+        "stdev": 0.1526,
+        "cv": 0.0,
+        "trend": "falling"
+      },
+      "Problem": {
+        "hidden": 4096,
+        "layers": 32,
+        "batch": 1,
+        "prompt": 2048,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 303,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 471,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 83.89,
+            "samples": 300,
+            "mean": 84.19
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1736490054,
+          "peak": 1736656190
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 44630435340791,
+            "samples_all": 302,
+            "mean_all_samples": 37561487825274,
+            "samples": 300,
+            "mean": 37567919085291
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.640677,
+          "p99_peak": 0.640842
+        },
+        "execution_samples": 303,
+        "executions_total": 471,
+        "execution_active_periods": 302,
+        "execution_block_periods": 302,
+        "execution_samples_used": 300,
+        "execution_span_s": 300.0003,
+        "executions_per_s": 1.559998554879738,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "kv_cache_churn",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 350.71,
+      "Devices": [
+        0
+      ],
+      "Score": 95946.1581,
+      "Unit": "cache-updates/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "ring_slots_expected": 8,
+        "ring_readings_checked": 16,
+        "ring_readings_landed": 16,
+        "elapsed_s": 300.00559249099933,
+        "cache_gbps": 193.3619661757285,
+        "cache_fill": 1.0,
+        "entry_fill": 2.0,
+        "cache_element": 2.0,
+        "cache_updates": 28784384
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 95904.2701,
+        "max": 95967.8789,
+        "median": 95946.1581,
+        "stdev": 32.3328,
+        "cv": 0.0003,
+        "trend": null
+      },
+      "Problem": {
+        "hidden": 2048,
+        "context": 2048,
+        "layers": 8,
+        "ring_slots": 8,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 351,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 112457,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 93.85,
+            "mean_all_samples": 79.92,
+            "samples": 301,
+            "mean": 93.19
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1576010179,
+          "peak": 1587229000
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.002512,
+          "p99_peak": 0.002636
+        },
+        "execution_samples": 351,
+        "executions_total": 112457,
+        "execution_active_periods": 318,
+        "execution_block_periods": 303,
+        "execution_samples_used": 301,
+        "execution_span_s": 300.9998,
+        "executions_per_s": 373.5550323379572,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "fused_attention",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 300.02,
+      "Devices": [
+        0
+      ],
+      "Score": 5946.6959,
+      "Unit": "attention-tiles/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.014669012,
+        "flops_issued": 3831316986462208,
+        "implied_tflops": 12.770432189463918,
+        "attention_tiles": 1784096
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 5943.1063,
+        "max": 5947.0244,
+        "median": 5946.6959,
+        "stdev": 2.1735,
+        "cv": 0.0004,
+        "trend": "falling"
+      },
+      "Problem": {
+        "heads": 32,
+        "seq": 2048,
+        "head_dim": 128,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 301,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 55750,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 97.69,
+            "samples": 299,
+            "mean": 97.69
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1621641759,
+          "peak": 1622700856
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 13047210821521,
+            "samples_all": 301,
+            "mean_all_samples": 12771284136485,
+            "samples": 299,
+            "mean": 12770329079906
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.005287,
+          "p99_peak": 0.00532
+        },
+        "execution_samples": 301,
+        "executions_total": 55750,
+        "execution_active_periods": 300,
+        "execution_block_periods": 300,
+        "execution_samples_used": 298,
+        "execution_span_s": 297.9991,
+        "executions_per_s": 185.8361070073256,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "quantized_gemm",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 310.05,
+      "Devices": [
+        0
+      ],
+      "Score": 14968098885260.92,
+      "Unit": "quantized-ops/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.0259310900001,
+        "quantized_tops": 14.96809888526092,
+        "ratio_to_bf16": 0.289,
+        "reference_bf16_tops": 51.827987533882435,
+        "expected_output": 81.92,
+        "quantized_ops": 4490817804697600
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 14960645595322.115,
+        "max": 14968542929145.584,
+        "median": 14968098885260.92,
+        "stdev": 4436901835.7915,
+        "cv": 0.0003,
+        "trend": "falling"
+      },
+      "Problem": {
+        "op": "matmul",
+        "shape": [
+          4096,
+          4096,
+          4096
+        ],
+        "dtype": "int8"
+      },
+      "Telemetry": {
+        "samples": 311,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 36439,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 98.83,
+            "mean_all_samples": 98.23,
+            "samples": 308,
+            "mean": 98.56
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1695544693,
+          "peak": 1761574656
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 51956296690651,
+            "samples_all": 310,
+            "mean_all_samples": 16154797150318,
+            "samples": 308,
+            "mean": 16042865939808
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.008878,
+          "p99_peak": 0.009113
+        },
+        "execution_samples": 311,
+        "executions_total": 36439,
+        "execution_active_periods": 310,
+        "execution_block_periods": 310,
+        "execution_samples_used": 308,
+        "execution_span_s": 307.9997,
+        "executions_per_s": 116.73063716243574,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "serving_mix",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "repeats agree to cv 0 on a Score that one more completed unit would move by 0.00149 -- the repeats sit within one completed unit of each other, so this is the counter's resolution rather than the workload's stability",
+      "Duration (s)": 489.65,
+      "Devices": [
+        0
+      ],
+      "Score": 2.2357,
+      "Unit": "requests/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.1303520129986,
+        "implied_tflops": 28.158660552860976,
+        "scheduler_steps_per_s": 9.945678535940676,
+        "blocks_executed": 95520,
+        "steps_per_request": 32,
+        "score_resolution": 0.0014903129657228018,
+        "expected_output": 59.92303187419337,
+        "requests_completed": 671
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 2.2357,
+        "max": 2.2357,
+        "median": 2.2357,
+        "stdev": 0.0,
+        "cv": 0.0,
+        "trend": null
+      },
+      "Problem": {
+        "prefill_ratio": 0.2,
+        "batch": 8,
+        "prompt": 1024,
+        "decode": 256,
+        "hidden": 4096,
+        "layers": 32
+      },
+      "Telemetry": {
+        "samples": 490,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 2988,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 61.0,
+            "samples": 299,
+            "mean": 99.51
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 1996585739,
+          "peak": 2025733092
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 28241275741285,
+            "samples_all": 301,
+            "mean_all_samples": 28044625446081,
+            "samples": 299,
+            "mean": 28091661143036
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.053927,
+          "p99_peak": 0.285455
+        },
+        "execution_samples": 490,
+        "executions_total": 2988,
+        "execution_active_periods": 303,
+        "execution_block_periods": 301,
+        "execution_samples_used": 299,
+        "execution_span_s": 298.999,
+        "executions_per_s": 9.949865372377507,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "speculative_decode",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 300.21,
+      "Devices": [
+        0
+      ],
+      "Score": 73.6895,
+      "Unit": "verified-tokens/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.12398542600204,
+        "flops_issued": 285008870768640,
+        "implied_tflops": 0.9496370986947034,
+        "verified_tokens": 22116
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 73.6696,
+        "max": 73.69,
+        "median": 73.6895,
+        "stdev": 0.0116,
+        "cv": 0.0002,
+        "trend": null
+      },
+      "Problem": {
+        "draft_len": 4,
+        "hidden": 4096,
+        "layers": 32,
+        "dtype": "bf16"
+      },
+      "Telemetry": {
+        "samples": 301,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 5526,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 100.0,
+            "mean_all_samples": 98.13,
+            "samples": 298,
+            "mean": 98.48
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 2074942659,
+          "peak": 2074943014
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 954106651678,
+            "samples_all": 300,
+            "mean_all_samples": 939178884928,
+            "samples": 298,
+            "mean": 939422713391
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.054121,
+          "p99_peak": 0.054178
+        },
+        "execution_samples": 301,
+        "executions_total": 5526,
+        "execution_active_periods": 300,
+        "execution_block_periods": 300,
+        "execution_samples_used": 298,
+        "execution_span_s": 298.0002,
+        "executions_per_s": 18.42615956929089,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    },
+    {
+      "Test Name": "moe_router",
+      "Suite": "inference",
+      "Status": "PASS",
+      "Detail": "",
+      "Duration (s)": 300.12,
+      "Devices": [
+        0
+      ],
+      "Score": 243066.6078,
+      "Unit": "routed-tokens/s",
+      "Percent Of Peak": null,
+      "Peak": null,
+      "Score Method": "workload",
+      "Measurement": {
+        "elapsed_s": 300.03825151399724,
+        "capacity": 1024,
+        "flops_issued": 4894201133137920,
+        "implied_tflops": 16.311923924505333,
+        "routed_tokens": 72929280
+      },
+      "Repeats": {
+        "attempted": 3,
+        "scored": 3,
+        "min": 243017.5509,
+        "max": 243160.7294,
+        "median": 243066.6078,
+        "stdev": 72.7616,
+        "cv": 0.0003,
+        "trend": null
+      },
+      "Problem": {
+        "experts": 8,
+        "top_k": 2,
+        "hidden": 4096,
+        "tokens": 4096
+      },
+      "Telemetry": {
+        "samples": 301,
+        "sample_period_s": 1.0,
+        "execution_errors": 0,
+        "total_executions": 17802,
+        "neuroncore_utilization": {
+          "0": {
+            "peak": 98.26,
+            "mean_all_samples": 96.75,
+            "samples": 298,
+            "mean": 97.08
+          },
+          "1": {
+            "peak": 0.0,
+            "mean_all_samples": 0.0,
+            "samples": 0,
+            "mean": 0.0
+          }
+        },
+        "device_memory_used_bytes": {
+          "mean": 2409435728,
+          "peak": 2410891994
+        },
+        "effective_flops": {
+          "0": {
+            "peak": 16524323057879,
+            "samples_all": 300,
+            "mean_all_samples": 16326234995578,
+            "samples": 298,
+            "mean": 16327826131454
+          }
+        },
+        "device_latency_seconds": {
+          "p50_mean": 0.016389,
+          "p99_peak": 0.016439
+        },
+        "execution_samples": 301,
+        "executions_total": 17802,
+        "execution_active_periods": 300,
+        "execution_block_periods": 300,
+        "execution_samples_used": 298,
+        "execution_span_s": 297.9998,
+        "executions_per_s": 59.342328461926805,
+        "ecc_events": {
+          "mem_ecc_corrected": 0,
+          "mem_ecc_uncorrected": 0,
+          "sram_ecc_corrected": 0,
+          "sram_ecc_uncorrected": 0
+        },
+        "ecc_events_total": 0
+      }
+    }
+  ]
+}
