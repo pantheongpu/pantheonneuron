@@ -49,7 +49,37 @@ from . import nki_backend
 # Long enough to cover a cold NEFF compile in every worker at once. The 8 GiB
 # graph took about seven minutes on inf2, and workers compile concurrently
 # while contending for the same host CPUs.
-_WORKER_TIMEOUT = 1800
+# How long a worker may take on top of its measured loop: compile, warm-up,
+# the barrier wait and the read-back. Measured on trn1.2xlarge 2026-09-21,
+# the worst cold-cache aggregate row spent 560 s outside its 300 s loop
+# (Duration 860.4 s), and a warm one 24 s. 1800 s is that with room, and it
+# is the number this constant always held -- what changed is that it is now
+# a margin rather than the whole budget.
+_COMPILE_MARGIN = 1800
+
+# The barrier wait is compile-bound, not duration-bound: a worker at the
+# barrier is waiting for its peers to finish compiling, which the margin
+# already sizes.
+_BARRIER_TIMEOUT = _COMPILE_MARGIN
+
+
+def worker_timeout(duration: int) -> float:
+    """How long to wait for a worker running a ``duration``-second loop.
+
+    **This was a fixed 1800 s, and it made every long run fail.** The
+    constant was the worker's entire lifetime budget, so any --duration at
+    or above roughly 1500 s timed out by construction: the worker was still
+    measuring when the parent killed it. The 2026-09-21 publication pass
+    found it at --duration 3600, where `memory_read_agg` and
+    `memory_write_agg` failed on all three hosts with "core 0 timed out;
+    core 1 timed out" after the 300 s runs of the same kernels had passed on
+    the same machines an hour earlier.
+
+    A FAIL is the good half of that outcome -- nothing published a number --
+    but the row is still lost, and the aggregates are two of the five rows
+    that can be compared against a GPU at a matched duration.
+    """
+    return duration + _COMPILE_MARGIN
 
 
 def worker_command(direction: str, core: int, problem: typing.Mapping,
@@ -183,12 +213,12 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int,
             ))
 
         all_ready = release_when_ready(
-            barrier, [process for _, _, process in workers], _WORKER_TIMEOUT)
+            barrier, [process for _, _, process in workers], _BARRIER_TIMEOUT)
 
         failures = []
         for core, result_path, process in workers:
             try:
-                process.communicate(timeout=_WORKER_TIMEOUT)
+                process.communicate(timeout=worker_timeout(duration))
             except subprocess.TimeoutExpired:
                 process.kill()
                 # Reap after killing. kill() only sends the signal; without
@@ -517,7 +547,7 @@ def _worker_main(argv: typing.Optional[typing.Sequence[str]] = None) -> int:
     released = {}
 
     def before_loop():
-        released["ok"] = await_release(args.barrier, args.core, _WORKER_TIMEOUT)
+        released["ok"] = await_release(args.barrier, args.core, _BARRIER_TIMEOUT)
 
     started_at = time.time()
     result = module.run(problem, args.duration,

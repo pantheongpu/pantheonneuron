@@ -461,3 +461,36 @@ def test_short_window_can_now_see_an_aggregate_that_ran_short():
     summary = memory_agg.summarise(workers, [], 577.4, 2, "read")
 
     assert pantheon_neuron.short_window(summary["elapsed_s"], 20) is not None
+
+
+# -- the worker budget has to outlast the loop it is waiting for -------------
+
+@pytest.mark.parametrize("duration", [1, 30, 300, 1800, 3600, 86400])
+def test_the_worker_timeout_always_exceeds_the_measured_loop(duration):
+    """A budget shorter than the run kills the worker mid-measurement.
+
+    The fixed 1800 s this replaced failed every --duration at or above
+    roughly 1500 s: on 2026-09-21, three trn1.2xlarge hosts all reported
+    "core 0 timed out; core 1 timed out" for the 3600 s aggregates after
+    the 300 s runs had passed on the same machines.
+    """
+    budget = memory_agg.worker_timeout(duration)
+    assert budget > duration
+    # And by enough to compile: a cold aggregate row spent 560 s outside
+    # its loop on trn1.2xlarge 2026-09-21.
+    assert budget - duration >= 600
+
+
+def test_the_worker_wait_is_not_a_bare_constant():
+    """The defect was a constant where a duration-scaled budget belonged."""
+    code = sourcecheck.flat_function_code(memory_agg.run)
+    assert "process . communicate ( timeout = worker_timeout ( duration ) )" in code, (
+        "run() must size the worker wait from its own duration argument")
+
+
+def test_the_barrier_wait_stays_compile_bound():
+    """The barrier is peers finishing compilation, not the loop running."""
+    assert memory_agg._BARRIER_TIMEOUT == memory_agg._COMPILE_MARGIN
+    code = sourcecheck.flat_function_code(memory_agg.run)
+    assert "release_when_ready ( barrier" in code
+    assert "_BARRIER_TIMEOUT" in code

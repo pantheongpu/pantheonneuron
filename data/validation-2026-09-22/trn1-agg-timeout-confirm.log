@@ -1,0 +1,26 @@
+# Hardware confirmation for "Size the aggregate worker wait from the run, not a constant".
+# trn1.2xlarge, 2026-09-22, after that host's publication pass. Branch synced by git archive
+# and hash-checked on the host: kernels/memory_agg.py md5 dac8efc0 local and remote.
+# On the host before the run: memory_agg.worker_timeout(3600) = 5400.
+
+# The case under test is the one that failed. With the old fixed 1800 s budget, on all three
+# trn1.2xlarge of the 2026-09-21 publication pass:
+#
+#   [PANTHEON-NEURON] -> memory_read_agg
+#   [PANTHEON-NEURON]    FAIL (core 0 timed out; core 1 timed out)
+#
+# at --duration 3600, an hour after the same kernel passed at 300 s on the same machines.
+
+# With the fix, same host, same flag:
+
+workload          status  Score (GB/s)  elapsed_s   Duration (s)  Detail
+memory_read_agg   PASS        543.5251  3600.0671        4093.65  (empty)
+
+# invocation: {'test': 'memory_read_agg', 'duration_s': 3600, 'repeat': 1, ...}
+#
+# The row's own figures show why the old budget could never hold: the worker lived 4093.65 s
+# -- about 490 s of compile and warm-up, then the full hour -- against 1800. The new budget,
+# duration + 1800 = 5400, leaves 1306 s.
+#
+# The Score agrees with the 300 s pass on the same three hosts (543.74 median) to 0.04%: the
+# fix restored the row without changing what it measures.
