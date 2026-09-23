@@ -11,6 +11,9 @@ import pytest
 import pantheon_neuron
 import sourcecheck
 from kernels import pcie_bandwidth, registry
+from neuron_device import NeuronDevice
+
+_DEVICES = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
 
 
 def _workload():
@@ -452,3 +455,53 @@ def test_run_passes_the_transfer_size_to_the_guard():
     import inspect
     code = sourcecheck.code_only(inspect.getsource(pcie_bandwidth.run))
     assert "transfer_bytes" in code
+
+
+# -- arrival and imbalance mean opposite things about the Score --------------
+#
+# The two checks were folded into one warning string, and neither could touch
+# the Score. That is the wrong outcome for exactly one of them: an unbalanced
+# link is what the row measured -- five of the eight committed rows say so --
+# while nothing arriving is the absence of a measurement, and the Score
+# counts bytes *requested*, so every other field in the row looks identical
+# either way.
+
+def test_only_the_arrival_check_invalidates_the_score():
+    code = sourcecheck.flat_function_code(pcie_bandwidth.run)
+    assert '"score_invalid" : arrival is not None' in code
+    # Not the imbalance finding: a fifth-speed d2h leg is this part's
+    # documented behaviour past the staging cliff, and failing the row for
+    # it would delete the suite's own pcie figures.
+    assert "balance is not None" not in code
+
+
+def test_both_findings_still_reach_the_warning():
+    code = sourcecheck.flat_function_code(pcie_bandwidth.run)
+    assert "( arrival , balance )" in code
+
+
+def test_a_row_whose_transfer_never_landed_fails(monkeypatch):
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 3.68)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, "pcie_bandwidth", {
+        "analytic_gbps": 3.68, "elapsed_s": 10.0, "landing_value": 0.0,
+        "warning": "the landing buffer still reads 0 after the d2h leg",
+        "score_invalid": True,
+    })
+    row = pantheon_neuron._measure_once(_workload(), _DEVICES, 1, 0.5)
+    assert row["Status"] == "FAIL"
+    assert row["Score"] is None
+    assert "landing buffer" in row["Detail"]
+
+
+def test_an_unbalanced_link_still_publishes_its_figure(monkeypatch):
+    """What five of the eight committed rows are: a real, lopsided link."""
+    monkeypatch.setattr(pantheon_neuron, "_execute", lambda *a, **k: 3.68)
+    monkeypatch.setitem(pantheon_neuron._LAST_RUN, "pcie_bandwidth", {
+        "analytic_gbps": 3.68, "elapsed_s": 10.0, "landing_value": 2.0,
+        "warning": "d2h ran at 1.1 GB/s against 5.9 the other way",
+        "score_invalid": False,
+    })
+    row = pantheon_neuron._measure_once(_workload(), _DEVICES, 1, 0.5)
+    assert row["Status"] == "PASS"
+    assert row["Score"] == 3.68
+    assert "1.1 GB/s" in row["Detail"]

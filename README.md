@@ -292,8 +292,7 @@ Select it with `PANTHEON_NEURON_GEMM_TILING=blocked` or
 
 ### What the 2026-09-08 rerun found, on both parts
 
-trn1.2xlarge (us-east-1f) and inf2.xlarge (us-east-1d), same commit, run in
-parallel. Raw logs in [`data/validation-2026-09-08/`](data/validation-2026-09-08/).
+trn1.2xlarge and inf2.xlarge, same commit, run in parallel. Raw logs in [`data/validation-2026-09-08/`](data/validation-2026-09-08/).
 
 **The declared profiler Score fired, for the first time in this suite's
 history: 2 of 4, on both parts.**

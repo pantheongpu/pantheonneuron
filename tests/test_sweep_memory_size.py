@@ -93,3 +93,17 @@ def test_read_defaults_span_the_measured_range_and_the_pin():
     sizes = sweep_memory_size.sizes_from(sweep_memory_size.DEFAULT_SIZES_GIB["memory_read"])
     assert 8 * GIB in sizes, "the pinned size must stay in the sweep"
     assert max(sizes) == 12 * GIB
+
+
+def test_the_default_repeat_count_is_odd():
+    """An even count throws away the row's provenance.
+
+    With an even number of repeats the median is an average of two
+    executions and belongs to neither, so the harness withholds Measurement
+    (pantheon_neuron._median_provenance). This defaulted to 2, and the
+    2026-09-22 sweep published ten rows with no provenance at all.
+    """
+    import inspect
+    source = inspect.getsource(sweep_memory_size.main)
+    assert 'os.environ.get("REPEAT", "3")' in source
+    assert int("3") % 2 == 1
