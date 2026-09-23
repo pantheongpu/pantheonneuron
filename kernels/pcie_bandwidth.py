@@ -226,6 +226,14 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
     except Exception:  # materialisation failed; leave unverified
         landing_value = None
 
+    # The two findings are kept apart because they mean opposite things
+    # about the Score. An unbalanced link is the measurement -- d2h past the
+    # staging cliff runs at a fifth of h2d on this part, and five of the
+    # eight committed rows say so. Nothing arriving is the absence of one.
+    arrival = verify_transfer_arrived(landing_value, plan["directions"])
+    balance = verify_directions_are_balanced(per_direction,
+                                             transfer_bytes=plan["bytes"])
+
     return {
         "elapsed_s": elapsed,
         "bytes_transferred": total_moved,
@@ -250,11 +258,15 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
         # rather than per pass, so the check costs nothing the measurement
         # would notice.
         "landing_value": landing_value,
-        "warning": "; ".join(part for part in (
-            verify_transfer_arrived(landing_value, plan["directions"]),
-            verify_directions_are_balanced(per_direction,
-                                           transfer_bytes=plan["bytes"]),
-        ) if part) or None,
+        "warning": "; ".join(part for part in (arrival, balance) if part) or None,
+        # Only the arrival check. Its own sentence is that "every figure in
+        # the row would be unchanged" when nothing lands, because the Score
+        # counts bytes requested and those are a constant -- so the failure
+        # this check exists to catch is invisible in every other field, and
+        # leaving the Score beside a note about it publishes the number the
+        # note disowns. The imbalance finding is the opposite case: it is
+        # what the row measured, and it stays a warning.
+        "score_invalid": arrival is not None,
         "plan": plan,
     }
 
