@@ -1,0 +1,1050 @@
+{
+  "parts": {
+    "NVIDIA A10": {
+      "published_peak_gbps": 600.0,
+      "published_peak_source": "NVIDIA A10 datasheet, 'GPU Memory Bandwidth 600 GB/s'",
+      "reports": 330,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 501.338,
+          "samples": 16
+        },
+        "memory_read_agg": {
+          "median_gbps": 501.416,
+          "samples": 6
+        },
+        "memory_write": {
+          "median_gbps": 479.492,
+          "samples": 16
+        },
+        "memory_write_agg": {
+          "median_gbps": 479.508,
+          "samples": 6
+        }
+      },
+      "versions": {
+        "1.0.16": 1,
+        "1.1.0": 90,
+        "1.2.0": 192,
+        "1.2.2": 47
+      }
+    },
+    "NVIDIA A100-SXM4-40GB": {
+      "published_peak_gbps": 1555.0,
+      "published_peak_source": "NVIDIA A100 datasheet, SXM 40GB column, '1,555GB/s'",
+      "reports": 855,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 1496.23,
+          "samples": 44
+        },
+        "memory_read_agg": {
+          "median_gbps": 1495.47,
+          "samples": 28
+        },
+        "memory_write": {
+          "median_gbps": 1475.4,
+          "samples": 44
+        },
+        "memory_write_agg": {
+          "median_gbps": 1473.875,
+          "samples": 34
+        }
+      },
+      "versions": {
+        "1.0.16": 153,
+        "1.0.18": 373,
+        "1.1.0": 90,
+        "1.2.0": 192,
+        "1.2.2": 47
+      }
+    },
+    "NVIDIA A100-SXM4-80GB": {
+      "published_peak_gbps": 2039.0,
+      "published_peak_source": "NVIDIA A100 datasheet, SXM 80GB column, '2,039GB/s'",
+      "reports": 76,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 1918.36,
+          "samples": 5
+        },
+        "memory_read_agg": {
+          "median_gbps": 1918.42,
+          "samples": 5
+        },
+        "memory_write": {
+          "median_gbps": 1786.41,
+          "samples": 5
+        },
+        "memory_write_agg": {
+          "median_gbps": 1787.4,
+          "samples": 5
+        }
+      },
+      "versions": {
+        "1.0.18": 75,
+        "1.0.2": 1
+      }
+    },
+    "NVIDIA A10G": {
+      "published_peak_gbps": null,
+      "published_peak_source": "no published figure: an AWS-specific part (300 W against the A10's 150 W); NVIDIA documents the A10, AWS gives only its 24 GB",
+      "reports": 667,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 501.927,
+          "samples": 19
+        },
+        "memory_read_agg": {
+          "median_gbps": 501.929,
+          "samples": 14
+        },
+        "memory_write": {
+          "median_gbps": 474.168,
+          "samples": 19
+        },
+        "memory_write_agg": {
+          "median_gbps": 474.237,
+          "samples": 14
+        }
+      },
+      "versions": {
+        "1.0.18": 84,
+        "1.1.0": 88,
+        "1.2.0": 374,
+        "1.2.2": 121
+      }
+    },
+    "NVIDIA A40": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 2,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 586.165,
+          "samples": 2
+        },
+        "memory_read_agg": {
+          "median_gbps": 585.864,
+          "samples": 2
+        },
+        "memory_write": {
+          "median_gbps": 554.546,
+          "samples": 2
+        },
+        "memory_write_agg": {
+          "median_gbps": 1733.755,
+          "samples": 2
+        }
+      },
+      "versions": {
+        "1.0.14": 1,
+        "1.0.2": 1
+      }
+    },
+    "NVIDIA B200": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 1,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 7058.22,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 7213.19,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 5958.89,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 9943.09,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.0.3": 1
+      }
+    },
+    "NVIDIA GH200 480GB": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not established for this variant: the product page quotes 10 TB/s for the two-superchip NVL2 and 'up to 288GB', while this part pairs 96GB HBM3 with 480GB of CPU memory. A single-GPU figure was not found on the vendor's page, so none is used",
+      "reports": 369,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 3699.74,
+          "samples": 16
+        },
+        "memory_read_agg": {
+          "median_gbps": 3707.37,
+          "samples": 6
+        },
+        "memory_write": {
+          "median_gbps": 3729.365,
+          "samples": 16
+        },
+        "memory_write_agg": {
+          "median_gbps": 3724.605,
+          "samples": 6
+        }
+      },
+      "versions": {
+        "1.0.16": 85,
+        "1.1.0": 45,
+        "1.2.0": 192,
+        "1.2.2": 47
+      }
+    },
+    "NVIDIA GeForce RTX 3060": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 146,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 338.423,
+          "samples": 9
+        },
+        "memory_read_agg": {
+          "median_gbps": 338.415,
+          "samples": 9
+        },
+        "memory_write": {
+          "median_gbps": 327.385,
+          "samples": 10
+        },
+        "memory_write_agg": {
+          "median_gbps": 327.311,
+          "samples": 9
+        }
+      },
+      "versions": {
+        "1.0.10": 2,
+        "1.0.13": 2,
+        "1.0.14": 2,
+        "1.0.16": 1,
+        "1.0.5": 1,
+        "1.2.0": 92,
+        "1.2.2": 46
+      }
+    },
+    "NVIDIA GeForce RTX 3080 Ti": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 120,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 867.658,
+          "samples": 10
+        },
+        "memory_read_agg": {
+          "median_gbps": 864.102,
+          "samples": 10
+        },
+        "memory_write": {
+          "median_gbps": 810.722,
+          "samples": 10
+        },
+        "memory_write_agg": {
+          "median_gbps": 816.955,
+          "samples": 10
+        }
+      },
+      "versions": {
+        "1.0.0": 1,
+        "1.0.14": 1,
+        "1.0.16": 1,
+        "1.0.2": 1,
+        "1.0.4": 1,
+        "1.0.5": 1,
+        "1.0.6": 1,
+        "1.0.7": 3,
+        "1.2.0": 92,
+        "1.2.2": 18
+      }
+    },
+    "NVIDIA GeForce RTX 3090": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 892.499,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 892.416,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 843.082,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 843.08,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4060": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 258.689,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 258.713,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 246.989,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 246.939,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4060 Ti": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 274.089,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 274.161,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 263.995,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 263.963,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4070": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 479.151,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 479.143,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 427.706,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 427.808,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4070 SUPER": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 477.83,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 477.972,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 417.06,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 417.407,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4070 Ti": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 478.709,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 478.678,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 416.554,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 416.483,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4070 Ti SUPER": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 639.296,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 639.304,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 556.85,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 556.653,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4080": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 672.42,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 672.431,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 565.018,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 567.422,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 4080 SUPER": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 26,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 702.15,
+          "samples": 2
+        },
+        "memory_read_agg": {
+          "median_gbps": 702.144,
+          "samples": 2
+        },
+        "memory_write": {
+          "median_gbps": 569.224,
+          "samples": 2
+        },
+        "memory_write_agg": {
+          "median_gbps": 570.21,
+          "samples": 2
+        }
+      },
+      "versions": {
+        "1.2.2": 26
+      }
+    },
+    "NVIDIA GeForce RTX 4090": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 40,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 969.153,
+          "samples": 2
+        },
+        "memory_read_agg": {
+          "median_gbps": 969.192,
+          "samples": 2
+        },
+        "memory_write": {
+          "median_gbps": 841.805,
+          "samples": 2
+        },
+        "memory_write_agg": {
+          "median_gbps": 841.744,
+          "samples": 2
+        }
+      },
+      "versions": {
+        "1.2.2": 40
+      }
+    },
+    "NVIDIA GeForce RTX 5060": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 422.844,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 422.802,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 403.439,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 403.348,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 5060 Ti": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 425.665,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 425.683,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 409.327,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 409.332,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 5070": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 637.334,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 637.325,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 627.627,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 627.592,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 5070 Ti": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 849.894,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 849.91,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 804.912,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 804.949,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA GeForce RTX 5080": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 60,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 913.193,
+          "samples": 3
+        },
+        "memory_read_agg": {
+          "median_gbps": 913.353,
+          "samples": 3
+        },
+        "memory_write": {
+          "median_gbps": 879.742,
+          "samples": 3
+        },
+        "memory_write_agg": {
+          "median_gbps": 879.852,
+          "samples": 3
+        }
+      },
+      "versions": {
+        "1.2.2": 60
+      }
+    },
+    "NVIDIA GeForce RTX 5090": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 61,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 1684.935,
+          "samples": 4
+        },
+        "memory_read_agg": {
+          "median_gbps": 1684.93,
+          "samples": 4
+        },
+        "memory_write": {
+          "median_gbps": 1140.765,
+          "samples": 4
+        },
+        "memory_write_agg": {
+          "median_gbps": 1147.35,
+          "samples": 4
+        }
+      },
+      "versions": {
+        "1.0.3": 1,
+        "1.2.2": 60
+      }
+    },
+    "NVIDIA H100 80GB HBM3": {
+      "published_peak_gbps": 3350.0,
+      "published_peak_source": "NVIDIA H100 product page, H100 SXM 'GPU Memory Bandwidth 3.35TB/s'",
+      "reports": 678,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 3044.01,
+          "samples": 26
+        },
+        "memory_read_agg": {
+          "median_gbps": 3047.525,
+          "samples": 16
+        },
+        "memory_write": {
+          "median_gbps": 3172.26,
+          "samples": 26
+        },
+        "memory_write_agg": {
+          "median_gbps": 3177.63,
+          "samples": 16
+        }
+      },
+      "versions": {
+        "1.0.16": 389,
+        "1.1.0": 50,
+        "1.2.0": 192,
+        "1.2.2": 47
+      }
+    },
+    "NVIDIA H100 80GB Memory3": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 1,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 3171.02,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 3162.8,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 3178.17,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 5564.66,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.0.2": 1
+      }
+    },
+    "NVIDIA H100 PCIe": {
+      "published_peak_gbps": 2000.0,
+      "published_peak_source": "NVIDIA H100 PCIe product brief PB-11133 Table 2, 'Peak memory bandwidth 2,000 GB/s' (its own 1,593 MHz x 5,120 bits gives 2,039)",
+      "reports": 239,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 1968.88,
+          "samples": 13
+        },
+        "memory_read_agg": {
+          "median_gbps": 1972.93,
+          "samples": 3
+        },
+        "memory_write": {
+          "median_gbps": 1934.18,
+          "samples": 13
+        },
+        "memory_write_agg": {
+          "median_gbps": 1937.91,
+          "samples": 3
+        }
+      },
+      "versions": {
+        "1.2.0": 192,
+        "1.2.2": 47
+      }
+    },
+    "NVIDIA H200 GPU (Grace Arm64 host)": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 1,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 28.8,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 28.782,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 22.956,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 22.913,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.0.14": 1
+      }
+    },
+    "NVIDIA L4": {
+      "published_peak_gbps": 300.0,
+      "published_peak_source": "NVIDIA L4 product page, 'GPU memory bandwidth 300GB/s'",
+      "reports": 594,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 252.997,
+          "samples": 17
+        },
+        "memory_read_agg": {
+          "median_gbps": 252.997,
+          "samples": 12
+        },
+        "memory_write": {
+          "median_gbps": 237.588,
+          "samples": 17
+        },
+        "memory_write_agg": {
+          "median_gbps": 237.428,
+          "samples": 12
+        }
+      },
+      "versions": {
+        "1.0.18": 84,
+        "1.1.0": 92,
+        "1.2.0": 372,
+        "1.2.2": 46
+      }
+    },
+    "NVIDIA L40S": {
+      "published_peak_gbps": 864.0,
+      "published_peak_source": "NVIDIA L40S product page, 'Memory Bandwidth 864GB/s'",
+      "reports": 584,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 728.809,
+          "samples": 17
+        },
+        "memory_read_agg": {
+          "median_gbps": 728.809,
+          "samples": 12
+        },
+        "memory_write": {
+          "median_gbps": 432.896,
+          "samples": 17
+        },
+        "memory_write_agg": {
+          "median_gbps": 432.834,
+          "samples": 12
+        }
+      },
+      "versions": {
+        "1.1.0": 92,
+        "1.2.0": 372,
+        "1.2.2": 120
+      }
+    },
+    "NVIDIA RTX 4000 Ada Generation": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 1,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 335.091,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 335.094,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 325.773,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 1701.39,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.0.2": 1
+      }
+    },
+    "NVIDIA RTX A4000": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 1,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 408.081,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 408.469,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 403.474,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 1923.3,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.0.2": 1
+      }
+    },
+    "NVIDIA RTX A5000": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 20,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 710.986,
+          "samples": 1
+        },
+        "memory_read_agg": {
+          "median_gbps": 711.002,
+          "samples": 1
+        },
+        "memory_write": {
+          "median_gbps": 694.571,
+          "samples": 1
+        },
+        "memory_write_agg": {
+          "median_gbps": 693.943,
+          "samples": 1
+        }
+      },
+      "versions": {
+        "1.2.2": 20
+      }
+    },
+    "NVIDIA RTX PRO 4500 Blackwell Server Edition": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 602,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 771.141,
+          "samples": 17
+        },
+        "memory_read_agg": {
+          "median_gbps": 771.089,
+          "samples": 12
+        },
+        "memory_write": {
+          "median_gbps": 740.559,
+          "samples": 17
+        },
+        "memory_write_agg": {
+          "median_gbps": 739.183,
+          "samples": 12
+        }
+      },
+      "versions": {
+        "1.1.0": 94,
+        "1.2.0": 372,
+        "1.2.2": 136
+      }
+    },
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 870,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 1533.21,
+          "samples": 23
+        },
+        "memory_read_agg": {
+          "median_gbps": 1533.17,
+          "samples": 18
+        },
+        "memory_write": {
+          "median_gbps": 1446.32,
+          "samples": 23
+        },
+        "memory_write_agg": {
+          "median_gbps": 1446.31,
+          "samples": 18
+        }
+      },
+      "versions": {
+        "1.1.0": 91,
+        "1.2.0": 372,
+        "1.2.2": 407
+      }
+    },
+    "NVIDIA T4G": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 598,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 257.865,
+          "samples": 17
+        },
+        "memory_read_agg": {
+          "median_gbps": 257.62,
+          "samples": 12
+        },
+        "memory_write": {
+          "median_gbps": 212.261,
+          "samples": 17
+        },
+        "memory_write_agg": {
+          "median_gbps": 213.582,
+          "samples": 12
+        }
+      },
+      "versions": {
+        "1.0.18": 84,
+        "1.1.0": 92,
+        "1.2.0": 374,
+        "1.2.2": 48
+      }
+    },
+    "Tesla T4": {
+      "published_peak_gbps": null,
+      "published_peak_source": "not looked up",
+      "reports": 596,
+      "rows": {
+        "memory_read": {
+          "median_gbps": 258.959,
+          "samples": 17
+        },
+        "memory_read_agg": {
+          "median_gbps": 258.866,
+          "samples": 12
+        },
+        "memory_write": {
+          "median_gbps": 219.903,
+          "samples": 17
+        },
+        "memory_write_agg": {
+          "median_gbps": 219.885,
+          "samples": 12
+        }
+      },
+      "versions": {
+        "1.0.18": 84,
+        "1.1.0": 92,
+        "1.2.0": 374,
+        "1.2.2": 46
+      }
+    }
+  },
+  "rows_tallied": [
+    "memory_read",
+    "memory_write",
+    "memory_read_agg",
+    "memory_write_agg"
+  ],
+  "tallied": "2026-09-22",
+  "what": "Median memory bandwidth pantheongpu published per GPU, tallied from its report database, with each part's published peak read from the vendor's own document. The comparison tool reads this file so no figure is transcribed into prose."
+}
