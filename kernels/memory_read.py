@@ -275,6 +275,15 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
     elided = verify_read_completed(read_verified)
     if elided:
         result["warning"] = elided
+        # The check's own sentence is that "the analytic bandwidth is not a
+        # measurement", and the Score beside it *was* that bandwidth: this
+        # set a warning and returned, so the row published PASS with the
+        # figure the kernel had just disowned. llm_prefill, llm_decode and
+        # speculative_decode were published the same way -- the check fired,
+        # the message reached the Detail, and nothing acted on it -- which is
+        # why the harness fails a row whose kernel invalidates its own Score.
+        # This is the flag that makes it act.
+        result["score_invalid"] = True
         return result
 
     # neuron-profile replays the NEFF, so it needs a NeuronCore of its own,
