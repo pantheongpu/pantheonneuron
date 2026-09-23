@@ -1218,6 +1218,36 @@ scrubbed at ingest rather than at write time. `tests/test_report_privacy.py`
 enforces the invariant and runs as its own required CI job. If it fails, find
 what started emitting the identifier — do not relax the test.
 
+### Is this part healthy?
+
+A Score on its own does not answer that, and until now nothing in the repo
+held one against the published figures. `tools/check_against_reference.py`
+does:
+
+```bash
+python tools/check_against_reference.py database/
+```
+
+Every scored row is divided by the reference median for its part, and rows
+outside the band are called out in both directions — a Score *above* the
+reference is not good news, since the largest wrong number this suite has
+produced was 14,513 GB/s from a kernel the compiler had deleted.
+
+The band is three times the row's own measured between-host spread, floored
+at 5%. Both terms come from the 2026-09-21 pass rather than from taste: 21 of
+23 trn1 rows agree within 0.2% across three hosts, which is far too tight to
+use as a tolerance, and the 5% floor also covers the largest duration effect
+the dataset can measure.
+
+It refuses where a ratio would mislead: the part, the unit and the pinned
+`Problem` must all match, so the memory-size sweep compares at the pinned
+size and is declined at the other six.
+
+Run over the committed dataset it flags exactly one row — trn1-a's 3600 s
+`pcie_bandwidth`, 17.9% below the 300 s reference where the other two hosts
+moved 0.02% and 4.6%. That is a finding rather than a band to widen, and it
+is the first thing the check found.
+
 ## Custom kernels
 
 There is no hand-written device C++ path on Neuron the way there is on CUDA.
