@@ -71,18 +71,28 @@ so either GPU row serves. The pairing crosses names, so no join on
 | Part | Device read (GB/s) | Device write (GB/s) | Published peak (GB/s) | Read % | Write % |
 |---|---|---|---|---|---|
 | **Trainium1** | **543.7** | **537.2** | 880.5 | **61.8%** | **61.0%** |
-| Inferentia2 | 542.8 | 548.6 | 880.5 | 61.6% | 62.3% |
-| A10 | 501.3 | 479.5 | 600 | 83.5% | 79.9% |
+| **Inferentia2** | **542.8** | **548.6** | 880.5 | **61.6%** | **62.3%** |
+| A10 | 501.3 | 479.5 | 600 | 83.6% | 79.9% |
 | A10G | 501.9 | 474.2 | *none published* | -- | -- |
-| L40S | 728.8 | 432.9 | 864 | 84.4% | **50.1%** |
+| L4 | 253.0 | 237.6 | 300 | 84.3% | 79.2% |
+| L40S | 728.8 | 432.9 | 864 | 84.4% | 50.1% |
 | A100-SXM4-40GB | 1496.2 | 1475.4 | 1,555 | 96.2% | 94.9% |
 | H100 PCIe | 1968.9 | 1934.2 | 2,000 | 98.4% | 96.7% |
-| H100 80GB HBM3 (SXM) | 3044.0 | 3172.3 | 3,350 | 90.9% | 94.7% |
+| H100 80GB HBM3 | 3044.0 | 3172.3 | 3,350 | 90.9% | 94.7% |
 
-Measured figures: this pass for the Neuron parts, and the median of
-pantheongpu's published reports for the GPUs, tallied 2026-09-22. Both
-suites count decimal gigabytes (bytes / 1e9), as NVIDIA and AWS quote them,
-so the percentages carry no GiB/GB error.
+**That table is generated, not typed.** `tools/compare_with_gpu.py --render`
+prints it from `summary-{trn1,inf2}.json` (this pass) and
+`gpu-reference.json` (pantheongpu's medians and each part's published peak,
+tallied by `tools/tally_gpu_reference.py` from its report database), and
+`tests/test_compare_with_gpu.py` fails if this file drifts from it. The
+first version of this table was typed from medians computed in a shell,
+which is the transcription failure #20 was about.
+
+Both suites count decimal gigabytes (bytes / 1e9), as NVIDIA and AWS quote
+them, so the percentages carry no GiB/GB error. The same tool prints the 21
+names that join on (Test Name, Unit) and must not be compared, each with its
+reason -- the honest "not comparable" the registers were written to make
+possible, and which nothing rendered until now.
 
 **Published peaks, each checked on 2026-09-22 against the vendor's own
 document:**

@@ -275,6 +275,15 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
     elided = verify_read_completed(read_verified)
     if elided:
         result["warning"] = elided
+        # The check's own sentence is that "the analytic bandwidth is not a
+        # measurement", and the Score beside it *was* that bandwidth: this
+        # set a warning and returned, so the row published PASS with the
+        # figure the kernel had just disowned. llm_prefill, llm_decode and
+        # speculative_decode were published the same way -- the check fired,
+        # the message reached the Detail, and nothing acted on it -- which is
+        # why the harness fails a row whose kernel invalidates its own Score.
+        # This is the flag that makes it act.
+        result["score_invalid"] = True
         return result
 
     # neuron-profile replays the NEFF, so it needs a NeuronCore of its own,
@@ -420,6 +429,14 @@ def _profile(workdir: str, since: float, planned_bytes: int) -> dict:
         "score_method": registry.PROFILER,
         "hbm_read_bytes": counters.get("hbm_read_bytes"),
         "profiler_total_time_s": counters.get("total_time"),
+        # The denominator the Score actually used. The row published
+        # total_time and named the basis "total_active_time" beside it,
+        # so a reader following the declared formula divided by the
+        # wrong one and got 255.96 GB/s against a published 272.94 --
+        # 6.2% short, and exactly the biased "over total_time" figure
+        # bandwidth_gbps documents. A Score that cannot be recomputed
+        # from its own row is the thing this suite exists not to ship.
+        "profiler_active_time_s": profiler.execution_window(counters)[0],
         # The Score's denominator and what it excludes: the profiled
         # execution's idle startup, 2.08 ms on trn1.2xlarge 2026-09-10,
         # which the workload's back-to-back executions do not pay. See

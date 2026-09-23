@@ -26,7 +26,7 @@ never moved.
 One process per size. The Neuron runtime holds its cores for the life of the
 process, and the harness reserves a profiler core at start-up.
 
-    python tools/sweep_memory_size.py                    # per-workload defaults
+    python tools/sweep_memory_size.py                    # per-workload defaults, 3 repeats
     SIZES_GIB=2,8 DURATION=60 REPEAT=2 python tools/sweep_memory_size.py
 """
 
@@ -147,7 +147,11 @@ def main() -> int:
 
     override = os.environ.get("SIZES_GIB")
     duration = int(os.environ.get("DURATION", "60"))
-    repeat = int(os.environ.get("REPEAT", "2"))
+    # Odd on purpose. With an even count the median is an average of two
+    # executions and belongs to neither, so the harness withholds the row's
+    # Measurement (_median_provenance) -- and the 2026-09-22 sweep published
+    # ten rows with no provenance at all because this defaulted to 2.
+    repeat = int(os.environ.get("REPEAT", "3"))
     names = [n.strip() for n in
              os.environ.get("WORKLOADS", ",".join(SWEEPABLE)).split(",")]
 
