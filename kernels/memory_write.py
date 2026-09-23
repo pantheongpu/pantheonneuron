@@ -253,6 +253,10 @@ def _run(problem: typing.Mapping[str, typing.Any], duration: int,
     elided = verify_write_completed(write_verified)
     if elided:
         result["warning"] = elided
+        # See memory_read: a destination that does not hold what was written
+        # makes the bytes-over-time figure a count of submissions, not of
+        # bytes that landed. The kernel says so and the Score has to go.
+        result["score_invalid"] = True
         return result
 
     # Only when a core was reserved for it; see memory_read for why an

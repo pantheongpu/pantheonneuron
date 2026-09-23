@@ -494,3 +494,50 @@ def test_the_barrier_wait_stays_compile_bound():
     code = sourcecheck.flat_function_code(memory_agg.run)
     assert "release_when_ready ( barrier" in code
     assert "_BARRIER_TIMEOUT" in code
+
+
+# -- a worker that disowned its own Score ------------------------------------
+#
+# `score_invalid` is read by the harness from a *row*, and a worker has no
+# row: it writes a JSON file this process reads. So the one flag that says
+# "do not publish this" stopped at the process boundary, and the aggregate
+# summed the worker's planned bytes as though it had confirmed them.
+
+def _disowned(core, byte_key="bytes_requested"):
+    worker = _worker(core, 100.0, byte_key, 1_000_000_000, 10.0)
+    worker["score_invalid"] = True
+    worker["warning"] = "kernel read 0.500x the planned bytes"
+    return worker
+
+
+def test_a_worker_that_disowned_its_score_invalidates_the_aggregate():
+    workers = [_worker(0, 100.0, "bytes_requested", 1_000_000_000, 10.0),
+               _disowned(1)]
+    summary = memory_agg.summarise(workers, [], 11.0, 2, "read")
+    assert summary["score_invalid"] is True
+    assert "core 1" in summary["warning"]
+    assert "invalid" in summary["warning"]
+
+
+def test_healthy_workers_are_left_alone():
+    workers = [_worker(core, 100.0, "bytes_requested", 1_000_000_000, 10.0)
+               for core in (0, 1)]
+    summary = memory_agg.summarise(workers, [], 11.0, 2, "read")
+    assert summary["score_invalid"] is False
+    assert memory_agg.verify_no_worker_invalidated_itself(workers) is None
+
+
+def test_every_disowning_core_is_named():
+    workers = [_disowned(0), _disowned(1)]
+    message = memory_agg.verify_no_worker_invalidated_itself(workers)
+    assert "cores 0, 1" in message
+
+
+def test_a_disowned_worker_is_reported_before_coverage_and_overlap():
+    """A worker saying its own figure is meaningless settles the question
+    the coverage and overlap findings are still asking."""
+    code = sourcecheck.flat_function_code(memory_agg.summarise)
+    assert code.index("verify_no_worker_invalidated_itself") < code.index(
+        "verify_cores_read_what_they_planned")
+    assert code.index("verify_no_worker_invalidated_itself") < code.index(
+        "verify_workers_overlapped")

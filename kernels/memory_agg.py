@@ -395,7 +395,8 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         # Coverage first: a worker that did not move its planned bytes
         # makes the aggregate wrong in a way an overlap or an unevenness
         # finding would only distract from.
-        warning = (verify_cores_read_what_they_planned(per_core)
+        warning = (verify_no_worker_invalidated_itself(results)
+                   or verify_cores_read_what_they_planned(per_core)
                    or verify_workers_overlapped(results, span)
                    or verify_cores_scaled(per_core))
 
@@ -426,8 +427,13 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         # failures in the Detail, and nothing acting on them. One survivor
         # of two is not an aggregate either: its bandwidth under this name
         # would read as the whole part's.
+        # A worker that disowned its own Score is not a worker that
+        # reported: its bytes are in the numerator all the same, because
+        # `total_bytes` sums what each plan asked for. The aggregate cannot
+        # be a measurement when one of the measurements it sums is not.
         "score_invalid": (bool(failures) or len(results) < core_count
-                          or _no_overlap_at_all(results, span)),
+                          or _no_overlap_at_all(results, span)
+                          or bool(_invalidated_workers(results))),
         "bytes_moved": total_bytes,
         # The measured window, not the phase around it. This carried the
         # whole worker phase -- spawn, compile, warm-up, loop -- under the
@@ -453,6 +459,42 @@ def summarise(results: typing.Sequence[dict], failures: typing.Sequence[str],
         "analytic_basis": "summed bytes / longest worker span",
         "warning": warning,
     }
+
+
+def _invalidated_workers(results: typing.Sequence[typing.Mapping]):
+    """The cores whose own kernel said its Score was not a measurement."""
+    return [result.get("core") for result in results
+            if result.get("score_invalid")]
+
+
+def verify_no_worker_invalidated_itself(
+    results: typing.Sequence[typing.Mapping],
+) -> typing.Optional[str]:
+    """Flag an aggregate summing a worker that disowned its own figure.
+
+    Each worker is a whole memory_read or memory_write run, and either can
+    decide its bytes did not land -- the read-back it does for exactly that
+    purpose. The aggregate collected the worker's `bytes_requested` into the
+    numerator regardless, because `score_invalid` is read by the harness
+    from the *row*, and a worker has no row: its result is a JSON file this
+    process reads. So the one flag that says "do not publish this" stopped
+    at the process boundary.
+
+    It is reported first, ahead of coverage and overlap, because a worker
+    that says its own figure is meaningless settles the question those two
+    are still asking.
+    """
+    invalid = _invalidated_workers(results)
+    if not invalid:
+        return None
+    listed = ", ".join(str(core) for core in invalid)
+    return (
+        f"core {listed} reported its own Score as invalid, so the summed "
+        "bandwidth includes bytes no kernel confirmed moved"
+        if len(invalid) == 1 else
+        f"cores {listed} reported their own Scores as invalid, so the summed "
+        "bandwidth includes bytes no kernel confirmed moved"
+    )
 
 
 def verify_cores_read_what_they_planned(
