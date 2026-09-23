@@ -15,6 +15,7 @@ import os
 import pathlib
 import re
 import socket
+import subprocess
 
 import pytest
 
@@ -219,19 +220,27 @@ _IDENTIFIER_PATTERNS = (
 )
 
 
+# .log is included. The validation evidence is all .log files -- 37 of them,
+# committed to a public repo -- and the scan once covered .md, .txt and .json
+# only, so none had ever been checked. One carried a real availability zone.
+_TEXT_SUFFIXES = (".md", ".txt", ".json", ".log")
+
+
 def _committed_text_files():
-    """Every text file tracked in the repo's data and docs directories."""
-    found = []
-    for directory in ("data", "docs"):
-        root = os.path.join(REPO_ROOT, directory)
-        for base, _, names in os.walk(root):
-            for name in names:
-                # .log included. The validation evidence is all .log files --
-                # 37 of them, committed to a public repo -- and this scanned
-                # only .md, .txt and .json, so none had ever been checked.
-                # One carried a real availability zone in its header.
-                if name.endswith((".md", ".txt", ".json", ".log")):
-                    found.append(os.path.join(base, name))
+    """Every text file committed to the repository.
+
+    This walked `data/` and `docs/` alone, which left the file a reader of a
+    public repository meets first -- README.md -- outside the guard. It named
+    the availability zones of both rented hosts. The scan now follows what is
+    committed rather than a list of directories, because the directory list
+    is what went stale.
+    """
+    listed = subprocess.run(
+        ["git", "-C", REPO_ROOT, "ls-files", "-z"],
+        capture_output=True, text=True, check=True)
+    found = [os.path.join(REPO_ROOT, name)
+             for name in listed.stdout.split("\0")
+             if name.endswith(_TEXT_SUFFIXES)]
     return sorted(found)
 
 
@@ -403,6 +412,19 @@ def test_the_committed_scan_reaches_the_validation_logs():
     gap, so its reach is asserted, not assumed."""
     logs = [path for path in _committed_text_files() if path.endswith(".log")]
     assert len(logs) >= 30, f"only {len(logs)} .log files scanned"
+
+
+def test_the_committed_scan_reaches_the_repository_root():
+    """README.md is the first file anyone reads in a public repository, and it
+    sat outside a guard that walked `data/` and `docs/`. It named both hosts'
+    availability zones. Reach is asserted so the scan cannot shrink back."""
+    scanned = _committed_text_files()
+    assert os.path.join(REPO_ROOT, "README.md") in scanned
+    outside = [p for p in scanned
+               if not os.path.relpath(p, REPO_ROOT).startswith(("data/", "docs/"))]
+    assert len(outside) >= 3, (
+        f"only {len(outside)} committed text files outside data/ and docs/; "
+        f"the scan has narrowed back to a directory list")
 
 
 @pytest.mark.parametrize("leak", [
