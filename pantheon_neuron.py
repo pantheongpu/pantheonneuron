@@ -1547,6 +1547,10 @@ _PROVENANCE_KEYS = (
     "hbm_read_bytes",
     "hbm_write_bytes",
     "profiler_total_time_s",
+    # The window the Score divided by, which is not always total_time:
+    # see kernels/memory_read.py. Without it the declared formula does
+    # not reproduce the Score from the row.
+    "profiler_active_time_s",
     "profiler_time_basis",
     "profiler_startup_s",
     # The cross-check the profiler figure is meant to be compared against.
