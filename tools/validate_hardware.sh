@@ -42,6 +42,43 @@ GEMM_SHAPE=${GEMM_SHAPE:-2048}
 
 hr() { printf '\n========== %s ==========\n' "$*"; }
 
+# Every run's full output is kept, and what the terminal shows is every line
+# the harness itself printed -- not the last N lines of the stream.
+#
+# It was `| tail -6` here and `| tail -4` for the warm-cache search, which is
+# a count of lines in a stream whose length depends on the row: a Score line,
+# a share of peak when there is a peak, a spread when there are repeats, and
+# a summary at the end. When the harness began printing the Score and a
+# closing tally, `tail -4` started dropping the status line -- and on the
+# warm-cache search that line is the whole point, because its Detail is
+# where "the profiled graph could not be attributed" appears. Nothing
+# failed; the evidence just stopped arriving.
+#
+# A FAIL row exits 1 and the harness lines already say why. Anything else
+# non-zero is a crash or a bad argument, whose explanation is in the last
+# lines written rather than in a harness line, so those are shown too.
+LOGDIR=${LOGDIR:-$PANTHEON_NEURON_WORKDIR/validation-logs}
+mkdir -p "$LOGDIR"
+NOISE='CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc'
+
+run_one() {  # run_one LABEL TIMEOUT harness-args...
+  local label=$1 limit=$2
+  shift 2
+  local log="$LOGDIR/$label.log"
+  timeout "$limit" "$PY" pantheon_neuron.py "$@" >"$log" 2>&1
+  local status=$?
+  grep '^\[PANTHEON-NEURON\]' "$log"
+  if [ "$status" -eq 124 ]; then
+    echo "[VALIDATE] $label TIMED OUT after ${limit}s"
+  elif [ "$status" -eq 1 ]; then
+    echo "[VALIDATE] $label exited 1 (a FAIL row; see above)"
+  elif [ "$status" -ne 0 ]; then
+    echo "[VALIDATE] $label exited $status; its last lines:"
+    grep -vE "$NOISE" "$log" | tail -6 | sed 's/^/    /'
+  fi
+  echo "[VALIDATE] full output: $log"
+}
+
 # When this run began, so the summary at the bottom can tell this run's
 # reports from every earlier run's.
 #
@@ -103,16 +140,8 @@ WORKLOAD_TIMEOUT=${WORKLOAD_TIMEOUT:-2400}
 
 for workload in $ORCHESTRATED; do
   hr "orchestrated: $workload (pinned problem)"
-  timeout "$WORKLOAD_TIMEOUT" $PY pantheon_neuron.py \
-      --test "$workload" --duration "$DURATION" --repeat "$REPEAT" 2>&1 \
-    | grep -vE 'CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc' \
-    | tail -6
-  status=${PIPESTATUS[0]}
-  if [ "$status" -eq 124 ]; then
-    echo "[VALIDATE] $workload TIMED OUT after ${WORKLOAD_TIMEOUT}s"
-  elif [ "$status" -ne 0 ]; then
-    echo "[VALIDATE] $workload exited $status"
-  fi
+  run_one "$workload" "$WORKLOAD_TIMEOUT" \
+      --test "$workload" --duration "$DURATION" --repeat "$REPEAT"
 done
 
 # ---------------------------------------------------------------------------
@@ -130,9 +159,8 @@ hr "NEFF search against a warm compile cache"
 echo "NEFFs now on this machine:"
 find "$PANTHEON_NEURON_WORKDIR" /tmp/no-user/neuroncc_compile_workdir \
      /var/tmp/neuron-compile-cache -name '*.neff' 2>/dev/null | wc -l
-timeout "$WORKLOAD_TIMEOUT" $PY pantheon_neuron.py \
-    --test memory_read --duration "$DURATION" --repeat "$REPEAT" 2>&1 \
-  | grep -vE 'CCOM WARN|nccl_net_ofi|OFI plugin|neuronpjrt.cc' | tail -4
+run_one memory_read-warm-cache "$WORKLOAD_TIMEOUT" \
+    --test memory_read --duration "$DURATION" --repeat "$REPEAT"
 
 # ---------------------------------------------------------------------------
 # Reduced-shape kernel runs. Direct calls, so no Score is produced and none
