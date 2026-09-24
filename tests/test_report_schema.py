@@ -34,6 +34,7 @@ import recompute_scores  # noqa: E402
 # edit: an old entry is what an old report's number means.
 FINGERPRINTS = {
     1: 'e21f505394e676a3',
+    2: 'fb761ffce3b384a8',
 }
 
 _DEVICES = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]

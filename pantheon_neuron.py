@@ -153,7 +153,7 @@ def invocation(args) -> dict:
 # Bump it whenever the set of keys a report can carry changes, and say what
 # changed below. tests/test_report_schema.py fingerprints that set and fails
 # when it moves without a bump.
-REPORT_SCHEMA = 1
+REPORT_SCHEMA = 2
 REPORT_SCHEMA_CHANGES = {
     1: ("First versioned report, 2026-09-24. A report with no schema_version "
         "predates this and may lack any of: Measurement.profiler_active_time_s, "
@@ -161,6 +161,11 @@ REPORT_SCHEMA_CHANGES = {
         "host_source_pinned, host_landing_pinned, h2d_sources_alternate, "
         "Telemetry.ecc_events_observed, ecc_events_observed_total. Absent in "
         "such a report means not recorded, not zero or false."),
+    2: ("2026-09-24. Measurement gains the evidence three checks act on: "
+        "per_core (memory_*_agg), replays and requested_replays "
+        "(graph_replay), prefills, decode_requests and decode_steps "
+        "(serving_mix), steps (kv_cache_churn, llm_decode). A schema 1 report does not "
+        "carry them."),
 }
 
 
@@ -1711,6 +1716,31 @@ _PROVENANCE_KEYS = (
     "host_source_pinned",
     "host_landing_pinned",
     "h2d_sources_alternate",
+    # memory_*_agg: each worker's own bandwidth, bytes and coverage. The two
+    # checks that decide whether the aggregate is one -- a worker that moved
+    # less than its plan, a core far slower than the rest -- act on exactly
+    # this, and the row published their verdict with none of it. The
+    # aggregate's whole question is whether the cores contend, and a summed
+    # figure cannot show which core paid.
+    "per_core",
+    # graph_replay: how many replays the chain ran against how many it asked
+    # for. verify_replays_completed compares them because "a chain that ran
+    # the wrong number of replays, or none, means the rate counted replays
+    # that did not happen"; the row carried the rate and neither count.
+    "replays",
+    "requested_replays",
+    # serving_mix: the Score is prefills plus completed decode requests, and
+    # the README flags it as quantised to one request per 32 decode steps.
+    # These are the counts that quantisation is made of, and the counts
+    # verify_requests_completed reads.
+    "prefills",
+    "decode_requests",
+    "decode_steps",
+    # kv_cache_churn: the loop's step count, which verify_ring_landed reports
+    # ("after N steps") and ring_slots_expected is min(steps, slots) of. Not
+    # recoverable from what the row had: cache_updates is steps times a
+    # per-step token count the Problem does not carry.
+    "steps",
     # memory_*_agg: an aggregate is a claim about cores loading memory at
     # the same time, and summed bytes cannot tell that from cores doing it
     # one after another.
