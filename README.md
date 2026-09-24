@@ -1217,6 +1217,34 @@ scrubbed at ingest rather than at write time. `tests/test_report_privacy.py`
 enforces the invariant and runs as its own required CI job. If it fails, find
 what started emitting the identifier — do not relax the test.
 
+### ECC errors during a run
+
+`neuron-monitor` reports four ECC counters per device, and every report this
+suite has written carried them. Nothing read them — a run in which memory
+changed underneath the kernel published a clean PASS, with the number saying
+so sitting in the row's Telemetry.
+
+That was a stalled decision rather than an oversight, and the monitor said so
+in a comment: the counter is a max across samples, which is either a total
+since driver load or a per-period tally, and acting on its *value* would
+either charge a device's past to this run or undercount it.
+
+The **rise** across the run does not need that question answered. If the
+counters are totals, a rise is new events; if they are per-period tallies, a
+rise means some period counted more than another. Either way the errors
+happened while the workload was running. So `ecc_events_observed` is recorded
+beside the untouched `ecc_events`, and the row acts on it:
+
+| | |
+|---|---|
+| **Uncorrected** rise | the row **fails** — memory changed underneath the kernel, so the Score is not a measurement of a working part |
+| **Corrected** rise | the Score stands and the Detail says the part is producing errors |
+| Fewer than two samples | `null`, not zero — a single reading cannot show a change |
+
+One case stays unjudged: a per-period counter that is nonzero and *constant*
+shows no rise. It remains visible in `ecc_events`, which is the same ambiguity
+as before and not something this resolves.
+
 ### Is this part healthy?
 
 A Score on its own does not answer that, and until now nothing in the repo

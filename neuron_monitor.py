@@ -298,6 +298,50 @@ def whole_period_flops(values: typing.Sequence[float]) -> typing.Dict[str, typin
     return summary
 
 
+# The four ECC counters neuron-monitor reports per device, split by whether
+# the hardware repaired the error. The distinction is the whole point: a
+# corrected error is a part degrading while its data stays good, and an
+# uncorrected one is data that silently changed underneath a running kernel.
+ECC_UNCORRECTED = ("mem_ecc_uncorrected", "sram_ecc_uncorrected")
+
+
+def _ecc_increase(ranges, sample_count):
+    """How much each ECC counter rose while the workload ran.
+
+    **This is the reading that does not need the counters' semantics
+    settled.** ``ecc_events`` is a max across samples, and whether that is a
+    total since driver load or a per-period tally changes what it means --
+    the AWS guide does not say, and no event has been seen on these parts to
+    settle it. So nothing has ever been allowed to act on it, and a suite
+    whose job is to find a failing part has been collecting the clearest
+    evidence of one and throwing it away.
+
+    A *rise* is unambiguous. If the counters are totals, a rise is new
+    events now. If they are per-period tallies, a rise means some period
+    counted more than another, which is also events now. Either way the
+    errors happened while this workload was running, and it is charged to
+    this run without charging it the device's past.
+
+    Summed across devices, because two devices each gaining one error is
+    two errors.
+
+    Returns None when fewer than two samples were taken: one reading cannot
+    show a change, and reporting that as zero would claim a clean run that
+    was never observed. **A per-period counter that is nonzero and constant
+    also shows no rise** -- that case stays visible in ``ecc_events`` and
+    unjudged here, which is exactly the ambiguity above and not something
+    this resolves.
+    """
+    if sample_count < 2:
+        return None
+    increase = {"mem_ecc_corrected": 0, "mem_ecc_uncorrected": 0,
+                "sram_ecc_corrected": 0, "sram_ecc_uncorrected": 0}
+    for (_device, key), (lowest, highest) in ranges.items():
+        if key in increase:
+            increase[key] += max(0, highest - lowest)
+    return increase
+
+
 def _completed_in(sample: dict) -> typing.Optional[int]:
     """The completion tally one sample carries, summed over runtimes."""
     total = None
@@ -626,6 +670,9 @@ class NeuronMonitor:
             "sram_ecc_uncorrected": 0,
         }
 
+        # (device index, counter) -> [lowest, highest] reading of this run.
+        ecc_range: typing.Dict[typing.Tuple[typing.Any, str], typing.List[int]] = {}
+
         completed_series: typing.List[typing.Tuple[int, int, typing.Any]] = []
         periods: typing.List[float] = []
 
@@ -740,13 +787,21 @@ class NeuronMonitor:
             # turned out to be, max() undercounts and the sum is right.
             # The AWS guide does not say, and no ECC event has been
             # observed on these parts to settle it the way completed was
-            # settled (by watching it at a boundary). Recorded, not acted
-            # on: nothing in the harness reads these to pass or fail a row.
+            # settled (by watching it at a boundary). So this value stays
+            # what it was -- recorded, not judged.
+            #
+            # `ecc_observed` beside it is the reading that does not need the
+            # question answered: how much each counter *rose* while this
+            # workload ran. See _ecc_increase.
             for device in (hw.get("neuron_devices") or []):
+                index = device.get("neuron_device_index")
                 for key in ecc:
                     value = device.get(key)
                     if isinstance(value, (int, float)):
                         ecc[key] = max(ecc[key], int(value))
+                        seen = ecc_range.setdefault((index, key), [int(value)] * 2)
+                        seen[0] = min(seen[0], int(value))
+                        seen[1] = max(seen[1], int(value))
 
         summary = {
             "samples": len(self._samples),
@@ -798,4 +853,8 @@ class NeuronMonitor:
 
         summary["ecc_events"] = ecc
         summary["ecc_events_total"] = sum(ecc.values())
+        observed = _ecc_increase(ecc_range, len(self._samples))
+        summary["ecc_events_observed"] = observed
+        summary["ecc_events_observed_total"] = (
+            None if observed is None else sum(observed.values()))
         return summary

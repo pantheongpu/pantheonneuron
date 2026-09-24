@@ -423,6 +423,47 @@ def _measure_once(workload, devices, duration: int, monitor_period: float) -> di
         monitor.shutdown()
 
 
+def ecc_verdict(observed):
+    """What an ECC rise during the run means for the row.
+
+    Two outcomes, because the two kinds of error mean different things and
+    collapsing them would either hide a broken part or fail a working one:
+
+    * **uncorrected** -- memory changed underneath a running kernel and the
+      hardware could not repair it. Whatever the workload computed, it
+      computed on data that is not what was written, so the Score is not a
+      measurement of a working part. The row fails, on the same grounds as
+      a kernel that cannot verify its own output.
+    * **corrected** -- the hardware repaired the error, so the arithmetic
+      stands and the Score with it. The part is still producing errors,
+      which is exactly what a reader running this suite wants told.
+
+    ``None`` means fewer than two samples, so no rise could be observed. It
+    is not a clean run and is not reported as one.
+    """
+    if not isinstance(observed, dict):
+        return "PASS", ""
+    uncorrected = sum(observed.get(key, 0) for key in neuron_monitor.ECC_UNCORRECTED)
+    total = sum(observed.values())
+    if uncorrected > 0:
+        return "FAIL", (
+            f"{uncorrected} uncorrected ECC error(s) during this run "
+            f"({_ecc_breakdown(observed)}): memory changed underneath the "
+            "kernel, so this is not a measurement of a working part")
+    if total > 0:
+        return "PASS", (
+            f"{total} corrected ECC error(s) during this run "
+            f"({_ecc_breakdown(observed)}): the hardware repaired them, so "
+            "the Score stands, but this part is producing errors")
+    return "PASS", ""
+
+
+def _ecc_breakdown(observed):
+    """The counters that rose, named, so the Detail says which memory."""
+    return ", ".join(f"{key} {value}" for key, value in sorted(observed.items())
+                     if value) or "none"
+
+
 def _measure_started(workload, devices, duration: int, monitor,
                      telemetry_started: bool) -> dict:
     """The body of one measurement, with the monitor already sampling."""
@@ -500,6 +541,18 @@ def _measure_started(workload, devices, duration: int, monitor,
         unaccounted = executions_unaccounted(metrics, run_result)
         if unaccounted:
             detail = "; ".join(filter(None, [detail, unaccounted]))
+
+    # ECC errors that happened *during* this run. The monitor has always
+    # collected these and nothing has ever read them: a suite whose job is to
+    # find a failing part was writing the clearest evidence of one into every
+    # row and walking past it. See neuron_monitor._ecc_increase for why the
+    # rise is actionable where the raw counter is not.
+    if status == "PASS":
+        verdict, note = ecc_verdict(metrics.get("ecc_events_observed"))
+        if verdict == "FAIL":
+            status, score = "FAIL", None
+        if note:
+            detail = "; ".join(filter(None, [note, detail]))
 
     if metrics.get("execution_errors", 0) > 0 and status == "PASS":
         # The Score goes with the status, as on every other path to FAIL.
