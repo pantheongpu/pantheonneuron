@@ -1600,6 +1600,32 @@ _PROVENANCE_KEYS = (
     # Problem the row advertises.
     "tile",
     "ran_pinned_shape",
+    # tensor_virus, int_virus, pulse_virus: which GEMM tiling produced the
+    # figure. The kernel's own words are that "a number without this label
+    # is not comparable with one that has it" -- the strategies differ by
+    # ~2.7x at the pinned shape and PANTHEON_NEURON_GEMM_TILING selects
+    # between them -- and no row carried the label. Not in `Problem`,
+    # because that is the registry's static declaration and would keep
+    # saying "coalesced" through a run the variable had changed; this is
+    # what ran, which is the same reason omni_virus reports `tile` here.
+    "tiling",
+    # tensor_virus, pulse_virus: the correctness check's own evidence. It
+    # reads every row-tile of the product against the value only that
+    # tile's rows can produce, and the row published the verdict without
+    # the count behind it. Same reason as ring_slots_expected above.
+    "row_tiles_checked",
+    "row_tiles_wrong",
+    # pcie_bandwidth: whether the host pages were really pinned, not
+    # whether pinning was asked for. The kernel controls for this because
+    # the staging-buffer explanation for the d2h asymmetry stands or falls
+    # on it -- "if these are False the bounce-buffer explanation is still
+    # live and untested" -- and then the answer reached no report. The
+    # alternating-source control is here for the same reason `buffers` is:
+    # a row that does not say which controls were in effect cannot be
+    # compared with one that does.
+    "host_source_pinned",
+    "host_landing_pinned",
+    "h2d_sources_alternate",
     # memory_*_agg: an aggregate is a claim about cores loading memory at
     # the same time, and summed bytes cannot tell that from cores doing it
     # one after another.
