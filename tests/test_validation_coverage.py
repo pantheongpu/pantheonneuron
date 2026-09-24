@@ -93,7 +93,9 @@ def test_failures_do_not_end_the_run():
     -e` semantics that would abandon the remaining workloads.
     """
     text = _script()
-    assert "PIPESTATUS" in text
+    # The status is taken from the harness itself, not from a pipeline
+    # whose last stage is a filter: run_one writes to a log and reads $?.
+    assert "local status=$?" in text
     assert "TIMED OUT" in text
     # set -e would end the pass on the first non-zero exit.
     assert "set -uo pipefail" in text and "set -euo" not in text
