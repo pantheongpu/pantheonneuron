@@ -106,6 +106,70 @@ def unparsed_rows(output: str) -> int:
     return max(0, len(_DATA_LINE.findall(output)) - len(parse_busbw(output)))
 
 
+# nccom-test prints its own average under the table. It is the one figure in
+# the output this module did not compute, so it is the reference the parse
+# can be held against without guessing at a format nobody here has seen.
+_REPORTED_AVERAGE = re.compile(
+    r"Avg bus bandwidth:\s*(?P<gbps>\d+(?:\.\d+)?)\s*GB/s")
+
+
+def reported_average(output: str) -> typing.Optional[float]:
+    """nccom-test's own "Avg bus bandwidth", or None if it printed none."""
+    match = _REPORTED_AVERAGE.search(output)
+    return float(match.group("gbps")) if match else None
+
+
+def verify_average_matches_nccom(
+    rows: typing.Sequence[typing.Tuple[int, float]], output: str,
+) -> typing.Optional[str]:
+    """Hold this module's average against the one nccom-test printed.
+
+    ``unparsed_rows`` notices a row the pattern skipped. It cannot notice a
+    row the pattern *misread*: ``_ROW`` takes the last decimal on the line
+    as the bus bandwidth, so a nccom-test that appended a column after it
+    would parse every row, count every row, and average the wrong column.
+    nccom-test's own average is computed from its own columns, so the two
+    disagreeing is that failure, seen from outside.
+
+    Measured against the only real capture in this repo -- the 2026-08-26
+    probe, inf2.xlarge, 11 rows -- the parsed mean is 50.6545 against the
+    tool's 50.6552: the difference is the rows being printed to two
+    decimals. The allowance is that rounding and a little more, so the
+    check is silent on real output and loud on a misread column.
+    """
+    theirs = reported_average(output)
+    if theirs is None or not rows:
+        return None
+    ours = sum(busbw for _, busbw in rows) / len(rows)
+    if abs(ours - theirs) <= 0.01 + 0.001 * theirs:
+        return None
+    return (
+        f"the parsed rows average {ours:.4f} GB/s where nccom-test reports "
+        f"{theirs:.4f} -- the parse is not reading the column nccom-test "
+        "averaged, so this is not its bus bandwidth"
+    )
+
+
+def verify_single_size_was_measured(
+    rows: typing.Sequence[typing.Tuple[int, float]], size: int,
+) -> typing.Optional[str]:
+    """Check a one-size run measured the size it asked for, and only it.
+
+    run_p2p asks for one message size and reports the last row. If
+    nccom-test swept anyway -- a default it applies when -b and -e are not
+    honoured, say -- the last row is whatever size the sweep ended on, and
+    the row would publish it under the pinned `bytes`.
+    """
+    sizes = sorted({row_size for row_size, _ in rows})
+    if sizes == [size]:
+        return None
+    return (
+        f"asked for {size} bytes and nccom-test reported rows at "
+        f"{', '.join(str(s) for s in sizes)} -- the figure is not the "
+        "pinned message size"
+    )
+
+
 def verify_sweep_was_fully_parsed(output: str) -> typing.Optional[str]:
     """Flag a sweep where the parse dropped rows."""
     dropped = unparsed_rows(output)
@@ -197,6 +261,7 @@ def run_all_reduce(problem: typing.Mapping[str, typing.Any],
         "score_method": "nccom-test",
         "analytic_basis": "nccom-test all_reduce busbw, averaged over the sweep",
         "warning": (verify_sweep_was_fully_parsed(output)
+                    or verify_average_matches_nccom(rows, output)
                     or verify_sweep_covers_both_regimes(
                         rows, bytes_min, bytes_max)),
     }
@@ -227,7 +292,11 @@ def run_p2p(problem: typing.Mapping[str, typing.Any],
         "ranks": ranks,
         "score_method": "nccom-test",
         "analytic_basis": "nccom-test sendrecv busbw",
-        "warning": None,
+        # It ran no check at all. The same parse all_reduce is checked
+        # against, and the one thing a single-size run can get wrong.
+        "warning": (verify_sweep_was_fully_parsed(output)
+                    or verify_single_size_was_measured(rows, size)
+                    or verify_average_matches_nccom(rows, output)),
     }
 
 
