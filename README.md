@@ -290,6 +290,13 @@ layout, and the argument that motivated `blocked` turned out to be wrong.
 Select it with `PANTHEON_NEURON_GEMM_TILING=blocked` or
 `problem["tiling"]`, and compare them with `tools/compare_tiling.py`.
 
+Because that variable moves every `tensor_virus`, `int_virus` and
+`pulse_virus` Score by about 2.7x, the row records **which tiling actually
+ran**, under `Measurement.tiling` — not in `Problem`, which is the registry's
+static declaration and would go on saying `coalesced` through a run the
+variable had changed. No report written before 2026-09-24 carries it, so a
+`tensor_virus` figure from an earlier pass has to be taken as the default.
+
 ### What the 2026-09-08 rerun found, on both parts
 
 trn1.2xlarge and inf2.xlarge, same commit, run in parallel. Raw logs in [`data/validation-2026-09-08/`](data/validation-2026-09-08/).
