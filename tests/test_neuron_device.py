@@ -86,6 +86,46 @@ def test_select_rejects_absent_device():
         neuron_device.select(devices, "0,7")
 
 
+@pytest.mark.parametrize("spec", ["foo", "0,foo", "1.5", "0-1", "first"])
+def test_a_spec_that_is_not_a_device_index_is_refused(spec):
+    """It reached int() and left a traceback on the terminal, under exit
+    status 1 -- which is what a failing workload returns, so a caller could
+    not tell a mistyped argument from a bad part."""
+    devices = [NeuronDevice(i, "trn1", "v2", 2, 1, True) for i in range(2)]
+    with pytest.raises(neuron_device.NeuronUnavailable,
+                       match="comma-separated list of whole numbers"):
+        neuron_device.select(devices, spec)
+
+
+@pytest.mark.parametrize("spec", ["", " ", ",", ", ,"])
+def test_a_spec_that_selects_nothing_is_refused(spec):
+    """It selected no device, every workload skipped for want of one, and
+    the run exited 0. Asking whether a part is healthy and being told yes
+    by a run that never touched one is the worst answer available."""
+    devices = [NeuronDevice(0, "trn1", "v2", 2, 1, True)]
+    with pytest.raises(neuron_device.NeuronUnavailable,
+                       match="selects no device"):
+        neuron_device.select(devices, spec)
+
+
+def test_the_refusals_are_the_kind_main_turns_into_an_exit_status():
+    """Both raise what main() already catches, so a bad --device exits 2 --
+    the status for a device problem -- rather than 1, the status for a
+    workload that failed on a part that is really there."""
+    import inspect
+
+    import pantheon_neuron
+    source = inspect.getsource(pantheon_neuron.main)
+    assert "except neuron_device.NeuronUnavailable" in source
+    assert "return 2" in source.split("except neuron_device.NeuronUnavailable")[1]
+
+
+def test_a_valid_spec_is_untouched_by_the_refusals():
+    devices = [NeuronDevice(i, "trn1", "v2", 2, 1, True) for i in range(2)]
+    assert [d.index for d in neuron_device.select(devices, " 0 , 1 ")] == [0, 1]
+    assert [d.index for d in neuron_device.select(devices, "all")] == [0, 1]
+
+
 # -- fields that can legitimately be zero ------------------------------------
 
 def test_device_zero_keeps_its_reported_index():
