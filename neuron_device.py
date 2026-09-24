@@ -282,7 +282,26 @@ def select(devices, spec: str) -> typing.List[NeuronDevice]:
     """Filter discovered devices by an ``--device`` spec ('all' or '0,2')."""
     if spec.strip().lower() == "all":
         return list(devices)
-    wanted = {int(part) for part in spec.split(",") if part.strip()}
+    parts = [part.strip() for part in spec.split(",") if part.strip()]
+    # `--device foo` reached int() and left a traceback on the terminal,
+    # under an exit status of 1 -- which is the status a failing workload
+    # uses, so a caller could not tell a bad argument from a bad part.
+    try:
+        wanted = {int(part) for part in parts}
+    except ValueError:
+        raise NeuronUnavailable(
+            f"--device {spec!r} is not a device index or 'all'; it must be a "
+            "comma-separated list of whole numbers, such as '0' or '0,1'"
+        ) from None
+    # An empty spec selected nothing, and a run with no devices skipped
+    # every workload and exited 0. Asking whether a part is healthy and
+    # being told "yes" by a run that never touched one is the worst
+    # answer this suite can give.
+    if not wanted:
+        raise NeuronUnavailable(
+            f"--device {spec!r} selects no device, so nothing would be "
+            "measured; give a device index, or 'all'"
+        )
     chosen = [device for device in devices if device.index in wanted]
     missing = wanted - {device.index for device in chosen}
     if missing:
