@@ -7,6 +7,7 @@ toolchain and torch-neuron on PyTorch 1.x.
 """
 
 import argparse
+import collections
 import datetime
 import json
 import math
@@ -2129,11 +2130,13 @@ def main(argv=None) -> int:
         # Stopped by hand. The rows already measured are real, and a
         # 40-minute pass interrupted at workload 20 should not lose 19 of
         # them; write what exists, then stop the way an interrupt should.
+        print_summary(results)
         if results and not args.no_report:
             path = write_report(snapshot, results, run_id)
             print(f"[PANTHEON-NEURON] interrupted; partial report: {path}")
         raise
 
+    print_summary(results)
     if not args.no_report:
         path = write_report(snapshot, results, run_id)
         print(f"[PANTHEON-NEURON] report: {path}")
@@ -2170,6 +2173,48 @@ def _harness_error_row(workload, devices, error: BaseException) -> dict:
     }
 
 
+def figure(value) -> str:
+    """A Score at a width a console line can hold.
+
+    The suite spans eleven orders of magnitude -- serving_mix reports 2.48
+    requests/s and quantized_gemm 1.845e13 ops/s -- so one format cannot
+    serve both. Four significant figures either way, which is what the
+    report rounds Scores to.
+    """
+    if not isinstance(value, (int, float)):
+        return "--"
+    return f"{value:.4g}" if abs(value) >= 1e6 else f"{value:.4f}"
+
+
+def print_summary(results) -> None:
+    """The verdict, at the end of a pass that can run for forty minutes.
+
+    There was none. The run printed a line per workload and a path, so
+    answering "did this part pass?" meant scrolling back through twenty-odd
+    rows or opening the JSON -- for a suite whose exit status already knows
+    the answer.
+
+    Failures and skips are named rather than counted, because a count
+    cannot be acted on and the name is what a reader takes to the next
+    step.
+    """
+    if not results:
+        return
+    by_status = collections.Counter(row.get("Status") for row in results)
+    tally = ", ".join(f"{by_status[status]} {status}"
+                      for status in ("PASS", "FAIL", "SKIPPED")
+                      if by_status[status])
+    print(f"[PANTHEON-NEURON] {len(results)} workload(s): {tally}")
+    for row in results:
+        if row.get("Status") == "FAIL":
+            why = (row.get("Detail") or "no detail").split(";")[0].strip()
+            print(f"[PANTHEON-NEURON]   FAIL {row['Test Name']}: {why[:96]}")
+    skipped = [row["Test Name"] for row in results
+               if row.get("Status") == "SKIPPED"]
+    if skipped:
+        print(f"[PANTHEON-NEURON]   skipped: {', '.join(skipped)}")
+
+
 def _run_selection(workloads, reserve_at, devices, args, results) -> None:
     """Measure each workload in turn, appending its row to ``results``.
 
@@ -2194,6 +2239,14 @@ def _run_selection(workloads, reserve_at, devices, args, results) -> None:
         results.append(row)
         detail = f" ({row['Detail']})" if row.get("Detail") else ""
         print(f"[PANTHEON-NEURON]    {row['Status']}{detail}")
+        # The measurement itself. Fourteen print statements and not one of
+        # them showed a Score: a reader watching a forty-minute pass saw
+        # PASS, and a share of peak for the third of the suite that has a
+        # peak, and had to open the JSON for the number they ran the suite
+        # to get. Printed under the status so it reads with it.
+        if isinstance(row.get("Score"), (int, float)):
+            print(f"[PANTHEON-NEURON]    {figure(row['Score'])} "
+                  f"{row.get('Unit') or ''}".rstrip())
         # The share of peak, on the console rather than only in the
         # report. It is the number that decides whether a Score can be
         # quoted against another vendor's, and a reader who never opens
