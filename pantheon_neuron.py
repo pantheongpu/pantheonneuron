@@ -137,9 +137,40 @@ def invocation(args) -> dict:
     }
 
 
+# What a report can carry, as a number a reader can test instead of a date
+# they have to know.
+#
+# Reports had no version, and the shape keeps moving: profiler_active_time_s
+# (#40), Telemetry.ecc_events_observed (#45), Measurement.tiling and the
+# pinned-memory controls (#46) all arrived within four days. Each time, the
+# only way to tell "this report predates the field" from "this kernel did not
+# report it" was the report's date -- the README said as much ("no report
+# written before 2026-09-24 carries it"), and tools/recompute_scores.py
+# guessed the same way. data/baselines.json and data/hardware_runs.json have
+# carried a schema_version from the start; reports are what gets compared
+# across passes, and they did not.
+#
+# Bump it whenever the set of keys a report can carry changes, and say what
+# changed below. tests/test_report_schema.py fingerprints that set and fails
+# when it moves without a bump.
+REPORT_SCHEMA = 1
+REPORT_SCHEMA_CHANGES = {
+    1: ("First versioned report, 2026-09-24. A report with no schema_version "
+        "predates this and may lack any of: Measurement.profiler_active_time_s, "
+        "Measurement.tiling, row_tiles_checked, row_tiles_wrong, "
+        "host_source_pinned, host_landing_pinned, h2d_sources_alternate, "
+        "Telemetry.ecc_events_observed, ecc_events_observed_total. Absent in "
+        "such a report means not recorded, not zero or false."),
+}
+
+
 def write_report(snapshot: dict, results: typing.List[dict], run_id: str) -> str:
     os.makedirs(DATABASE_DIR, exist_ok=True)
-    payload = dict(snapshot)
+    # First, and not overwritable by the snapshot: the version describes the
+    # code that wrote the file, and nothing handed in may claim otherwise.
+    payload = {"schema_version": REPORT_SCHEMA}
+    payload.update((key, value) for key, value in snapshot.items()
+                   if key != "schema_version")
     payload["run_id"] = run_id
     payload["completed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     payload["test_results"] = results

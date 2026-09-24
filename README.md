@@ -305,8 +305,8 @@ Because that variable moves every `tensor_virus`, `int_virus` and
 `pulse_virus` Score by about 2.7x, the row records **which tiling actually
 ran**, under `Measurement.tiling` — not in `Problem`, which is the registry's
 static declaration and would go on saying `coalesced` through a run the
-variable had changed. No report written before 2026-09-24 carries it, so a
-`tensor_virus` figure from an earlier pass has to be taken as the default.
+variable had changed. A report with no `schema_version` predates the field,
+so a `tensor_virus` figure from one has to be taken as the default tiling.
 
 ### What the 2026-09-08 rerun found, on both parts
 
@@ -1229,6 +1229,13 @@ is produced on a rented instance whose identifiers belong to somebody's
 account. One paste away from public is the same requirement as public, so
 reports must never contain host identifiers — no hostname, no IP, no EC2
 instance ID, no availability zone.
+
+Every report carries a `schema_version`. The keys a report can hold keep
+growing, and before the field existed the only way to tell "this report
+predates `Measurement.tiling`" from "this kernel did not report it" was the
+report's date. `pantheon_neuron.REPORT_SCHEMA_CHANGES` says what each
+version added; a report with no `schema_version` predates all of it, and a
+key absent from one means not recorded, not zero.
 
 `neuron-monitor` volunteers several of these in every sample, so telemetry is
 scrubbed at ingest rather than at write time. `tests/test_report_privacy.py`

@@ -72,7 +72,11 @@ def _first_core(series):
     return {}
 
 
-def recompute(workload, row):
+class MissingProvenance(Exception):
+    """A versioned report lacks a key its schema says the row carries."""
+
+
+def recompute(workload, row, schema=None):
     """(value, how) recomputed from this row, or (None, why not)."""
     source = workload.score_source
     if workload.name in CANNOT_RECOMPUTE:
@@ -116,9 +120,17 @@ def recompute(workload, row):
         if bytes_moved is None:
             return None, f"the row carries no {counter}"
         if window is None:
-            return None, ("the row carries no profiler_active_time_s: written "
-                          "before that key existed, so the window the Score "
-                          "divided by is not in it")
+            # A report's schema_version says whether the key could be there
+            # at all. Before it existed this was a guess from the date.
+            if schema is None:
+                return None, ("the row carries no profiler_active_time_s: the "
+                              "report has no schema_version, so it predates "
+                              "that key and the window the Score divided by "
+                              "is not in it")
+            raise MissingProvenance(
+                f"schema {schema} report, and the row carries no "
+                "profiler_active_time_s: the kernel stopped publishing the "
+                "window its Score divided by")
         return bytes_moved / window / 1e9, f"{counter} / profiler_active_time_s / 1e9"
 
     # Everything else divides a counted quantity by a measured window.
@@ -152,7 +164,11 @@ def check(report_paths):
                 continue
             if not isinstance(score, (int, float)) or score <= 0:
                 continue
-            got, how = recompute(workload, row)
+            defect = False
+            try:
+                got, how = recompute(workload, row, report.get("schema_version"))
+            except MissingProvenance as error:
+                got, how, defect = None, str(error), True
             ratio = got / score if got else None
             results.append({
                 "report": os.path.basename(path),
@@ -162,6 +178,10 @@ def check(report_paths):
                 "ratio": ratio,
                 "how": how,
                 "agrees": ratio is not None and abs(ratio - 1.0) <= TOLERANCE,
+                # Not recomputable because the row broke its schema's
+                # promise, which is a failure -- as against not recomputable
+                # because the report predates the promise, which is not.
+                "defect": defect,
             })
     return results
 
@@ -177,7 +197,9 @@ def main(argv) -> int:
     seen, disagreed, unrecomputable = {}, [], {}
     for row in results:
         seen.setdefault(row["workload"], row)
-        if row["ratio"] is None:
+        if row["defect"]:
+            disagreed.append(row)
+        elif row["ratio"] is None:
             unrecomputable.setdefault(row["workload"], row["how"])
         elif not row["agrees"]:
             disagreed.append(row)
@@ -196,6 +218,9 @@ def main(argv) -> int:
     if disagreed:
         print(f"\nDISAGREED ({len(disagreed)}): a Score its own row does not reproduce")
         for row in disagreed:
+            if row["defect"]:
+                print(f"  {row['workload']:26} {row['how']} in {row['report']}")
+                continue
             print(f"  {row['workload']:26} {row['score']:.4f} against "
                   f"{row['recomputed']:.4f} ({row['ratio']:.4f}) in {row['report']}")
         return 1
