@@ -112,10 +112,9 @@ $PY -c "import neuronxcc, torch; print('neuronxcc', neuronxcc.__version__, '| to
 # how omni_virus shipped a NameError that only its first real run could have
 # found. A workload absent from this list is a workload nobody is checking.
 #
-# The two collectives are absent because they cannot run: they need 2+
-# devices and trn1.32xlarge needs 128 vCPUs against a granted 64. They skip
-# themselves at runtime, so including them would print a skip rather than
-# tell us anything.
+# The two collectives are not in this list: they must span every chip rather
+# than be pinned to one, so they run in their own section below, and only on
+# a part with two or more devices.
 #
 # Each name is timed out and failures are recorded rather than fatal: a
 # workload that fails is a result, and it must not cost the run every
@@ -138,11 +137,50 @@ ORCHESTRATED=${ORCHESTRATED:-"
 # ceiling, not a budget: a workload that hits it is telling us something.
 WORKLOAD_TIMEOUT=${WORKLOAD_TIMEOUT:-2400}
 
+# Which device the single-chip workloads run on. On a one-chip part "0" and
+# "all" are the same selection. On a multi-chip part they are not: with
+# every chip selected, memory_read_agg and memory_write_agg (cores: all)
+# spawn a worker per core across all of them and report the whole
+# instance's bandwidth under the name the reference dataset uses for one
+# chip -- six times it on inf2.24xlarge -- and the monitor samples devices
+# the workload never touched. Pinning to device 0 keeps every row
+# comparable with data/publication-2026-09-21, whatever part this runs on.
+DEVICE=${DEVICE:-0}
+
+# How many Neuron devices this part has, from the same sysfs tree the
+# "part" section reads. The collectives need two or more.
+DEVICE_COUNT=$(find /sys/devices/virtual/neuron_device -maxdepth 1 -name 'neuron[0-9]*' 2>/dev/null | wc -l)
+
 for workload in $ORCHESTRATED; do
   hr "orchestrated: $workload (pinned problem)"
   run_one "$workload" "$WORKLOAD_TIMEOUT" \
-      --test "$workload" --duration "$DURATION" --repeat "$REPEAT"
+      --test "$workload" --duration "$DURATION" --repeat "$REPEAT" \
+      --device "$DEVICE"
 done
+
+# ---------------------------------------------------------------------------
+# The collectives, across every chip. Not in the list above because they are
+# the one pair that must NOT be pinned to one device: min_devices is 2, and
+# the thing they measure is the link between chips. On a one-chip part they
+# would only print a skip, so they are not attempted there -- and the pass
+# says so, rather than leaving their absence to be noticed.
+#
+# Until 2026-09-25 no part this account could launch had two chips (Trn
+# quota 64 vCPU against trn1.32xlarge's 128). The Inf quota then reached
+# 96, which is one inf2.24xlarge: six Inferentia2 chips.
+# ---------------------------------------------------------------------------
+COLLECTIVES=${COLLECTIVES:-"all_reduce p2p_thrasher"}
+if [ "$DEVICE_COUNT" -ge 2 ]; then
+  for workload in $COLLECTIVES; do
+    hr "collective: $workload across all $DEVICE_COUNT devices"
+    run_one "$workload" "$WORKLOAD_TIMEOUT" \
+        --test "$workload" --duration "$DURATION" --repeat "$REPEAT" \
+        --device all
+  done
+else
+  hr "collectives"
+  echo "[VALIDATE] skipped: $DEVICE_COUNT Neuron device(s) here; $COLLECTIVES need 2 or more"
+fi
 
 # ---------------------------------------------------------------------------
 # The NEFF search, against a cache that is no longer empty.
@@ -160,7 +198,8 @@ echo "NEFFs now on this machine:"
 find "$PANTHEON_NEURON_WORKDIR" /tmp/no-user/neuroncc_compile_workdir \
      /var/tmp/neuron-compile-cache -name '*.neff' 2>/dev/null | wc -l
 run_one memory_read-warm-cache "$WORKLOAD_TIMEOUT" \
-    --test memory_read --duration "$DURATION" --repeat "$REPEAT"
+    --test memory_read --duration "$DURATION" --repeat "$REPEAT" \
+    --device "$DEVICE"
 
 # ---------------------------------------------------------------------------
 # Reduced-shape kernel runs. Direct calls, so no Score is produced and none
