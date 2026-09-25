@@ -47,6 +47,22 @@ hosts within 0.1% and all 22 within 0.5% (`allocation_fragmentation` 0.46%,
 | `allocation_fragmentation` | 6.9% | A ~17 s count-bound window over the host's allocator path. One host ran two slow repeats (2019, 2126) against 2390-2470 elsewhere. Quote with its spread, never from one host. |
 | `pcie_bandwidth` | 2.5% at 300 s, 8.6% at 3600 s | Host-side staging copies. Not comparable with GPUs anyway (#27). |
 
+**The 3600 s spread is one host, in both directions.** Each host's hour-long
+row against its own 300 s row, from the per-direction figures the rows carry:
+
+| Host | h2d 300 s | h2d 3600 s | change | d2h 300 s | d2h 3600 s | change |
+|---|--:|--:|--:|--:|--:|--:|
+| trn1-a | 6.196 | 5.136 | **−17.1%** | 1.160 | 0.906 | **−21.9%** |
+| trn1-b | 5.924 | 5.939 | +0.3% | 1.133 | 1.110 | −2.0% |
+| trn1-c | 6.236 | 5.935 | −4.8% | 1.143 | 1.105 | −3.3% |
+
+Both directions fell together on trn1-a, so it is not the d2h staging
+cliff and not one direction of the link: something on that host slowed
+every host-to-device copy. Whether it slowed *during* the hour or was slow
+from the start cannot be told from these rows -- each leg is one 1800 s
+figure. Since 2026-09-24 each leg also records its rate in ten equal
+slices (`windows_gbps`, `last_over_first`), so the next long run can.
+
 ## What compares with NVIDIA, and what does not
 
 A comparison joins Neuron and GPU rows on (Test Name, Unit). This pass was

@@ -153,7 +153,7 @@ def invocation(args) -> dict:
 # Bump it whenever the set of keys a report can carry changes, and say what
 # changed below. tests/test_report_schema.py fingerprints that set and fails
 # when it moves without a bump.
-REPORT_SCHEMA = 2
+REPORT_SCHEMA = 3
 REPORT_SCHEMA_CHANGES = {
     1: ("First versioned report, 2026-09-24. A report with no schema_version "
         "predates this and may lack any of: Measurement.profiler_active_time_s, "
@@ -166,6 +166,11 @@ REPORT_SCHEMA_CHANGES = {
         "(graph_replay), prefills, decode_requests and decode_steps "
         "(serving_mix), steps (kv_cache_churn, llm_decode). A schema 1 report does not "
         "carry them."),
+    3: ("2026-09-24. Each pcie_bandwidth leg in Measurement.per_direction "
+        "gains windows_gbps, window_passes and last_over_first: its rate in "
+        "ten equal slices of the leg, so a long run shows whether the link "
+        "slowed during it. Nested, so the top-level fingerprint is unchanged "
+        "from schema 2; the shape is not."),
 }
 
 

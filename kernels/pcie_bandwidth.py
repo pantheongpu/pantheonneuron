@@ -102,6 +102,71 @@ import time
 import typing
 
 
+# How many equal slices of each leg's time get their own rate. Ten, because
+# the question it answers is "did this leg slow down part-way through", and a
+# first-tenth-against-last-tenth comparison is readable at a glance while
+# still leaving a 300 s run's d2h leg (150 s, about one pass a second) some
+# fifteen passes per window.
+WINDOWS = 10
+
+
+class WindowedRate:
+    """Bytes over time for one leg, split into equal slices of its budget.
+
+    A leg reported one number: bytes over its whole duration. On 2026-09-22
+    trn1-a's hour-long run read 17.9% under its own 300 s figure, with *both*
+    directions down (h2d 6.196 -> 5.136, d2h 1.160 -> 0.906) where the other
+    two hosts moved 0.3% and 4.8% at most. That rules out one direction and
+    the d2h staging cliff -- it is the host -- but a single figure per
+    1800 s leg cannot say whether the host slowed during the hour or was
+    slow from the start, and those have different causes. This records the
+    rate in each tenth of the leg so the next long run can say.
+
+    Pure bookkeeping, fed timestamps by the loop, so it is testable without
+    a device. A pass is charged to the window in which it finished.
+    """
+
+    def __init__(self, started: float, budget: float, windows: int = WINDOWS):
+        self.started = started
+        self.width = budget / windows if budget > 0 else 0.0
+        self.windows = windows
+        self.bytes = [0] * windows
+        self.passes = [0] * windows
+        self.ended = [0.0] * windows
+
+    def record(self, now: float, moved: int) -> None:
+        if self.width <= 0:
+            index = 0
+        else:
+            index = min(int((now - self.started) / self.width), self.windows - 1)
+        self.bytes[index] += moved
+        self.passes[index] += 1
+        self.ended[index] = now
+
+    def summary(self) -> typing.Dict[str, typing.Any]:
+        """Per-window GB/s, the passes behind each, and last over first."""
+        rates = []
+        for index in range(self.windows):
+            start = self.started + index * self.width
+            # A window's rate is its bytes over its own slice of time. The
+            # last pass can overrun the budget, so the final window runs to
+            # when that pass finished rather than to the nominal edge.
+            end = (self.ended[index] if index == self.windows - 1
+                   and self.ended[index] > start + self.width
+                   else start + self.width)
+            span = end - start
+            rates.append(round(self.bytes[index] / span / 1e9, 4)
+                         if span > 0 and self.passes[index] else None)
+        filled = [rate for rate in rates if rate]
+        return {
+            "windows_gbps": rates,
+            "window_passes": list(self.passes),
+            # Under 1 means the leg ended slower than it began.
+            "last_over_first": (round(filled[-1] / filled[0], 4)
+                                if len(filled) >= 2 else None),
+        }
+
+
 def transfer_plan(problem: typing.Mapping[str, typing.Any]) -> typing.Dict[str, typing.Any]:
     """Elements and directions for the pinned transfer size."""
     total_bytes = int(problem["bytes"])
@@ -185,6 +250,7 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
             len(plan["directions"]) - 1 - plan["directions"].index(direction)
         )
         leg_started = time.perf_counter()
+        over_time = WindowedRate(leg_started, min(share, deadline) - leg_started)
         while time.perf_counter() < min(share, deadline):
             if direction == "h2d":
                 # SUSPECT: this reads as "copy into the existing buffer, so
@@ -210,12 +276,14 @@ def run(problem: typing.Mapping[str, typing.Any], duration: int) -> dict:
                 landing.copy_(resident)
             moved += plan["bytes"]
             passes += 1
+            over_time.record(time.perf_counter(), plan["bytes"])
         leg_elapsed = time.perf_counter() - leg_started
         per_direction[direction] = {
             "bytes": moved,
             "elapsed_s": leg_elapsed,
             "gbps": moved / leg_elapsed / 1e9 if leg_elapsed else 0.0,
             "passes": passes,
+            **over_time.summary(),
         }
 
     elapsed = time.perf_counter() - started
