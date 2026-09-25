@@ -41,14 +41,19 @@ def orchestrated_names() -> set:
 # with the reason. Kept as data so a name here is a decision rather than an
 # omission -- and so the day the quota lands, the test tells us to add them.
 UNREACHABLE = {
-    "all_reduce": "needs 2+ devices; trn1.32xlarge is 128 vCPU against a granted 64",
-    "p2p_thrasher": "needs 2+ devices; same quota",
     "baseline_metrics": "idle telemetry, no load -- runs as part of any --test all",
 }
 
 
+def collective_names() -> set:
+    """The workloads the pass runs across every chip, not pinned to one."""
+    match = re.search(r'COLLECTIVES=\$\{COLLECTIVES:-"(.*?)"\}', _script(), re.S)
+    assert match, "could not find the COLLECTIVES list in validate_hardware.sh"
+    return set(match.group(1).split())
+
+
 def test_every_reachable_workload_is_validated():
-    listed = orchestrated_names()
+    listed = orchestrated_names() | collective_names()
     expected = {w.name for w in registry.WORKLOADS} - set(UNREACHABLE)
     missing = expected - listed
     assert not missing, (
@@ -75,15 +80,14 @@ def test_unreachable_names_are_still_real_workloads(name):
     assert name in {w.name for w in registry.WORKLOADS}
 
 
-def test_the_collectives_are_excluded_only_while_the_quota_blocks_them():
-    """Both need min_devices > 1. If that ever changes, so must this list."""
-    by_name = {w.name for w in registry.WORKLOADS}
-    for name in ("all_reduce", "p2p_thrasher"):
-        workload = next(w for w in registry.WORKLOADS if w.name == name)
-        assert workload.min_devices > 1, (
-            f"{name} no longer needs multiple devices -- it should be validated"
-        )
-    assert "all_reduce" in by_name
+def test_the_multi_device_workloads_are_exactly_the_collectives_section():
+    """Derived from the registry: every workload needing two or more devices
+    runs across all of them, and nothing that runs on one chip is there --
+    where it would be measured across every chip and stop comparing with
+    the single-chip reference."""
+    multi = {w.name for w in registry.WORKLOADS if w.min_devices > 1}
+    assert collective_names() == multi
+    assert not (orchestrated_names() & multi)
 
 
 def test_failures_do_not_end_the_run():
