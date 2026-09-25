@@ -35,6 +35,7 @@ import recompute_scores  # noqa: E402
 FINGERPRINTS = {
     1: 'e21f505394e676a3',
     2: 'fb761ffce3b384a8',
+    3: 'fb761ffce3b384a8',  # nested change; see REPORT_SCHEMA_CHANGES[3]
 }
 
 _DEVICES = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
