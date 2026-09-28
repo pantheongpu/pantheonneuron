@@ -1,0 +1,340 @@
+Full validation pass on inf2.xlarge, 2026-09-26 (UTC), merged main at 17b295f.
+
+tools/validate_hardware.sh with DURATION=30 REPEAT=1, the first hardware run of
+everything merged since 2026-09-22: run_one (#49), the console Score and tally
+(#47), the device pinning and collectives section (#55), and the report
+fields of schema 3 (#40, #45, #46, #52, #53, #54). Instance identifiers are
+redacted; the reports themselves were checked with tools/recompute_scores.py
+(every recomputable row reproduces, memory_read and memory_write included)
+and tools/check_against_reference.py (pulse_virus and graph_replay below the
+300 s reference at 30 s; see hardware_runs.json).
+
+=== B started 03:47:37
+17b295f validate_hardware.sh: pin single-chip runs to one device; run the collectives across all (#55)
+
+========== part ==========
+instance-type: inf2.xlarge
+instance-id: <redacted>
++--------+--------+----------+--------+--------------+----------+------+
+| NEURON | NEURON |  NEURON  | NEURON |     PCI      |   CPU    | NUMA |
+| DEVICE | CORES  | CORE IDS | MEMORY |     BDF      | AFFINITY | NODE |
++--------+--------+----------+--------+--------------+----------+------+
+| 0      | 2      | 0-1      | 32 GB  | 0000:00:1f.0 | 0-3      | -1   |
++--------+--------+----------+--------+--------------+----------+------+
+NDv3
+Inferentia2
+neuronxcc 2.23.6484.0+3b612583 | torch 2.8.0+cu128
+
+========== orchestrated: memory_read (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    272.8552 GB/s
+[PANTHEON-NEURON]    61.98% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_035212.json
+[VALIDATE] full output: ~/results/B-logs/memory_read.log
+
+========== orchestrated: memory_write (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> memory_write
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    274.3716 GB/s
+[PANTHEON-NEURON]    62.32% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040124.json
+[VALIDATE] full output: ~/results/B-logs/memory_write.log
+
+========== orchestrated: pcie_bandwidth (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> pcie_bandwidth
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    2.1649 GB/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040240.json
+[VALIDATE] full output: ~/results/B-logs/pcie_bandwidth.log
+
+========== orchestrated: allocation_fragmentation (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> allocation_fragmentation
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    2069.4511 allocation-events/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040326.json
+[VALIDATE] full output: ~/results/B-logs/allocation_fragmentation.log
+
+========== orchestrated: tensor_virus (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> tensor_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    56.5857 TFLOPS
+[PANTHEON-NEURON]    59.56% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040413.json
+[VALIDATE] full output: ~/results/B-logs/tensor_virus.log
+
+========== orchestrated: int_virus (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> int_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    56.7576 TOPS
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040532.json
+[VALIDATE] full output: ~/results/B-logs/int_virus.log
+
+========== orchestrated: pulse_virus (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> pulse_virus
+[PANTHEON-NEURON]    PASS (the declared Score is 0.9244 of the kernel's own figure, against 1.000 expected -- one of the two is measuring something other than it should)
+[PANTHEON-NEURON]    24.6971 TFLOPS
+[PANTHEON-NEURON]    51.99% of 47.5 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040644.json
+[VALIDATE] full output: ~/results/B-logs/pulse_virus.log
+
+========== orchestrated: transformer_virus (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> transformer_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    44.4214 TFLOPS
+[PANTHEON-NEURON]    46.76% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040726.json
+[VALIDATE] full output: ~/results/B-logs/transformer_virus.log
+
+========== orchestrated: omni_virus (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> omni_virus
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    42.4294 TFLOPS
+[PANTHEON-NEURON]    44.66% of 95.0 TFLOPS across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_040922.json
+[VALIDATE] full output: ~/results/B-logs/omni_virus.log
+
+========== orchestrated: graph_replay (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> graph_replay
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    2055.8036 graph-steps/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_041115.json
+[VALIDATE] full output: ~/results/B-logs/graph_replay.log
+
+========== orchestrated: llm_prefill (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> llm_prefill
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    3193.9077 prompt-tokens/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_041200.json
+[VALIDATE] full output: ~/results/B-logs/llm_prefill.log
+
+========== orchestrated: llm_decode (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> llm_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    17.5091 tokens/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_041427.json
+[VALIDATE] full output: ~/results/B-logs/llm_decode.log
+
+========== orchestrated: kv_cache_churn (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> kv_cache_churn
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    95826.7809 cache-updates/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_041753.json
+[VALIDATE] full output: ~/results/B-logs/kv_cache_churn.log
+
+========== orchestrated: fused_attention (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> fused_attention
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    5942.7517 attention-tiles/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_041926.json
+[VALIDATE] full output: ~/results/B-logs/fused_attention.log
+
+========== orchestrated: quantized_gemm (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> quantized_gemm
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    1.444e+13 quantized-ops/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_042023.json
+[VALIDATE] full output: ~/results/B-logs/quantized_gemm.log
+
+========== orchestrated: moe_router (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> moe_router
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    243193.7817 routed-tokens/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_042129.json
+[VALIDATE] full output: ~/results/B-logs/moe_router.log
+
+========== orchestrated: speculative_decode (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> speculative_decode
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    73.8462 verified-tokens/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_042235.json
+[VALIDATE] full output: ~/results/B-logs/speculative_decode.log
+
+========== orchestrated: serving_mix (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> serving_mix
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    2.2229 requests/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_042533.json
+[VALIDATE] full output: ~/results/B-logs/serving_mix.log
+
+========== orchestrated: rag_embedding (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> rag_embedding
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    766.6272 embedding-vectors/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_042923.json
+[VALIDATE] full output: ~/results/B-logs/rag_embedding.log
+
+========== orchestrated: vision_encoder (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> vision_encoder
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    54514.9060 image-tiles/s
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_043034.json
+[VALIDATE] full output: ~/results/B-logs/vision_encoder.log
+
+========== orchestrated: transformer_train_step (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> transformer_train_step
+[PANTHEON-NEURON]    SKIPPED (device 0 (inf2) lacks: training)
+[PANTHEON-NEURON] 1 workload(s): 1 SKIPPED
+[PANTHEON-NEURON]   skipped: transformer_train_step
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_043314.json
+[VALIDATE] full output: ~/results/B-logs/transformer_train_step.log
+
+========== orchestrated: memory_read_agg (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] -> memory_read_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    541.0312 GB/s
+[PANTHEON-NEURON]    61.45% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_043321.json
+[VALIDATE] full output: ~/results/B-logs/memory_read_agg.log
+
+========== orchestrated: memory_write_agg (pinned problem) ==========
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] -> memory_write_agg
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    548.9169 GB/s
+[PANTHEON-NEURON]    62.34% of 880.5 GB/s across 2 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_044821.json
+[VALIDATE] full output: ~/results/B-logs/memory_write_agg.log
+
+========== collectives ==========
+[VALIDATE] skipped: 1 Neuron device(s) here; all_reduce p2p_thrasher need 2 or more
+
+========== NEFF search against a warm compile cache ==========
+NEFFs now on this machine:
+77
+[PANTHEON-NEURON] 1 device(s) [inf2], 1 workload(s)
+[PANTHEON-NEURON] cores 0 to the workload, 1 reserved for neuron-profile
+[PANTHEON-NEURON] -> memory_read
+[PANTHEON-NEURON]    PASS
+[PANTHEON-NEURON]    272.9712 GB/s
+[PANTHEON-NEURON]    62.0% of 440.25 GB/s across 1 of 2 core(s)
+[PANTHEON-NEURON] 1 workload(s): 1 PASS
+[PANTHEON-NEURON] report: ~/pantheonneuron/database/pantheon_neuron_report_20260926_044917.json
+[VALIDATE] full output: ~/results/B-logs/memory_read-warm-cache.log
+
+========== reduced shape: the GEMM family (2048^3) ==========
+tensor_virus: OK
+  analytic          20.31 TFLOPS
+  passes            35475
+  product verified  1.0
+  warning           None
+int_virus: OK
+  analytic          20.49 TOPS
+  passes            35777
+  product verified  1.0
+  warning           None
+pulse_virus: OK
+  analytic          10.45 TFLOPS
+  loaded-only       20.88 TFLOPS
+  pulses            15
+  passes            18246
+  product verified  1.0
+  warning           None
+
+========== NEFF selection: how many candidates the search needed ==========
+  memory_read    via neuron-profile
+    candidate 2 of 3, coverage 1.0, graph model.neff
+  memory_write   via neuron-profile
+    candidate 3 of 4, coverage 1.0, graph model.neff
+  memory_read    via neuron-profile
+    candidate 2 of 3, coverage 1.0, graph model.neff
+  (a run that needed a late candidate means mtime ranking is weak;
+   raise PANTHEON_NEURON_NEFF_CANDIDATES if a search reports exhaustion)
+
+========== summary: which Score sources fired ==========
+  allocation_fragmentation   PASS          2069.4511 allocation-events/s via workload
+  fused_attention            PASS          5942.7517 attention-tiles/s via workload
+  graph_replay               PASS          2055.8036 graph-steps/s  via neuron-monitor
+  int_virus                  PASS            56.7576 TOPS           via neuron-monitor
+  kv_cache_churn             PASS         95826.7809 cache-updates/s via workload
+  llm_decode                 PASS            17.5091 tokens/s       via workload
+  llm_prefill                PASS          3193.9077 prompt-tokens/s via workload
+  memory_read                PASS           272.9712 GB/s           via neuron-profile
+  memory_read_agg            PASS           541.0312 GB/s           via workload
+  memory_write               PASS           274.3716 GB/s           via neuron-profile
+  memory_write_agg           PASS           548.9169 GB/s           via workload
+  moe_router                 PASS        243193.7817 routed-tokens/s via workload
+  omni_virus                 PASS            42.4294 TFLOPS         via neuron-monitor
+  pcie_bandwidth             PASS             2.1649 GB/s           via workload
+  pulse_virus                PASS            24.6971 TFLOPS         via neuron-monitor
+    the declared Score is 0.9244 of the kernel's own figure, against 1.000 expected -- one of the two is measuring something other than it should
+  quantized_gemm             PASS     14438207290435.713 quantized-ops/s via workload
+  rag_embedding              PASS           766.6272 embedding-vectors/s via workload
+  serving_mix                PASS             2.2229 requests/s     via workload
+  speculative_decode         PASS            73.8462 verified-tokens/s via workload
+  tensor_virus               PASS            56.5857 TFLOPS         via neuron-monitor
+  transformer_train_step     SKIPPED               - train-steps/s  via None
+    device 0 (inf2) lacks: training
+  transformer_virus          PASS            44.4214 TFLOPS         via neuron-monitor
+  vision_encoder             PASS          54514.906 image-tiles/s  via workload
+
+  Workloads run: 23  PASS 22  FAIL 0  SKIP 1
+  Scores from a declared hardware source: 8 of 23
+
+========== done ==========
+DRIVER EXIT 04:52:22

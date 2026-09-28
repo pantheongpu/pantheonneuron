@@ -100,3 +100,40 @@ def test_the_loop_feeds_it_and_the_leg_publishes_it():
     assert "over_time = WindowedRate (" in code
     assert "over_time . record (" in code
     assert "** over_time . summary ( )" in code
+
+
+# -- what the first hardware run showed ---------------------------------------
+#
+# inf2.xlarge 2026-09-26, --duration 30: each leg had 15 s, so each window
+# 1.5 s. d2h windows held 1 or 2 passes (rates 0.727 or 1.454, nothing
+# between) and the leg published last_over_first 1.33 -- a "33% faster" that
+# was one window catching a second pass.
+
+def _replay(passes_per_window, seconds_per_pass_budget=1.5):
+    leg = WindowedRate(0.0, seconds_per_pass_budget * len(passes_per_window))
+    for index, count in enumerate(passes_per_window):
+        for n in range(count):
+            leg.record(index * seconds_per_pass_budget
+                       + (n + 1) * seconds_per_pass_budget / (count + 1), GIB)
+    return leg.summary()
+
+
+def test_the_real_30s_d2h_leg_reports_no_trend():
+    summary = _replay([1, 1, 1, 1, 2, 1, 1, 1, 2, 2])
+    assert summary["last_over_first"] is None
+    # The raw windows stay: they are what shows the reader why.
+    assert summary["window_passes"] == [1, 1, 1, 1, 2, 1, 1, 1, 2, 2]
+
+
+def test_the_real_30s_h2d_leg_reports_no_trend_either():
+    assert _replay([4, 5, 5, 5, 5, 5, 4, 5, 5, 6])["last_over_first"] is None
+
+
+def test_enough_passes_at_both_ends_gives_a_trend():
+    summary = _replay([pcie_bandwidth.MIN_PASSES_FOR_TREND] * 9 + [12])
+    assert summary["last_over_first"] is not None
+
+
+def test_one_thin_end_is_enough_to_withhold_it():
+    edges = [3] + [pcie_bandwidth.MIN_PASSES_FOR_TREND] * 9
+    assert _replay(edges)["last_over_first"] is None

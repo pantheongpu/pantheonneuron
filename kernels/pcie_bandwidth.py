@@ -109,6 +109,17 @@ import typing
 # fifteen passes per window.
 WINDOWS = 10
 
+# How many passes each end window needs before last_over_first is reported.
+# A window's rate is whole passes over its span, so one pass more or less
+# moves it by 1/n. On inf2.xlarge 2026-09-26, a 30 s run gave d2h windows of
+# 1-2 passes (0.727 or 1.454 GB/s, nothing between) and h2d windows of 4-6,
+# and the leg reported last_over_first 1.33 -- a "33% faster" that was one
+# window catching a second pass. Ten keeps that step under 10%, below the
+# 17-22% drop the ratio exists to catch on trn1-a. An hour-long run's d2h
+# windows hold about 150 passes; a 30 s run's cannot reach ten, and says so
+# by reporting None rather than a number.
+MIN_PASSES_FOR_TREND = 10
+
 
 class WindowedRate:
     """Bytes over time for one leg, split into equal slices of its budget.
@@ -157,13 +168,18 @@ class WindowedRate:
             span = end - start
             rates.append(round(self.bytes[index] / span / 1e9, 4)
                          if span > 0 and self.passes[index] else None)
-        filled = [rate for rate in rates if rate]
+        filled = [(rate, passes) for rate, passes in zip(rates, self.passes) if rate]
+        trend = None
+        if (len(filled) >= 2 and filled[0][1] >= MIN_PASSES_FOR_TREND
+                and filled[-1][1] >= MIN_PASSES_FOR_TREND):
+            trend = round(filled[-1][0] / filled[0][0], 4)
         return {
             "windows_gbps": rates,
             "window_passes": list(self.passes),
-            # Under 1 means the leg ended slower than it began.
-            "last_over_first": (round(filled[-1] / filled[0], 4)
-                                if len(filled) >= 2 else None),
+            # Under 1 means the leg ended slower than it began. None when
+            # either end window held too few passes to be a rate rather
+            # than a pass count; see MIN_PASSES_FOR_TREND.
+            "last_over_first": trend,
         }
 
 
