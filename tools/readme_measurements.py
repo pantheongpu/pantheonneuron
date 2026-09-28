@@ -96,6 +96,17 @@ def drift(text=None):
         want = expected_cell(name, rows)
         if measured != want:
             found.append((name, "Measured", measured, want))
+        # The figure must describe the run the workload does today. Checked
+        # nowhere until 2026-09-27: serving_mix's figure came from a pass
+        # pinned `batch: 8`, the registry now pins prefill_batch and
+        # decode_batch, and this passed. It is the same run -- declared in
+        # registry.EQUIVALENT_PINS -- but that has to be known, not assumed.
+        reference_pin = (rows.get(name) or {}).get("problem")
+        if reference_pin is not None and want != "—":
+            current = registry.resolve(name)[0].problem
+            if not registry.same_pin(name, reference_pin, current):
+                found.append((name, "Problem", json.dumps(reference_pin, sort_keys=True),
+                              json.dumps(dict(current or {}), sort_keys=True)))
         methods = (rows.get(name) or {}).get("score_methods") or []
         if len(methods) == 1 and methods[0] not in ("None", None):
             shown = source.strip("`")

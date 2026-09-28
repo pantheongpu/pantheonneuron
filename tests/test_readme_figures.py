@@ -78,3 +78,18 @@ def test_display(value, shown):
 def test_rewriting_is_idempotent():
     text = figures.read_readme()
     assert figures.rewrite(text) == text
+
+
+# -- the figure has to describe today's pin ----------------------------------
+
+def test_a_figure_from_a_different_pin_is_caught(monkeypatch):
+    """serving_mix's figure came from a pass pinned `batch: 8`; the registry
+    now pins prefill_batch and decode_batch. It passed because nothing
+    compared the pins. Undeclare the equivalence and it must fail."""
+    monkeypatch.setattr(figures.registry, "EQUIVALENT_PINS", {})
+    found = [(name, column) for name, column, *_ in figures.drift()]
+    assert ("serving_mix", "Problem") in found
+
+
+def test_with_the_equivalence_declared_it_passes():
+    assert not [f for f in figures.drift() if f[1] == "Problem"]

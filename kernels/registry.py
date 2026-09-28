@@ -653,6 +653,41 @@ NOT_COMPARABLE_WITH_GPU = {
 #
 # Declared rather than left in a comment because two textual checks in this
 # repo have passed on their own comments, and a third ended in `or True`.
+# Earlier pins that describe the same run as today's, with the change that
+# renamed them and the evidence it changed nothing.
+#
+# A comparison refuses two Scores whose pinned Problems differ, because a
+# different pin is usually a different quantity. But a declaration can be
+# corrected without the run changing -- a key renamed to say what it sets --
+# and then a refusal compares the wording, not the work. Declared here, with
+# the proof, so every tool that compares pins reads one answer instead of
+# each deciding for itself (tools/check_against_reference.py refused
+# serving_mix on 2026-09-26 while tools/readme_measurements.py never looked).
+EQUIVALENT_PINS = {
+    "serving_mix": (
+        {"prefill_ratio": 0.2, "batch": 8, "prompt": 1024, "decode": 256,
+         "hidden": 4096, "layers": 32},
+        "#26 renamed `batch` to `decode_batch` and declared `prefill_batch: 1`: "
+        "`batch` only ever shaped the decode tensor and prefill always ran "
+        "one-wide. Declaration only -- confirmed on trn1.2xlarge 2026-09-22 at "
+        "0.9971 of the same host's figure under the old pin.",
+    ),
+}
+
+
+def same_pin(name: str, first, second) -> bool:
+    """Whether two pinned Problems describe the same run of this workload."""
+    first, second = dict(first or {}), dict(second or {})
+    if first == second:
+        return True
+    workload = _BY_NAME.get(name)
+    current = dict(workload.problem or {}) if workload else None
+    known = [dict(pin) for pin, _why in
+             ([EQUIVALENT_PINS[name]] if name in EQUIVALENT_PINS else [])]
+    family = ([current] if current is not None else []) + known
+    return first in family and second in family
+
+
 SCORE_DEPENDS_ON_PIN = {
     "allocation_fragmentation": (
         "the pinned allocations count bounds the run, and the event rate "
