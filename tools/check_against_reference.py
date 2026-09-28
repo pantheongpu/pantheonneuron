@@ -159,8 +159,11 @@ def compare(row, reference_row):
         return "not comparable", None, (
             f"unit {row.get('Unit')!r} against the reference's "
             f"{reference_row.get('unit')!r}")
-    difference = _problem_difference(row.get("Problem"), reference_row.get("problem"))
-    if difference:
+    # Equal, or two wordings of the same run (registry.EQUIVALENT_PINS).
+    if not registry.same_pin(row.get("Test Name"), row.get("Problem"),
+                             reference_row.get("problem")):
+        difference = _problem_difference(row.get("Problem"),
+                                         reference_row.get("problem"))
         return "not comparable", None, f"a different pinned problem: {difference}"
 
     ratio = row["Score"] / reference_row["median_of_hosts"]

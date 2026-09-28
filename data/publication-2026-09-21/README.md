@@ -159,7 +159,7 @@ Three things the NVIDIA checking turned up:
 
 An earlier summary of this comparison put the NVIDIA parts at "81-98% of
 datasheet" from figures recalled rather than checked. Checked, reads run
-83.5-98.4%; writes run 50.1-96.7%, and the range was only ever right for
+83.6-98.4%; writes run 50.1-96.7%, and the range was only ever right for
 reads.
 
 **Why Trainium1 sits at 62% where the NVIDIA parts reach 84-98%.** The
