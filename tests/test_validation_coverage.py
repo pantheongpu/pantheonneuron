@@ -275,7 +275,18 @@ def test_every_production_function_is_called_from_production_code():
 
     assert sources, "no production modules found -- the sweep is broken"
 
-    code = "".join(sourcecheck.code_only(text) for text in sources.values())
+    # tools/ calls production code -- the checkers that decide whether a
+    # published figure stands (readme_measurements, check_against_reference)
+    # are how registry.same_pin is reached -- so a call from there counts.
+    # Their own functions are not swept: that is a different rule.
+    callers = dict(sources)
+    tools = os.path.join(root, "tools")
+    for name in sorted(os.listdir(tools)):
+        if name.endswith(".py"):
+            with open(os.path.join(tools, name), encoding="utf-8") as handle:
+                callers[os.path.join(tools, name)] = handle.read()
+
+    code = "".join(sourcecheck.code_only(text) for text in callers.values())
 
     unreachable = []
     for path, text in sources.items():
