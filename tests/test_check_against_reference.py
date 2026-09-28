@@ -181,3 +181,24 @@ def test_no_other_committed_row_is_outside_its_band():
                     if r["verdict"] in ("below", "above")]
     assert flagged == [("pantheon_neuron_report_20260922_071327.json",
                         "pcie_bandwidth")]
+
+
+def test_an_equivalent_old_pin_compares():
+    """serving_mix was refused on 2026-09-26 over a renamed key that changed
+    nothing (#26). registry.EQUIVALENT_PINS says so, and the checker reads it."""
+    old_pin = checker.registry.EQUIVALENT_PINS["serving_mix"][0]
+    current = checker.registry.resolve("serving_mix")[0].problem
+    row = {"Test Name": "serving_mix", "Status": "PASS", "Score": 2.48,
+           "Unit": "requests/s", "Duration (s)": 300.0, "Problem": dict(current)}
+    _part, _hosts, results = checker.check(_report([row]))
+    assert results[0]["verdict"] == "ok"
+    assert checker.registry.same_pin("serving_mix", old_pin, current)
+
+
+def test_a_pin_that_really_differs_is_still_refused():
+    current = dict(checker.registry.resolve("serving_mix")[0].problem)
+    row = {"Test Name": "serving_mix", "Status": "PASS", "Score": 2.48,
+           "Unit": "requests/s", "Duration (s)": 300.0,
+           "Problem": dict(current, decode=512)}
+    _part, _hosts, results = checker.check(_report([row]))
+    assert results[0]["verdict"] == "not comparable"
