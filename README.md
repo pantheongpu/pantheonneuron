@@ -36,8 +36,11 @@ counter exists because the other chip had it.
 
 Still unverified, and each for a different reason worth stating:
 
-- **Device-to-device NeuronLink.** `trn1.32xlarge` is the smallest shape with
-  it, at 128 vCPUs against a granted 64. Quota.
+- **Device-to-device NeuronLink.** On Trainium, `trn1.32xlarge` is the
+  smallest shape with it, at 128 vCPUs against a Trn quota still at 64. On
+  Inferentia, the Inf quota reached 96 on 2026-09-25 -- exactly one
+  `inf2.24xlarge`, six chips -- and 44 launch attempts across all four
+  offering zones that day found no capacity. Capacity, now, not quota.
 - **`trn1n`.** Not quota alone: us-east-1 offers no small `trn1n` shape at
   all. The only one is `trn1n.32xlarge`, also 128 vCPUs, so the same request
   that unblocks NeuronLink unblocks this.
@@ -55,8 +58,11 @@ Every workload in the registry now has an implementation: **26 of 26**, and
 **24 of 26 have run on hardware** — `data/hardware_runs.json` records which,
 on which part, and cites the log. The two that have not are `all_reduce` and
 `p2p_thrasher`, and neither is untested so much as unreachable: both need a
-part with 2+ devices, and this account's Trn quota is 64 vCPU against the
-128 the smallest such shape needs.
+part with 2+ devices. The smallest Trainium one needs 128 vCPUs against a
+Trn quota of 64; the smallest Inferentia one, `inf2.24xlarge`, is within the
+Inf quota since 2026-09-25 but had no capacity in any zone that day.
+`tools/validate_hardware.sh` runs both across every chip the moment it is on
+a part with two or more.
 
 The last full passes were **23 PASS, 0 FAIL** on trn1.2xlarge, 2026-09-08
 and 2026-09-10, and **24 PASS, 0 FAIL** (all but the two two-device

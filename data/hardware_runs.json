@@ -321,12 +321,31 @@
           "skipped": [
             "all_reduce", "p2p_thrasher", "transformer_train_step"
           ]
+        },
+        {
+          "date": "2026-09-26",
+          "evidence": "data/validation-2026-09-26/inf2-full-pass.log",
+          "note": "tools/validate_hardware.sh at 17b295f, DURATION=30 REPEAT=1: the first hardware run of everything merged since 2026-09-22. 22 PASS (baseline_metrics not listed), 0 FAIL, transformer_train_step SKIPPED (no training on this part); the collectives section printed its skip on a one-device part and did not run them. Verified on hardware: run_one kept every harness line including the warm-cache search's status (#49); the console printed each Score and the closing tally (#47); every report is schema_version 3 and carries tiling (coalesced), row_tiles 64/0, per_core, replays, prefills, steps, ecc_events_observed (all zero) and pcie's host_source_pinned/host_landing_pinned -- both False, so the bounce-buffer explanation for d2h is still untested; memory_read and memory_write recompute exactly from profiler_active_time_s (#40). Against the 300 s reference, pulse_virus read 15.0% low with its monitor Score at 0.924 of its own kernel over 13 periods (the #38 ratio check fired), and graph_replay 9.4% low with monitor and kernel agreeing (0.997): both short-window effects at 30 s, not part defects. The pcie legs' per-window rates at 30 s were whole-pass counts (d2h 1-2 passes a window) and published last_over_first 1.33 from them; fixed by withholding the trend under ten passes per end window.",
+          "passed": [
+            "allocation_fragmentation", "fused_attention",
+            "graph_replay", "int_virus", "kv_cache_churn", "llm_decode",
+            "llm_prefill", "memory_read", "memory_read_agg",
+            "memory_write", "memory_write_agg", "moe_router",
+            "omni_virus", "pcie_bandwidth", "pulse_virus",
+            "quantized_gemm", "rag_embedding", "serving_mix",
+            "speculative_decode", "tensor_virus", "transformer_virus",
+            "vision_encoder"
+          ],
+          "failed": [],
+          "skipped": [
+            "all_reduce", "p2p_thrasher", "transformer_train_step"
+          ]
         }
       ]
     }
   },
   "never_run_anywhere": {
-    "all_reduce": "Needs 2+ devices for NeuronLink. Skipped on every single-device part probed. Trn quota is 64 vCPU and trn1.32xlarge needs 128, so no multi-device part has been reached. The module's nccom-test invocation has run (inf2.xlarge 2026-09-11, one device, core-to-core): data/validation-2026-09-11/inf2-nccom-invocation.log. That is not a run of this workload.",
-    "p2p_thrasher": "Same: needs 2+ devices for a NeuronLink peer, and the same 64 vCPU Trn quota blocks every multi-device part. The sendrecv invocation ran in the same one-device check; still not a run of this workload."
+    "all_reduce": "Needs 2+ devices for NeuronLink. Skipped on every single-device part probed. Trn quota is still 64 vCPU against trn1.32xlarge's 128. Inf quota reached 96 on 2026-09-25, which is one inf2.24xlarge (six Inferentia2) -- but 44 launch attempts across all four offering AZs that day found no capacity, so no multi-device part has been reached. The module's nccom-test invocation has run (inf2.xlarge 2026-09-11, one device, core-to-core): data/validation-2026-09-11/inf2-nccom-invocation.log. That is not a run of this workload.",
+    "p2p_thrasher": "Same: needs 2+ devices for a NeuronLink peer, and the same blockers: Trn quota for trn1.32xlarge, capacity for inf2.24xlarge. The sendrecv invocation ran in the same one-device check; still not a run of this workload."
   }
 }
