@@ -88,9 +88,110 @@ def test_a_workload_the_reference_never_scored_says_so():
     assert results[0]["verdict"] == "no reference"
 
 
-def test_a_failed_row_is_not_compared():
-    _part, _hosts, results = checker.check(_report([_row(status="FAIL")]))
+def test_a_skipped_row_is_not_applicable_rather_than_failed():
+    """all_reduce needs two devices and one was selected: nothing is wrong
+    with the part, and reporting it as a failure would cry wolf on every
+    single-device run."""
+    row = _row(status="SKIPPED", score=None)
+    _part, _hosts, results = checker.check(_report([row]))
     assert results == []
+
+
+def test_a_pass_with_no_score_has_nothing_to_compare():
+    """baseline_metrics passes and publishes no Score."""
+    _part, _hosts, results = checker.check(_report([_row(score=None)]))
+    assert results == []
+
+
+# -- a row that did not pass is a finding ------------------------------------
+
+def _failed(name="memory_read", detail="core 0 timed out; core 1 timed out",
+            status="FAIL"):
+    return dict(_row(name=name, score=None, status=status), Detail=detail)
+
+
+def test_a_failed_row_is_named_not_skipped():
+    """It used to be skipped. The tool answers "is this part broken?", and a
+    FAILed row has no Score to divide -- which is the case where it is."""
+    _part, _hosts, results = checker.check(_report([_failed()]))
+    assert [r["workload"] for r in results] == ["memory_read"]
+    assert results[0]["verdict"] == "failed"
+    assert results[0]["ratio"] is None
+    assert "FAIL" in results[0]["note"]
+    assert "core 0 timed out" in results[0]["note"]
+    assert "core 1" not in results[0]["note"], "first clause of the Detail only"
+
+
+def test_any_status_other_than_pass_or_skipped_is_a_failure():
+    for status in ("ERROR", "TIMEOUT", None):
+        _part, _hosts, results = checker.check(_report([_failed(status=status)]))
+        assert [r["verdict"] for r in results] == ["failed"], status
+
+
+def test_a_failed_row_with_a_leftover_score_is_still_failed():
+    """A FAIL that also carries a Score is not a measurement of a working
+    part; the Score must not be divided and found healthy."""
+    row = _row(score=273.5, status="FAIL")
+    _part, _hosts, results = checker.check(_report([row]))
+    assert results[0]["verdict"] == "failed"
+
+
+def _write(tmp_path, rows, name="report.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(_report(rows)), encoding="utf-8")
+    return str(path)
+
+
+def test_a_report_where_every_row_failed_exits_nonzero(tmp_path, capsys):
+    """The defect: every row FAILed, the result list was empty, and main
+    printed "every comparable row is within the reference band", exit 0."""
+    path = _write(tmp_path, [_failed("memory_read"), _failed("memory_write"),
+                             _failed("tensor_virus")])
+    assert checker.main([path]) == 1
+    out = capsys.readouterr().out
+    for name in ("memory_read", "memory_write", "tensor_virus"):
+        assert name in out
+    assert "every comparable row is within the reference band" not in out
+    assert "3 row(s)" in out
+
+
+def test_one_failed_row_among_healthy_ones_exits_nonzero(tmp_path, capsys):
+    path = _write(tmp_path, [_row(score=273.5), _failed("memory_write")])
+    assert checker.main([path]) == 1
+    assert "memory_write" in capsys.readouterr().out
+
+
+def test_skipped_and_scoreless_rows_alone_still_exit_zero(tmp_path, capsys):
+    """The control: the old handling stands for rows that are not failures."""
+    path = _write(tmp_path, [_row(score=273.5),
+                             _row(name="all_reduce", status="SKIPPED", score=None),
+                             _row(name="baseline_metrics", score=None)])
+    assert checker.main([path]) == 0
+    assert "every comparable row is within the reference band" in (
+        capsys.readouterr().out)
+
+
+def test_the_old_skip_is_what_made_an_all_failed_report_pass(tmp_path, monkeypatch, capsys):
+    """Mutation check. Put the old filter back -- drop every row that is not
+    a PASS with a numeric Score before checking -- and the same report that
+    exits 1 above exits 0 and claims health. So the all-FAIL report is an
+    input that tells the two behaviours apart, not one both would reject."""
+    path = _write(tmp_path, [_failed("memory_read"), _failed("memory_write")])
+    assert checker.main([path]) == 1, "fixed behaviour"
+    capsys.readouterr()
+
+    real = checker.check
+
+    def old_check(report):
+        kept = [row for row in report["test_results"]
+                if row.get("Status") == "PASS"
+                and isinstance(row.get("Score"), (int, float))]
+        return real(dict(report, test_results=kept))
+
+    monkeypatch.setattr(checker, "check", old_check)
+    assert checker.main([path]) == 0, "the reintroduced defect must pass"
+    assert "every comparable row is within the reference band" in (
+        capsys.readouterr().out)
 
 
 # -- what it catches ---------------------------------------------------------
@@ -149,14 +250,39 @@ def test_the_sweep_compares_only_at_the_pinned_size():
     """Ten rows at seven sizes, all named memory_read or memory_write. Only
     the two that ran the reference's own size are a comparison; the rest
     would join on (Test Name, Unit) and mean something else."""
-    compared, refused = [], []
+    compared, refused, failed = [], [], []
     for _path, report in _committed("sweep"):
         _part, _hosts, results = checker.check(report)
         for result in results:
-            (compared if result["verdict"] == "ok" else refused).append(result)
+            if result["verdict"] == "failed":
+                failed.append(result)
+            else:
+                (compared if result["verdict"] == "ok" else refused).append(result)
     assert {result["verdict"] for result in refused} == {"not comparable"}
     assert len(compared) == 2, "only the pinned size is comparable"
     assert len(refused) > 5
+    # The sweep's own failures (memory_write ran out of device memory at the
+    # largest size) are named, not dropped: as many as the raw reports hold.
+    assert len(failed) == _raw_failures("sweep")
+
+
+def _raw_failures(group):
+    """FAIL rows in the committed reports of one group, read straight from
+    the JSON so the count does not depend on the code under test."""
+    return sum(1 for _path, report in _committed(group)
+               for row in report["test_results"] if row.get("Status") == "FAIL")
+
+
+def test_the_committed_one_hour_failures_are_named():
+    """memory_read_agg and memory_write_agg timed out on all three hosts'
+    3600 s passes. The tool skipped all six, so the one-hour reports read as
+    healthy apart from a single pcie_bandwidth row."""
+    failed = [result["workload"] for _path, report in _committed("3600")
+              for result in checker.check(report)[2]
+              if result["verdict"] == "failed"]
+    assert len(failed) == _raw_failures("3600")
+    assert failed, "the committed one-hour reports hold FAIL rows"
+    assert {"memory_read_agg", "memory_write_agg"} <= set(failed)
 
 
 def test_the_one_hour_pcie_outlier_is_what_this_check_found():

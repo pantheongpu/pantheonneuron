@@ -13,9 +13,20 @@ reference itself shows.
     python tools/check_against_reference.py database/pantheon_neuron_report_*.json
     python tools/check_against_reference.py path/to/reports/
 
-Exit status is 1 when a row falls outside its band, in either direction. A
-Score *above* the reference is not good news here: the largest wrong number
-this suite has ever produced was 14,513 GB/s from a kernel XLA had deleted.
+Exit status is 1 when a row falls outside its band, in either direction, or
+when a row FAILed; 2 when there was nothing to check. A Score *above* the
+reference is not good news here: the largest wrong number this suite has ever
+produced was 14,513 GB/s from a kernel XLA had deleted.
+
+**A row that did not pass is a finding, not something to skip.** This tool
+answers "is this part broken?", and a FAILed row carries no Score to divide --
+the very case where the answer is yes. It used to skip every row whose
+Status was not PASS, so a report in which every row failed printed "every
+comparable row is within the reference band" and exited 0. Such rows are now
+named, with the first clause of the row's own Detail, and counted. Two cases
+keep their old handling because there is nothing wrong to report: a SKIPPED
+row (the part lacks what the workload needs, or too few devices were
+selected) and a PASS row that publishes no Score (baseline_metrics).
 
 **What the band is made of.** Both terms are measured, not chosen:
 
@@ -177,8 +188,29 @@ def compare(row, reference_row):
         f"({band:.1%})" + window)
 
 
+# A row with this Status never ran for a reason that says nothing about the
+# part: it needs two devices and one was selected, or the part lacks a
+# capability. Every other non-PASS Status is a failure to be named.
+NOT_APPLICABLE_STATUS = "SKIPPED"
+
+
+def failure_note(row):
+    """Why a row that did not pass did not, in the row's own words."""
+    detail = str(row.get("Detail") or "no detail").split(";")[0].strip()
+    return f"Status {row.get('Status')!r}: {detail}"[:200]
+
+
+# The verdicts that make the exit status 1: outside the band either way, or a
+# row that did not pass at all.
+OUT_OF_BAND = ("below", "above", "failed")
+
+
 def check(report):
-    """Every scored row of one report, against the reference for its part."""
+    """Every scored row of one report, against the reference for its part.
+
+    A row that did not pass is returned too, as verdict "failed" with no
+    ratio: it has no Score to compare, and that is the finding.
+    """
     part, why_not = part_of(report)
     if part is None:
         return None, why_not, []
@@ -186,9 +218,19 @@ def check(report):
     results = []
     for row in report.get("test_results") or []:
         score = row.get("Score")
-        if row.get("Status") != "PASS" or not isinstance(score, (int, float)):
-            continue
         name = row.get("Test Name")
+        status = row.get("Status")
+        if status == NOT_APPLICABLE_STATUS:
+            continue
+        if status != "PASS":
+            results.append({"workload": name, "score": None,
+                            "unit": row.get("Unit"),
+                            "reference": (rows.get(name) or {}).get("median_of_hosts"),
+                            "verdict": "failed", "ratio": None,
+                            "note": failure_note(row)})
+            continue
+        if not isinstance(score, (int, float)):
+            continue
         verdict, ratio, note = compare(row, rows.get(name))
         results.append({"workload": name, "score": score, "unit": row.get("Unit"),
                         "reference": (rows.get(name) or {}).get("median_of_hosts"),
@@ -198,6 +240,8 @@ def check(report):
 
 def _figure(value):
     """A Score at a width a column can hold; quantized_gemm reports 1.8e13."""
+    if not isinstance(value, (int, float)):
+        return "--"
     return f"{value:.4g}" if abs(value) >= 1e6 else f"{value:.4f}"
 
 
@@ -240,7 +284,7 @@ def main(argv) -> int:
             mark = " " if result["verdict"] == "ok" else "!"
             print(f" {mark}{result['workload']:26} {_figure(result['score']):>14} "
                   f"{shown:>14} {ratio:>8}  {result['note'][:78]}")
-            if result["verdict"] in ("below", "above"):
+            if result["verdict"] in OUT_OF_BAND:
                 failed += 1
         print()
 
@@ -248,7 +292,7 @@ def main(argv) -> int:
         print("no report carried devices with a published reference")
         return 2
     if failed:
-        print(f"{failed} row(s) outside the reference band.")
+        print(f"{failed} row(s) outside the reference band or failed.")
         return 1
     print("every comparable row is within the reference band.")
     return 0

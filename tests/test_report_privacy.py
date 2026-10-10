@@ -223,10 +223,42 @@ _IDENTIFIER_PATTERNS = (
 # .log is included. The validation evidence is all .log files -- 37 of them,
 # committed to a public repo -- and the scan once covered .md, .txt and .json
 # only, so none had ever been checked. One carried a real availability zone.
-_TEXT_SUFFIXES = (".md", ".txt", ".json", ".log")
+#
+# Source is included for the same reason. .py, .sh and .yml were outside the
+# scan, and tests/test_real_hardware_schema.py held a real instance id, subnet
+# id, AMI id and availability-zone id from a rented host, and
+# tests/test_report_privacy.py a real public IP, for as long as the guard has
+# existed: the file that asserts "no identifier is committed" was itself the
+# place one was committed.
+_TEXT_SUFFIXES = (".md", ".txt", ".json", ".log",
+                  ".py", ".sh", ".yml", ".yaml", ".toml", ".ini")
+
+# The deliberately synthetic values that fixtures need in order to exercise
+# the scrubber and this scan's own patterns. Per file and per exact match, so
+# an allowance for one fixture excuses neither another file nor another value
+# in the same file. Every entry must still occur in its file
+# (test_every_allowed_fixture_value_is_still_there), so the list cannot
+# outlive the fixture it excuses.
+#
+# None of these is a real host: i-0123456789abcdef0 counts up the hex digits,
+# the AMI and subnet ids are the same digits under their own prefix, the
+# addresses are RFC 5737 documentation addresses (192.0.2.0/24) or private
+# ranges, and i-ffff... is the mock monitor's marker.
+_SYNTHETIC_FIXTURES = {
+    "neuron_monitor.py": {"i-fffffffffffffffff"},
+    "tests/test_real_hardware_schema.py": {
+        "i-0123456789abcdef0", "ami-0123456789abcdef0",
+        "subnet-0123456789abcdef0", "us-east-1d",
+    },
+    "tests/test_report_privacy.py": {
+        "i-0123456789abcdef0", "us-east-1d", "ip-10-0-0-1",
+        "@192.0.2.25", "ready at 192.0.2.25", "ip_address: 10.0.4.17",
+        "ip-172-31-5-9", "ec2-192-0-2-25",
+    },
+}
 
 
-def _committed_text_files():
+def _committed_text_files(root=REPO_ROOT):
     """Every text file committed to the repository.
 
     This walked `data/` and `docs/` alone, which left the file a reader of a
@@ -236,12 +268,23 @@ def _committed_text_files():
     is what went stale.
     """
     listed = subprocess.run(
-        ["git", "-C", REPO_ROOT, "ls-files", "-z"],
+        ["git", "-C", root, "ls-files", "-z"],
         capture_output=True, text=True, check=True)
-    found = [os.path.join(REPO_ROOT, name)
+    found = [os.path.join(root, name)
              for name in listed.stdout.split("\0")
              if name.endswith(_TEXT_SUFFIXES)]
     return sorted(found)
+
+
+def _first_identifier(text, relpath):
+    """(label, match) for the first host identifier in ``text`` that
+    ``relpath``'s synthetic-fixture allowance does not excuse, else None."""
+    allowed = _SYNTHETIC_FIXTURES.get(relpath.replace(os.sep, "/"), ())
+    for pattern, label in _IDENTIFIER_PATTERNS:
+        for match in re.finditer(pattern, text):
+            if match.group(0) not in allowed:
+                return label, match.group(0)
+    return None
 
 
 @pytest.mark.parametrize("path", _committed_text_files())
@@ -255,12 +298,11 @@ def test_committed_data_carries_no_identifiers(path):
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
 
-    for pattern, label in _IDENTIFIER_PATTERNS:
-        match = re.search(pattern, text)
-        assert match is None, (
-            f"{os.path.relpath(path, REPO_ROOT)} contains a real {label}: "
-            f"{match.group(0)!r} — redact it"
-        )
+    found = _first_identifier(text, os.path.relpath(path, REPO_ROOT))
+    assert found is None, (
+        f"{os.path.relpath(path, REPO_ROOT)} contains a real {found[0]}: "
+        f"{found[1]!r} — redact it"
+    )
 
 
 def test_the_measurement_field_carries_no_paths(monkeypatch):
@@ -428,11 +470,11 @@ def test_the_committed_scan_reaches_the_repository_root():
 
 
 @pytest.mark.parametrize("leak", [
-    "ssh ubuntu@98.92.72.25 'neuron-ls'",
-    "ready at 98.92.72.25",
+    "ssh ubuntu@192.0.2.25 'neuron-ls'",
+    "ready at 192.0.2.25",
     "ip_address: 10.0.4.17",
     "hostname ip-172-31-5-9.ec2.internal",
-    "ec2-98-92-72-25.compute-1.amazonaws.com",
+    "ec2-192-0-2-25.compute-1.amazonaws.com",
 ])
 def test_an_ip_in_the_forms_this_workflow_emits_is_caught(leak):
     labels = [label for pattern, label in _IDENTIFIER_PATTERNS
@@ -459,3 +501,73 @@ def test_a_report_value_carrying_a_zone_is_caught():
     report = {"test_results": [{"Detail": "capture failed on us-east-1d host"}]}
     with pytest.raises(AssertionError, match="availability zone"):
         _report_is_clean(report, "planted")
+
+
+# -- the source scan ------------------------------------------------------------
+
+def test_the_committed_scan_reaches_source_files():
+    """.py, .sh and .yml sat outside the scan, so a real instance id in a
+    test fixture was committed to a public repository and never flagged.
+    Reach is asserted, as it is for .log, so the suffix list cannot shrink
+    back."""
+    scanned = _committed_text_files()
+    for suffix in (".py", ".sh", ".yml"):
+        found = [path for path in scanned if path.endswith(suffix)]
+        assert found, f"no {suffix} file is scanned"
+    assert os.path.join(REPO_ROOT, "tests", "test_real_hardware_schema.py") in scanned
+    assert os.path.join(REPO_ROOT, "neuron_monitor.py") in scanned
+
+
+def test_a_real_looking_id_planted_in_a_python_file_is_caught(tmp_path):
+    """The mutation check: reintroduce the defect and the scan must fail.
+
+    Builds a throwaway repository holding a .py file with an instance id of
+    the shape that was committed, lists it through the same
+    ``_committed_text_files`` the scan uses, and runs the scan's own finder
+    over what it lists. With the old suffix list the file is never listed and
+    this fails, which is the defect.
+
+    The id is assembled at run time so this file does not itself contain a
+    real-looking one.
+    """
+    planted = "i-" + "0a1b2c3d4e5f60718"
+    (tmp_path / "fixture.py").write_text(f'INSTANCE = "{planted}"\n',
+                                         encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "fixture.py"], check=True)
+
+    listed = _committed_text_files(str(tmp_path))
+    assert listed == [str(tmp_path / "fixture.py")], (
+        "a .py file is not scanned, so a planted id would go unnoticed")
+    text = pathlib.Path(listed[0]).read_text(encoding="utf-8")
+    assert _first_identifier(text, "fixture.py") == ("EC2 instance id", planted)
+
+
+@pytest.mark.parametrize("suffix", [".py", ".sh", ".yml"])
+def test_every_source_suffix_is_listed_for_scanning(tmp_path, suffix):
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / f"planted{suffix}").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    assert _committed_text_files(str(tmp_path)) == [
+        str(tmp_path / f"planted{suffix}")]
+
+
+def test_a_synthetic_allowance_is_per_file_and_per_value():
+    """The allowlist must stay narrow: excusing a fixture value in its own
+    file must not excuse it anywhere else, nor excuse a different id there."""
+    value = "i-0123456789abcdef0"
+    schema = "tests/test_real_hardware_schema.py"
+    assert _first_identifier(f'x = "{value}"', schema) is None
+    assert _first_identifier(f'x = "{value}"', "tests/test_other.py") is not None
+    assert _first_identifier(f'x = "{value}"', "pantheon_neuron.py") is not None
+    other = "i-" + "0a1b2c3d4e5f60718"
+    assert _first_identifier(f'x = "{other}"', schema) == (
+        "EC2 instance id", other)
+
+
+def test_every_allowed_fixture_value_is_still_there():
+    """An allowance for a value that left its file is a hole with a label."""
+    for relpath, values in _SYNTHETIC_FIXTURES.items():
+        text = pathlib.Path(REPO_ROOT, relpath).read_text(encoding="utf-8")
+        for value in sorted(values):
+            assert value in text, f"{relpath} no longer holds {value!r}"

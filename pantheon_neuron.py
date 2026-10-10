@@ -852,7 +852,8 @@ def run_workload(workload, devices, duration: int, monitor_period: float,
             # agree more closely than the Score can resolve.
             quantised = quantised_agreement(
                 row["Repeats"],
-                score_resolution(workload, _LAST_RUN.get(workload.name) or {}))
+                score_resolution(workload, _LAST_RUN.get(workload.name) or {}),
+                cv=unrounded_cv(scores))
             if quantised:
                 row["Detail"] = "; ".join(
                     filter(None, [row.get("Detail"), quantised]))
@@ -1314,7 +1315,8 @@ def score_resolution(workload, result) -> typing.Optional[float]:
     return 1.0 / count
 
 
-def quantised_agreement(spread, resolution) -> typing.Optional[str]:
+def quantised_agreement(spread, resolution,
+                        cv=None) -> typing.Optional[str]:
     """Say so when repeats agree more closely than the Score can resolve.
 
     ``serving_mix`` reported cv 0.0001 over three repeats at DURATION=60 --
@@ -1331,10 +1333,21 @@ def quantised_agreement(spread, resolution) -> typing.Optional[str]:
     ``UNSTABLE_CV`` catches a Score that disagrees with itself. This catches
     the opposite and less obvious failure: one that cannot disagree with
     itself, which is not the same as one that does not.
+
+    **Pass the unrounded ``cv``.** The published ``spread["cv"]`` is rounded
+    to four places, and the resolution of a count over a long run is far
+    finer than that: a true cv of 3.5e-5 rounds to 0.0, which is below any
+    resolution, so the row was published as "repeats agree to cv 0 ... within
+    one completed unit" when the repeats differed by 40 times the unit
+    (``llm_prefill`` and ``vision_encoder`` in the 2026-09-21 data, whose
+    resolution is 8.7e-7). The test is made against ``cv`` when given and
+    against the published figure only when not, for callers that hold nothing
+    else.
     """
     if not spread or resolution is None or resolution <= 0:
         return None
-    cv = spread.get("cv")
+    if cv is None:
+        cv = spread.get("cv")
     if cv is None or cv >= resolution:
         return None
     return (
@@ -1358,6 +1371,19 @@ def quantised_agreement(spread, resolution) -> typing.Optional[str]:
 UNSTABLE_CV = 0.10
 
 
+def unrounded_cv(scores) -> typing.Optional[float]:
+    """The coefficient of variation of ``scores`` as measured, or None.
+
+    None when there are fewer than two scores or the mean is zero. The
+    published ``Repeats.cv`` is this rounded to four places, which is right
+    for a reader and wrong for any test against a finer threshold.
+    """
+    if len(scores) < 2:
+        return None
+    mean = statistics.fmean(scores)
+    return statistics.stdev(scores) / mean if mean else None
+
+
 def _spread(scores, attempted: int) -> dict:
     """What the repeats actually did, so a Score can be judged."""
     summary = {"attempted": attempted, "scored": len(scores)}
@@ -1367,12 +1393,14 @@ def _spread(scores, attempted: int) -> dict:
     summary["max"] = round(max(scores), 4)
     summary["median"] = round(statistics.median(scores), 4)
     if len(scores) > 1:
-        mean = statistics.fmean(scores)
         deviation = statistics.stdev(scores)
         summary["stdev"] = round(deviation, 4)
         # Relative, because these Scores span GB/s and tokens/s and an
         # absolute threshold would mean something different for each.
-        summary["cv"] = round(deviation / mean, 4) if mean else None
+        # Rounded for publication only: the checks that compare it against a
+        # resolution use unrounded_cv, because 3.5e-5 publishes as 0.0.
+        cv = unrounded_cv(scores)
+        summary["cv"] = round(cv, 4) if cv is not None else None
         summary["trend"] = _trend(scores)
     return summary
 

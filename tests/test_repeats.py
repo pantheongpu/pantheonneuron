@@ -352,6 +352,117 @@ def test_counts_one_unit_apart_fire_it_without_claiming_they_were_equal():
     assert "same integer" not in message
 
 
+# The published cv is rounded to four places; a count over a long run resolves
+# far finer than that. llm_prefill on trn1-a (2026-09-21) published "repeats
+# agree to cv 0 ... within one completed unit" with a resolution of 8.7e-7 and
+# repeats whose true cv was 3.5e-5, forty times the unit. cv was rounded to
+# 0.0 before being compared, and 0.0 is below every resolution.
+TRUE_CV = 3.5e-5
+RESOLUTION = 8.7e-7
+# stdev / mean is exactly TRUE_CV for these three: mean 100, stdev 100 * TRUE_CV.
+ROUNDED_AWAY = [100.0, 100.0 + 100 * TRUE_CV, 100.0 - 100 * TRUE_CV]
+
+
+def test_the_fixture_has_the_cv_that_rounds_to_zero():
+    """The inputs below mean something only if rounding really erases them."""
+    spread = pantheon_neuron._spread(ROUNDED_AWAY, attempted=3)
+    assert pantheon_neuron.unrounded_cv(ROUNDED_AWAY) == pytest.approx(TRUE_CV)
+    assert spread["cv"] == 0.0, "published cv is rounded to four places"
+    assert spread["cv"] < RESOLUTION < TRUE_CV
+
+
+def test_a_cv_that_only_rounds_below_the_resolution_is_not_quantisation():
+    """The exact case: true cv 3.5e-5 against resolution 8.7e-7."""
+    spread = pantheon_neuron._spread(ROUNDED_AWAY, attempted=3)
+    assert pantheon_neuron.quantised_agreement(
+        spread, RESOLUTION, cv=pantheon_neuron.unrounded_cv(ROUNDED_AWAY)) is None
+
+
+def test_the_published_cv_alone_is_what_made_the_false_claim():
+    """Mutation check. Without the unrounded cv the check falls back to the
+    published figure, which is 0.0, and publishes exactly the sentence the
+    committed rows carry. So the fixture above separates the two behaviours:
+    reintroduce the rounding and the test before this one fails."""
+    spread = pantheon_neuron._spread(ROUNDED_AWAY, attempted=3)
+    message = pantheon_neuron.quantised_agreement(spread, RESOLUTION)
+    assert message is not None
+    assert "repeats agree to cv 0 " in message
+    assert "within one completed unit" in message
+
+
+def test_repeats_that_really_agree_to_the_resolution_still_fire_and_say_the_true_cv():
+    scores = [100.0, 100.00001, 99.99999]
+    true_cv = pantheon_neuron.unrounded_cv(scores)
+    assert true_cv < RESOLUTION
+    spread = pantheon_neuron._spread(scores, attempted=3)
+    message = pantheon_neuron.quantised_agreement(spread, RESOLUTION, cv=true_cv)
+    assert message is not None
+    assert f"cv {true_cv:.4g} " in message, "the figure is the measured one"
+    assert "cv 0 " not in message
+
+
+def test_identical_repeats_have_a_cv_of_zero_and_still_fire():
+    assert pantheon_neuron.unrounded_cv([5.0, 5.0, 5.0]) == 0.0
+    assert pantheon_neuron.quantised_agreement(
+        pantheon_neuron._spread([5.0, 5.0, 5.0], attempted=3), 0.01,
+        cv=0.0) is not None
+
+
+def test_the_unrounded_cv_has_no_value_where_the_published_one_has_none():
+    assert pantheon_neuron.unrounded_cv([42.0]) is None
+    assert pantheon_neuron.unrounded_cv([]) is None
+    assert pantheon_neuron.unrounded_cv([0.0, 0.0]) is None
+
+
+def test_the_published_cv_is_still_the_rounded_one():
+    """The report schema and every consumer read four places; only the
+    comparison moved."""
+    scores = [100.0, 110.0, 120.0]
+    assert pantheon_neuron._spread(scores, attempted=3)["cv"] == round(
+        pantheon_neuron.unrounded_cv(scores), 4)
+
+
+def _quantised_row(monkeypatch, scores):
+    monkeypatch.setenv("PANTHEON_NEURON_MOCK", "1")
+    _scripted(monkeypatch, scores, [{"from": n} for n, _ in enumerate(scores)])
+    monkeypatch.setattr(pantheon_neuron, "score_resolution",
+                        lambda workload, result: RESOLUTION)
+    try:
+        return pantheon_neuron.run_workload(
+            _workload(), MOCK, DURATION, 0.01, repeat=len(scores))
+    finally:
+        monkeypatch.delenv("PANTHEON_NEURON_MOCK", raising=False)
+
+
+def test_run_workload_does_not_claim_quantisation_for_a_cv_that_rounds_to_zero(monkeypatch):
+    """Through the real call site, which is what passes the cv in. Dropping
+    the cv= argument there restores the false claim, and this fails."""
+    row = _quantised_row(monkeypatch, ROUNDED_AWAY)
+    assert row["Repeats"]["cv"] == 0.0
+    assert "repeats agree" not in (row["Detail"] or "")
+
+
+def test_run_workload_still_flags_repeats_inside_the_resolution(monkeypatch):
+    row = _quantised_row(monkeypatch, [100.0, 100.00001, 99.99999])
+    assert "repeats agree to cv" in row["Detail"]
+    assert "cv 0 " not in row["Detail"]
+
+
+def test_the_call_site_passes_the_unrounded_cv():
+    """Source check, through the comment filter: the one call that decides
+    what a row publishes must hand the check the unrounded figure, and the
+    published figure must be derived from it rather than computed twice."""
+    import sourcecheck
+
+    code = sourcecheck.flat_function_code(pantheon_neuron.run_workload)
+    start = code.index("quantised_agreement (")
+    assert "cv = unrounded_cv ( scores )" in code[start:start + 300]
+
+    spread = sourcecheck.flat_function_code(pantheon_neuron._spread)
+    assert "cv = unrounded_cv ( scores )" in spread
+    assert "round ( cv , 4 )" in spread
+
+
 def test_a_continuous_score_is_never_accused():
     """No resolution declared means the counter is not an integer count."""
     assert pantheon_neuron.quantised_agreement({"cv": 0.0001}, None) is None
