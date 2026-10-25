@@ -251,7 +251,10 @@ _SYNTHETIC_FIXTURES = {
         "subnet-0123456789abcdef0", "us-east-1d",
     },
     "tests/test_report_privacy.py": {
-        "i-0123456789abcdef0", "us-east-1d", "ip-10-0-0-1",
+        # The mock monitor's marker, named here in the table above, so this file holds it too.
+        "i-fffffffffffffffff",
+        "i-0123456789abcdef0", "ami-0123456789abcdef0", "subnet-0123456789abcdef0",
+        "us-east-1d", "ip-10-0-0-1",
         "@192.0.2.25", "ready at 192.0.2.25", "ip_address: 10.0.4.17",
         "ip-172-31-5-9", "ec2-192-0-2-25",
     },
