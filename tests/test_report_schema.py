@@ -35,7 +35,10 @@ import recompute_scores  # noqa: E402
 FINGERPRINTS = {
     1: 'e21f505394e676a3',
     2: 'fb761ffce3b384a8',
-    3: 'fb761ffce3b384a8',  # nested change; see REPORT_SCHEMA_CHANGES[3]
+    # 1 and 2 were recorded over top-level key sets only. 3 was re-recorded
+    # on 2026-09-27 when the fingerprint began reading nested fields
+    # (_nested_shape): same report shape, wider view of it.
+    3: '265dd2745733f8a7',
 }
 
 _DEVICES = [NeuronDevice(0, "trn1", "v2", 2, 32 * 1024**3, True)]
@@ -73,12 +76,76 @@ def _report(tmp_path, monkeypatch):
         return json.load(handle)
 
 
+def _paths(value, prefix=""):
+    """Every key path in a nested dict, lists of dicts looked into once."""
+    found = []
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            found.append(path)
+            found += _paths(inner, path)
+    elif isinstance(value, list) and value and isinstance(value[0], dict):
+        found += _paths(value[0], prefix + "[]")
+    return found
+
+
+def _pcie_leg_keys():
+    """A pcie leg: the literal the loop builds, plus WindowedRate's summary.
+
+    The loop runs only on a device, so the literal is read from the source --
+    the dict assigned into per_direction -- and the summary is called."""
+    import ast
+    import inspect
+    from kernels import pcie_bandwidth
+    tree = ast.parse(inspect.getsource(pcie_bandwidth.run).lstrip())
+    literal = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Subscript)
+                and getattr(node.targets[0].value, "id", "") == "per_direction"
+                and isinstance(node.value, ast.Dict)):
+            literal = [key.value for key in node.value.keys
+                       if isinstance(key, ast.Constant)]
+    summary = pcie_bandwidth.WindowedRate(0.0, 10.0).summary()
+    return sorted(set(literal) | set(summary))
+
+
+def _per_core_keys():
+    from kernels import memory_agg
+    worker = {"core": 0, "analytic_gbps": 1.0, "bytes_requested": 1,
+              "elapsed_s": 1.0, "read_verified_ratio": 1.0}
+    summary = memory_agg.summarise([worker, dict(worker, core=1)], [], 1.0, 2, "read")
+    return sorted(summary["per_core"][0])
+
+
+def _nested_shape():
+    """The keys *inside* the fields a report carries.
+
+    The fingerprint saw only top-level key sets, so #54 -- which added three
+    keys inside each pcie leg of per_direction -- moved the report's shape
+    without moving the fingerprint, and the schema bump it needed happened
+    only because it was remembered. These are the nested structures a
+    report publishes, each produced by the code that produces it."""
+    workload = registry.resolve("tensor_virus")[0]
+    sample = {"system_data": {"neuron_hw_counters": {"neuron_devices": [
+        {"neuron_device_index": 0, **dict.fromkeys(_ECC, 0)}]}}}
+    monitor = neuron_monitor.NeuronMonitor()
+    monitor._samples = [copy.deepcopy(sample), copy.deepcopy(sample)]
+    return {
+        "telemetry": sorted(_paths(monitor.aggregate())),
+        "pcie_leg": _pcie_leg_keys(),
+        "per_core": _per_core_keys(),
+        "repeats": sorted(_paths(pantheon_neuron._spread([1.0, 1.1, 1.2], 3))),
+        "peak": sorted(_paths(pantheon_neuron.peak_share(workload, _DEVICES) or {})),
+    }
+
+
 def fingerprint(monkeypatch, tmp_path):
     shape = {
         "row": _row_keys(monkeypatch),
         "measurement": sorted(pantheon_neuron._PROVENANCE_KEYS),
         "telemetry": _monitor_keys(),
         "report": sorted(_report(tmp_path, monkeypatch)),
+        "nested": _nested_shape(),
     }
     return hashlib.sha256(
         json.dumps(shape, sort_keys=True).encode()).hexdigest()[:16]
@@ -93,6 +160,21 @@ def test_the_shape_has_not_moved_without_a_bump(monkeypatch, tmp_path):
         f"{schema} recorded {recorded}). Bump pantheon_neuron.REPORT_SCHEMA, "
         "say what changed in REPORT_SCHEMA_CHANGES, and add "
         f"{{{schema + 1}: {current!r}}} to FINGERPRINTS here.")
+
+
+@pytest.mark.parametrize("part", ["telemetry", "pcie_leg", "per_core",
+                                  "repeats", "peak"])
+def test_every_nested_probe_finds_keys(part):
+    """A probe that returns nothing makes its part of the fingerprint vacuous,
+    and the fingerprint would then pass every change to it."""
+    assert _nested_shape()[part]
+
+
+def test_the_pcie_leg_probe_sees_what_54_added():
+    keys = _pcie_leg_keys()
+    for key in ("bytes", "elapsed_s", "gbps", "passes",
+                "windows_gbps", "window_passes", "last_over_first"):
+        assert key in keys
 
 
 def test_every_schema_says_what_it_changed():

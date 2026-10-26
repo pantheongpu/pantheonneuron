@@ -15,18 +15,30 @@ import pathlib
 import neuron_monitor
 
 
+# The identifiers below are synthetic: they have the shapes neuron-monitor
+# emits (an i- id, an ami- id, a subnet- id, a zone and a zone id) and
+# identify no host. The values first committed here were a real rented
+# instance's, which the privacy scan could not see because it did not read
+# .py files; they remain in git history, from an instance long terminated.
+# The scrubber removes by key, so what it is tested on is the shape.
+INSTANCE_ID = "i-0123456789abcdef0"
+AMI_ID = "ami-0123456789abcdef0"
+SUBNET_ID = "subnet-0123456789abcdef0"
+ZONE = "us-east-1d"
+ZONE_ID = "use1-az9"
+
 # Trimmed to one runtime and the fields the aggregator reads, but the
 # structure and key names are exactly as emitted.
 REAL_SAMPLE = {
     "instance_info": {
-        "ami_id": "ami-0fd664467b3cf8dfd",
-        "instance_availability_zone": "us-east-1d",
-        "instance_availability_zone_id": "use1-az6",
-        "instance_id": "i-0dd3c47dea213fd30",
+        "ami_id": AMI_ID,
+        "instance_availability_zone": ZONE,
+        "instance_availability_zone_id": ZONE_ID,
+        "instance_id": INSTANCE_ID,
         "instance_name": "",
         "instance_region": "us-east-1",
         "instance_type": "inf2.xlarge",
-        "subnet_id": "subnet-07d275b496c32dd6f",
+        "subnet_id": SUBNET_ID,
     },
     "neuron_hardware_info": {
         "logical_neuroncore_config": 1,
@@ -115,11 +127,11 @@ def _aggregate(sample):
 def test_real_sample_is_fully_scrubbed():
     blob = json.dumps(neuron_monitor._scrub(REAL_SAMPLE))
     for identifier in (
-        "i-0dd3c47dea213fd30",
-        "ami-0fd664467b3cf8dfd",
-        "subnet-07d275b496c32dd6f",
-        "us-east-1d",
-        "use1-az6",
+        INSTANCE_ID,
+        AMI_ID,
+        SUBNET_ID,
+        ZONE,
+        ZONE_ID,
         "inf2.xlarge",
     ):
         assert identifier not in blob, f"leaked {identifier}"
