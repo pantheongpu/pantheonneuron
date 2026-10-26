@@ -39,7 +39,12 @@ jobs:
   test:
     # GitHub-hosted runners: the suite is fully exercisable without Neuron
     # hardware via the mock backend.
-    runs-on: ubuntu-latest
+    #
+    # Pinned, not ubuntu-latest: that image became Ubuntu 26.04, which has no
+    # Python 3.9, so `setup-python` failed ("version '3.9' ... was not found for
+    # Ubuntu 26.04") before a single test ran and the required `test (3.9)` check
+    # could never pass. 24.04 still has every version in the matrix.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       # Don't cancel 3.12 because 3.9 failed -- knowing whether a break is

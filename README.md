@@ -1297,6 +1297,13 @@ at 5%. Both terms come from the 2026-09-21 pass rather than from taste: 21 of
 use as a tolerance, and the 5% floor also covers the largest duration effect
 the dataset can measure.
 
+A row that FAILed has no Score to divide, and is named rather than skipped:
+the exit status is 1 for it, as it is for a row outside its band, and 2 when
+there was nothing to check. (It was skipped until 2026-10-10, so a report in
+which every row failed read "every comparable row is within the reference
+band" and exited 0.) A SKIPPED row, and a PASS that publishes no Score, are
+not failures and are still left out.
+
 It refuses where a ratio would mislead: the part, the unit and the pinned
 `Problem` must all match, so the memory-size sweep compares at the pinned
 size and is declined at the other six.
