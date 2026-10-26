@@ -191,8 +191,17 @@ def measure(name, kernel, source, moved_bytes, seconds, verify):
 
 
 def main() -> int:
-    gib = int(os.environ.get("GIB", "2"))
-    seconds = int(os.environ.get("SECONDS", "20"))
+    # Parsed before anything else, and refused in a sentence: a typo here
+    # was a traceback on a rented instance.
+    try:
+        gib = int(os.environ.get("GIB", "2"))
+        seconds = int(os.environ.get("SECONDS", "20"))
+    except ValueError as error:
+        print(f"dma_levers: GIB and SECONDS are whole numbers ({error})")
+        return 2
+    if gib < 1 or seconds < 1:
+        print(f"dma_levers: GIB and SECONDS must be at least 1, got {gib} and {seconds}")
+        return 2
     try:
         nki_backend.require_toolchain()
     except Exception as error:

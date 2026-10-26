@@ -49,13 +49,48 @@ def sizes_from(text):
         part = part.strip()
         if not part:
             continue
-        mib = int(part)
+        try:
+            mib = int(part)
+        except ValueError:
+            raise ValueError(
+                f"sizes are whole MiB separated by commas, got {part!r}") from None
         if mib < 1:
             raise ValueError(f"sizes are whole MiB of at least 1, got {part!r}")
         sizes.append(mib * MIB)
     if not sizes:
         raise ValueError("no sizes given")
     return sizes
+
+
+def pinned_bytes():
+    """The size the registry pins, which the summary reports against.
+
+    It was a literal, `1 << 30`, in the summary: correct while the pin is
+    1 GiB, and silently wrong the day it moves -- the one row the sweep
+    exists to set beside its neighbours would stop being reported, with
+    nothing to say it had.
+    """
+    return int(registry.resolve("pcie_bandwidth")[0].problem["bytes"])
+
+
+def summary(rows):
+    """The lines printed under the table: where each direction peaks, and
+    the pinned size's figures if the sweep covered it."""
+    if not rows:
+        return []
+    best_h2d = max(rows, key=lambda r: r["h2d_gbps"])
+    best_d2h = max(rows, key=lambda r: r["d2h_gbps"])
+    lines = [f"h2d peaks at {best_h2d['bytes'] // MIB} MiB "
+             f"({best_h2d['h2d_gbps']} GB/s); d2h peaks at "
+             f"{best_d2h['bytes'] // MIB} MiB ({best_d2h['d2h_gbps']} GB/s)."]
+    pin = pinned_bytes()
+    pinned = next((r for r in rows if r["bytes"] == pin), None)
+    if pinned:
+        lines.append(f"The pinned {pin // MIB} MiB reads h2d {pinned['h2d_gbps']}, "
+                     f"d2h {pinned['d2h_gbps']}, combined {pinned['combined_gbps']} GB/s.")
+    else:
+        lines.append(f"The pinned {pin // MIB} MiB was not in this sweep.")
+    return lines
 
 
 def swept_problem(total_bytes):
@@ -87,10 +122,17 @@ def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--one":
         return run_one(int(sys.argv[2]), int(sys.argv[3]))
 
-    sizes = sizes_from(os.environ.get("SIZES_MIB", DEFAULT_SIZES_MIB))
-    seconds = int(os.environ.get("SECONDS", "10"))
-    for total in sizes:
-        swept_problem(total)                   # refuse the whole sweep up front
+    # A mistyped setting is a message and exit 2, not a traceback: this runs
+    # on a rented instance, and the person reading it is deciding whether to
+    # keep paying for it.
+    try:
+        sizes = sizes_from(os.environ.get("SIZES_MIB", DEFAULT_SIZES_MIB))
+        seconds = int(os.environ.get("SECONDS", "10"))
+        for total in sizes:
+            swept_problem(total)               # refuse the whole sweep up front
+    except ValueError as error:
+        print(f"pcie_size_sweep: {error}", file=sys.stderr)
+        return 2
 
     print(f"{'MiB':>6} {'h2d GB/s':>9} {'d2h GB/s':>9} {'combined':>9}  "
           f"{'h2d passes':>10} {'d2h passes':>10}  warning", flush=True)
@@ -112,16 +154,9 @@ def main() -> int:
               f"{row['d2h_passes']!s:>10}  {row['warning'] or ''}", flush=True)
 
     if rows:
-        best_h2d = max(rows, key=lambda r: r["h2d_gbps"])
-        best_d2h = max(rows, key=lambda r: r["d2h_gbps"])
-        pinned = next((r for r in rows if r["bytes"] == 1 << 30), None)
-        print(f"\nh2d peaks at {best_h2d['bytes'] // MIB} MiB "
-              f"({best_h2d['h2d_gbps']} GB/s); d2h peaks at "
-              f"{best_d2h['bytes'] // MIB} MiB ({best_d2h['d2h_gbps']} GB/s).", flush=True)
-        if pinned:
-            print(f"The pinned 1024 MiB reads h2d {pinned['h2d_gbps']}, "
-                  f"d2h {pinned['d2h_gbps']}, combined {pinned['combined_gbps']} GB/s.",
-                  flush=True)
+        print("", flush=True)
+    for line in summary(rows):
+        print(line, flush=True)
     return 0
 
 
